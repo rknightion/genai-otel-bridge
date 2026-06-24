@@ -1,0 +1,57 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: aipoi-leader-absent
+  annotations:
+    grafana.app/folder: aip-oi
+  labels:
+    grafana.app/folder: aip-oi
+spec:
+  title: AipOiLeaderAbsent
+  # No aip_oi_last_success_timestamp_seconds series at all for 15m => no replica has successfully
+  # emitted (leader gone / crashlooping / never reached a first commit). This is the "poller down"
+  # signal and is distinct from a single stale loop (AipOiPollerStale). absent_over_time emits a value
+  # (1) only when the metric is missing, so the normal/healthy case is noData => Ok.
+  execErrState: Alerting
+  noDataState: OK
+  for: 10m
+  trigger:
+    interval: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "aip-oi poller is not emitting (no successful emit from any replica in 15m)"
+    description: "aip_oi_last_success_timestamp_seconds has been absent for 15m. No leader is committing+emitting: check the Deployment/lease, pod readiness, OTLP egress (e.g. the product OTLP port) and credentials. Pull metrics may exist while emit is blocked. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 16m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'absent_over_time(aip_oi_last_success_timestamp_seconds[15m])'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

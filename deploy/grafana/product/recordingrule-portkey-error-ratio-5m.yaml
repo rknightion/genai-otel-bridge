@@ -1,0 +1,28 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: RecordingRule
+metadata:
+  name: aipoi-portkey-error-ratio-5m
+  annotations:
+    grafana.app/folder: aip-oi
+  labels:
+    grafana.app/folder: aip-oi
+spec:
+  title: portkey:error_ratio:5m
+  metric: portkey:error_ratio:5m
+  targetDatasourceUID: grafanacloud-prom
+  trigger:
+    interval: 1m
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      source: true
+      relativeTimeRange: {from: 6m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum_over_time(portkey_api_errors[5m]) / clamp_min(sum_over_time(portkey_api_requests[5m]), 1)'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query

@@ -1,0 +1,55 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: aipoi-auth-errors
+  annotations:
+    grafana.app/folder: aip-oi
+  labels:
+    grafana.app/folder: aip-oi
+spec:
+  title: AipOiAuthErrors
+  # Upstream source API returned 401/403 => credential failure (wrong/expired key, missing scope).
+  # Distinct from slow/erroring endpoints; data is lost until the secret is fixed, so alert on any.
+  execErrState: OK
+  noDataState: OK
+  for: 0s
+  trigger:
+    interval: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "aip-oi {{ $labels.loop }} loop hit auth errors against {{ $labels.source }}"
+    description: "aip_oi_auth_errors_total increased for the {{ $labels.loop }} loop ({{ $labels.source }} source) in the last 10m: the upstream API rejected the poller's credentials (401/403). Rotate/repair the source API key or scope. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 11m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum by (loop, source) (increase(aip_oi_auth_errors_total[10m])) > 0'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

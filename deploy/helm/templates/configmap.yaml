@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aip-oi-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aip-oi.labels" . | nindent 4 }}
+data:
+  # config.yaml is either the verbatim .Values.configOverride string (e.g. a fully-resolved e2e
+  # config) or, by default, the generated default config map (.Values.config) serialised back to
+  # YAML. The generated map lives in values.yaml and is produced from the Go schema by `make
+  # generate` (see internal/config/gen). ${ENV} refs are scalar strings and survive toYaml intact;
+  # they are injected from the aip-oi-secrets Secret via envFrom at runtime.
+  config.yaml: |
+{{- if .Values.configOverride }}
+{{ .Values.configOverride | indent 4 }}
+{{- else }}
+{{ .Values.config | toYaml | indent 4 }}
+{{- end }}

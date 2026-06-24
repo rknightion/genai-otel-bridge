@@ -1,0 +1,28 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: RecordingRule
+metadata:
+  name: aipoi-portkey-requests-sum5m
+  annotations:
+    grafana.app/folder: aip-oi
+  labels:
+    grafana.app/folder: aip-oi
+spec:
+  title: portkey:requests:sum_5m
+  metric: portkey:requests:sum_5m
+  targetDatasourceUID: grafanacloud-prom
+  trigger:
+    interval: 1m
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      source: true
+      relativeTimeRange: {from: 6m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum_over_time(portkey_api_requests[5m])'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query

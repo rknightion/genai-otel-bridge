@@ -1,0 +1,21 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# PodDisruptionBudget: bound VOLUNTARY disruption (node drain, cluster-autoscaler/Karpenter
+# consolidation) so it can't evict all replicas at once. This service is on the telemetry critical
+# path — losing every replica simultaneously is a polling+emit gap until reschedule. maxUnavailable:1
+# forces the eviction API to serialise drains, keeping a warm standby alive to take the Lease.
+#
+# maxUnavailable (not minAvailable) is deliberate: it is a no-op at replicas:1 (the single dev pod is
+# still evictable, no drain deadlock), and serialises drains at replicas:3.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aip-oi
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aip-oi.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "aip-oi.selectorLabels" . | nindent 6 }}
+{{- end }}

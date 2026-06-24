@@ -1,0 +1,30 @@
+# Kaniko-compatible build (no BuildKit features).
+#
+# The default ./Dockerfile is a BuildKit multi-arch image: it uses `# syntax`,
+# `RUN --mount=type=cache`, and `--platform=$BUILDPLATFORM` cross-compilation —
+# none of which kaniko (gcr.io/kaniko-project/executor) supports. This variant
+# drops all of those: no cache mounts, and a NATIVE build (the executor runs on
+# the target arch, so GOARCH defaults to the runner's — single-arch by design).
+#
+# Keep the build logic (deps, ldflags, distroless runtime, nonroot uid) in sync
+# with ./Dockerfile; only the BuildKit-specific plumbing differs.
+# Builder base via Google's public Docker Hub mirror (mirror.gcr.io) rather than docker.io directly:
+# the official `golang` image, served by Google, so kaniko's pull is not subject to Docker Hub's
+# anonymous per-IP pull-rate limit (which throttles shared CI runners). The runtime base below is
+# already Google-hosted (gcr.io/distroless), so both bases avoid docker.io.
+FROM mirror.gcr.io/library/golang:1.26-bookworm AS builder
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux \
+    go build -trimpath \
+      -ldflags="-s -w -X github.com/grafana-ps/aip-oi/internal/version.Version=${VERSION}" \
+      -o /aip-oi ./cmd/aip-oi
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /aip-oi /aip-oi
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["/aip-oi"]

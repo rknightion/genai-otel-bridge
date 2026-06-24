@@ -1,0 +1,10 @@
+.git
+.tools
+dist
+bin
+test/e2e/harness/Dockerfile
+docs/superpowers
+*.md
+.github
+.forgejo
+.gitlab-ci.yml

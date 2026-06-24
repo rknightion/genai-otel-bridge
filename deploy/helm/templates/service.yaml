@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: aip-oi
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aip-oi.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "aip-oi.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health
+      protocol: TCP
+{{- if and .Values.profiling.enabled (eq .Values.profiling.mode "pull") }}
+    # pprof endpoint for an Alloy/k8s-monitoring scrape (pull mode).
+    - name: pprof
+      port: {{ .Values.profiling.pullPort }}
+      targetPort: pprof
+      protocol: TCP
+{{- end }}

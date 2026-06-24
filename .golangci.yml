@@ -1,0 +1,21 @@
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+  exclusions:
+    rules:
+      # Test fakes (httptest handlers, helper Enqueue/Collect/Save) intentionally ignore errors that
+      # cannot meaningfully fail in-test; keep errcheck strict on production code only.
+      - path: _test\.go
+        linters:
+          - errcheck
+formatters:
+  enable:
+    - gofmt
+run:
+  timeout: 5m

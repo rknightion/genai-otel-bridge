@@ -1,0 +1,53 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: aipoi-window-truncated
+  annotations:
+    grafana.app/folder: aip-oi
+  labels:
+    grafana.app/folder: aip-oi
+spec:
+  title: AipOiWindowTruncatedDroppingRecords
+  execErrState: OK
+  noDataState: OK
+  for: 0s
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "aip-oi {{ $labels.loop }} loop is dropping records (window exceeded max_pages_per_window)"
+    description: "The {{ $labels.loop }} loop truncated >=1 polling window in the last 10m and advanced past undrained records (counted gap). Raise settings.max_pages_per_window or shrink settings.window. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 11m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum by (loop) (increase(aip_oi_source_graph_unavailable_total{graph="window_truncated"}[10m])) > 0'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

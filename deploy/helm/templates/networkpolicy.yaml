@@ -1,0 +1,156 @@
+---
+# NetworkPolicy: default-deny all egress, then permit DNS + OTLP + source API egress.
+#
+# [CP-H10] IMPORTANT — standard Kubernetes NetworkPolicy is CIDR/label-based and CANNOT
+# match FQDNs (hostnames) like "api.portkey.ai". The rules below use CIDR ranges as
+# placeholders. In production you have two options:
+#
+#   1. Widen to the provider's published CIDR ranges (e.g. Portkey's EIP allocation,
+#      Grafana Cloud's published egress IPs) and set them in values.yaml.
+#
+#   2. Use a CNI with FQDN-aware policy. For example, Cilium's CiliumNetworkPolicy
+#      supports `toFQDNs` rules that resolve the hostname and follow CNAME chains:
+#
+#        apiVersion: cilium.io/v2
+#        kind: CiliumNetworkPolicy
+#        metadata:
+#          name: aip-oi-egress
+#          namespace: <namespace>
+#        spec:
+#          endpointSelector:
+#            matchLabels:
+#              app: aip-oi
+#          egressDeny: []    # default-deny covered by CiliumClusterWideNetworkPolicy
+#          egress:
+#            - toFQDNs:
+#                - matchName: "api.portkey.ai"
+#                - matchName: "otlp-gateway-prod-us-east-0.grafana.net"
+#              toPorts:
+#                - ports:
+#                    - port: "443"
+#                      protocol: TCP
+#            - toEndpoints:
+#                - matchLabels:
+#                    k8s:io.kubernetes.pod.namespace: kube-system
+#              toPorts:
+#                - ports:
+#                    - port: "53"
+#                      protocol: UDP
+#                    - port: "53"
+#                      protocol: TCP
+#
+#      Without a CNI like Cilium, enforce FQDN egress at the mesh or cluster egress layer
+#      (e.g. Istio AuthorizationPolicy, AWS Security Group, GCP VPC firewall rules).
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aip-oi
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aip-oi.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aip-oi.selectorLabels" . | nindent 6 }}
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # Ingress: deny everything EXCEPT the health port (and pprof in pull mode). The pod serves no
+  # other listener — self-metrics are PUSHED via OTLP (selfobs PeriodicReader), nothing scrapes it —
+  # so the only legitimate inbound is the kubelet's liveness/readiness probe on 8080.
+  #
+  # [CP-H10c] We allow the health port from ALL sources (empty `from:`) rather than default-deny-all
+  # ingress. kubelet probes originate from the node's host netns; whether a default-deny ingress rule
+  # blocks them is CNI-dependent (a documented Cilium/VPC-CNI footgun), and there is no portable
+  # selector for "the node". Allowing only the health/pprof ports keeps probes working on every CNI
+  # while denying all other inbound — the same don't-rely-on-fragile-matching lesson as the DNS rule.
+  # Numeric ports (not named): NetworkPolicy named-port resolution is inconsistent across CNIs, so we
+  # match the literal port the way the egress rules do. networkPolicy.ingressPorts defaults to just the
+  # integrator's health listener (8080); widen it only for extra sidecar listeners that the kubelet (or
+  # another pod) must reach — e.g. the e2e's loopback sink/mock probe ports. The pprof port is appended
+  # automatically in pull mode.
+  ingress:
+    - ports:
+    {{- range .Values.networkPolicy.ingressPorts }}
+        - protocol: TCP
+          port: {{ . }}
+    {{- end }}
+{{- if and .Values.profiling.enabled (eq .Values.profiling.mode "pull") }}
+        - protocol: TCP
+          port: {{ .Values.profiling.pullPort }}
+{{- end }}
+
+  egress:
+    # DNS: select the cluster DNS pods (CoreDNS/kube-dns) in kube-system by LABEL, not CIDR.
+    # [CP-H10b] A CIDR rule is fragile here: kube-router/Calico evaluate egress on the POST-DNAT
+    # CoreDNS *pod* IP (in the pod CIDR), not the kube-dns service IP — so a service-CIDR rule
+    # silently blocks DNS (observed on k3s). A namespace+pod selector is portable across CNIs.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: {{ .Values.networkPolicy.dnsPort }}
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.dnsPort }}
+
+    # Kubernetes API server egress — REQUIRED for Lease leader election and the ConfigMap watermark
+    # checkpoint. Kept SEPARATE from the OTLP rule so the OTLP CIDR can be tightened to Grafana
+    # Cloud's egress range without silently breaking control-plane access (otherwise leader election
+    # fails). Set apiServerCIDR to your API server endpoint range (default 0.0.0.0/0 — tighten per env).
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.apiServerCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.apiServerPort }}
+
+    # Product OTLP gateway egress (emit.telemetry → the product stack, port 443). Under PrivateLink this
+    # is your in-VPC endpoint CIDR; over the public internet it's Grafana Cloud's regional egress CIDR.
+    # Kept separate from selfOtlpEgressCIDR so product and self-o11y can target different endpoints.
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.otlpEgressCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.otlpPort }}
+{{- with .Values.networkPolicy.selfOtlpEgressCIDR }}
+
+    # Self-o11y OTLP egress (emit.self → the self/-meta stack: self-metrics + self-traces). Rendered only
+    # when set — otherwise self telemetry rides the product OTLP rule above. Set when self-o11y targets a
+    # different endpoint/PrivateLink than product (e.g. the EKS split: product and self on separate stacks).
+    - to:
+        - ipBlock:
+            cidr: {{ . }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.networkPolicy.selfOtlpPort }}
+{{- end }}
+
+    # Source API egress (e.g. Portkey public Analytics API, in-VPC LangSmith, etc.).
+    # Replace values.networkPolicy.sourceEgressCIDR with the CIDR of your source endpoints.
+    # For FQDN-based control (api.portkey.ai), use Cilium toFQDNs — see header comment above.
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.sourceEgressCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.sourcePort }}
+{{- if and .Values.profiling.enabled (eq .Values.profiling.mode "push") }}
+
+    # Grafana Cloud Profiles ingest egress (self-profiling push mode only).
+    # Replace values.networkPolicy.profilesEgressCIDR with the CIDR for your region.
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.profilesEgressCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.profilesPort }}
+{{- end }}

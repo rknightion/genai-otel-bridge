@@ -1,0 +1,12 @@
+{
+  "summary": { "total": 0 },
+  "data_points": [
+    { "timestamp": "2026-06-18T12:00:00.000Z", "total": 0 },
+    { "timestamp": "2026-06-18T12:01:00.000Z", "total": 0 },
+    { "timestamp": "2026-06-18T12:02:00.000Z", "total": 0 },
+    { "timestamp": "2026-06-18T12:03:00.000Z", "total": 0 },
+    { "timestamp": "2026-06-18T12:04:00.000Z", "total": 0 }
+  ],
+  "is_quota_exceeded": false,
+  "object": "analytics-graph"
+}

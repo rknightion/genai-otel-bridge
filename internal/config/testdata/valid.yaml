@@ -1,0 +1,43 @@
+emit:
+  telemetry:
+    otlp:
+      endpoint: ${GC_OTLP_ENDPOINT}
+      instance_id: ${GC_INSTANCE_ID}
+      token: ${GC_OTLP_TOKEN}
+identity:
+  service_namespace: aip-oi
+  deployment_environment: ${ENV}
+ha:
+  coordinator: lease
+  checkpoint: configmap
+queue:
+  max_batches: 256
+  max_batch_bytes: 1048576
+  emit_workers: 1
+selfobs:
+  profiling:
+    enabled: false        # opt-in self-profiling, default off
+    mode: pull            # pull (expose pprof for an Alloy scrape) | push (pyroscope-go agent)
+    pull:
+      addr: ":6060"
+    # push:               # only when mode: push (use env refs for the secrets, e.g. PROFILES_TOKEN)
+    #   endpoint: https://profiles-prod-XXX.grafana.net
+    #   instance_id: <env ref>
+    #   token: <env ref>
+sources:
+  - type: portkey
+    enabled: true
+    base_url: https://api.portkey.ai/v1
+    source_instance: portkey-${ENV}
+    auth: { header: x-portkey-api-key, value: ${PORTKEY_API_KEY} }
+    rate_limit: { rps: 1, burst: 3 }
+    loops:
+      analytics:
+        enabled: true
+        cadence: 60s
+        window: 50m
+        bucket_settle: 3m
+        bootstrap_lookback: 50m
+        max_backfill: 55m
+        metric_prefix: portkey_api
+        graphs: [requests, cost, tokens, latency, errors]

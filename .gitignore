@@ -1,0 +1,35 @@
+# Build artifacts
+/bin/
+/dist/
+/aip-oi
+/harness
+*.exe
+*.test
+*.out
+
+# Pinned CI tooling (installed by `make tools` / `make tools-e2e`)
+/.tools/
+
+# Go
+/vendor/
+go.work
+go.work.sum
+
+# Secrets / local config (never commit credentials or per-env config)
+.env
+*.env
+config.local.*
+*.local.yaml
+*.secret.*
+
+# Scratch: specs, plans, brainstorming drafts — persist on disk, never enter git history
+docs/superpowers/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# gcx dashboard snapshot PNGs (scratch)
+/snapshots/

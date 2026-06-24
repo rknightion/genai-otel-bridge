@@ -1,0 +1,106 @@
+# Helm overrides for the k3d failover e2e. Lease+ConfigMap HA (the thing under test), a mock-Portkey
+# source over an in-cluster ClusterIP (http + allow_private), and a loopback OTLP sink sidecar
+# (emit is https-or-loopback, so the sink must be in-pod loopback, not a Service).
+replicas: 3
+image: aip-oi:dev
+imagePullPolicy: IfNotPresent
+resources:                    # lean e2e box; limit == request keeps it tight
+  requests:
+    cpu: "100m"
+    memory: "256Mi"
+  limits:
+    cpu: "1"
+    memory: "256Mi"
+terminationGraceSeconds: 30   # short for fast e2e teardown; failover is still gated by LeaseDuration (15s)
+shareProcessNamespace: true   # so inv-3 can SIGSTOP the integrator (else it is PID 1 = unsignalable)
+
+# The chart default-denies ingress except 8080; the e2e sidecars expose kubelet-probed listeners
+# (otlp-sink readiness on 8090, mock-portkey readiness on 8081) that must be reachable, so widen
+# the ingress allowlist. k3s enforces NetworkPolicy (kube-router), so without this the sidecar
+# readiness probes are blocked and `helm install --wait` times out.
+networkPolicy:
+  ingressPorts:
+    - 8080
+    - 8081
+    - 8090
+
+configOverride: |
+  emit:
+    telemetry:
+      otlp:
+        endpoint: http://localhost:4318
+        instance_id: "1"
+        token: "e2e"
+  identity:
+    service_namespace: aip-oi
+    deployment_environment: e2e
+  ha:
+    coordinator: lease
+    checkpoint: configmap
+  queue:
+    max_batches: 256
+    max_batch_bytes: 1048576
+    emit_workers: 1
+  sources:
+    - type: portkey
+      enabled: true
+      base_url: http://127.0.0.1:8081/v1   # mock-portkey loopback sidecar on :8081 (8080 is the integrator's health port)
+      source_instance: portkey-e2e
+      auth:
+        header: x-portkey-api-key
+        value: e2e
+      rate_limit:
+        rps: 5
+        burst: 5
+      http:
+        allow_private: true   # the mock source is an in-cluster RFC-1918 ClusterIP
+      loops:
+        analytics:
+          enabled: true
+          cadence: 10s
+          window: 5m
+          bucket_settle: 30s
+          bootstrap_lookback: 2m
+          max_backfill: 5m
+          metric_prefix: portkey_api
+          graphs: [requests, cost, tokens, latency, errors]
+
+extraContainers:
+  # Loopback OTLP sink — absorbs emit (127.0.0.1:4318) + reports per-pod export count (8090).
+  - name: otlp-sink
+    image: aip-oi-e2e-helper:dev
+    imagePullPolicy: IfNotPresent
+    args: ["-mode=sink"]
+    ports:
+      - name: query
+        containerPort: 8090
+    securityContext:
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+    readinessProbe:
+      httpGet:
+        path: /healthz
+        port: 8090
+      initialDelaySeconds: 2
+      periodSeconds: 5
+  # Mock Portkey Analytics — loopback source (127.0.0.1:8080). Per-pod, so the leader polls its own
+  # mock; the watermark advances on every (empty) poll and commits to the SHARED checkpoint ConfigMap.
+  - name: mock-portkey
+    image: aip-oi-e2e-helper:dev
+    imagePullPolicy: IfNotPresent
+    args: ["-mode=portkey"]
+    ports:
+      - name: portkey
+        containerPort: 8081
+    securityContext:
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+    readinessProbe:
+      tcpSocket:
+        port: 8081
+      initialDelaySeconds: 2
+      periodSeconds: 5

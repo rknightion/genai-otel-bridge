@@ -1,0 +1,35 @@
+emit:
+  telemetry:
+    otlp:
+      endpoint: ${GC_OTLP_ENDPOINT}
+      instance_id: ${GC_INSTANCE_ID}
+      token: ${GC_OTLP_TOKEN}
+identity:
+  service_namespace: aip-oi
+  deployment_environment: ${ENV}
+ha:
+  coordinator: lease
+  checkpoint: configmap
+queue:
+  max_batches: 256
+  max_batch_bytes: 1048576
+  emit_workers: 1
+sources:
+  - type: langsmith
+    enabled: true
+    base_url: https://api.smith.langchain.com
+    source_instance: langsmith-${ENV}
+    auth: { header: x-api-key, value: ${LANGSMITH_API_KEY} }
+    rate_limit: { rps: 1, burst: 3 }
+    loops:
+      # An aggregate-now (snapshot) loop: no window/settle/backfill — those are time-bucket concepts.
+      # Vendor-specific knobs live in the decoupled `settings` map (string values; the source parses them).
+      sessions:
+        enabled: true
+        cadence: 60s
+        metric_prefix: langsmith
+        settings:
+          stats_window: 1h
+          session_label_value: id
+          max_sessions: "1000"
+          emit_feedback: "true"

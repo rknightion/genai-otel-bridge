@@ -1,0 +1,28 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: RecordingRule
+metadata:
+  name: aipoi-window-truncated-rate5m
+  annotations:
+    grafana.app/folder: aip-oi
+  labels:
+    grafana.app/folder: aip-oi
+spec:
+  title: aip_oi:window_truncated:rate5m
+  metric: aip_oi:window_truncated:rate5m
+  targetDatasourceUID: grafanacloud-prom
+  trigger:
+    interval: 1m
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      source: true
+      relativeTimeRange: {from: 6m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum by (loop) (rate(aip_oi_source_graph_unavailable_total{graph="window_truncated"}[5m]))'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query

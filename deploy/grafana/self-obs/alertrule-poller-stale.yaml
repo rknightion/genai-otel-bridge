@@ -1,0 +1,56 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: aipoi-poller-stale
+  annotations:
+    grafana.app/folder: aip-oi
+  labels:
+    grafana.app/folder: aip-oi
+spec:
+  title: AipOiPollerStale
+  # A loop is still exporting its self-metrics (process up) but has not committed a successful emit in
+  # >15m, so its last_success timestamp keeps ageing => collection/emit is wedged for that loop. The
+  # "leader entirely gone" case (no series at all) is covered by AipOiLeaderAbsent, hence noData=Ok here.
+  execErrState: OK
+  noDataState: OK
+  for: 5m
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "aip-oi {{ $labels.loop }} loop is stale (no successful emit in >15m)"
+    description: "time() - aip_oi_last_success_timestamp_seconds for the {{ $labels.loop }} loop has exceeded 900s while the process is still running. The loop is not advancing its watermark (emit failing, source wedged, or quota). Check aip_oi_emit_errors_total / aip_oi_window_lag_seconds and the pod logs. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 16m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: '(time() - max by (loop) (aip_oi_last_success_timestamp_seconds)) > 900'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

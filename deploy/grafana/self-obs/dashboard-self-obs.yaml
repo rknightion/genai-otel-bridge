@@ -1,0 +1,1693 @@
+apiVersion: dashboard.grafana.app/v2
+kind: Dashboard
+metadata:
+  name: aip-oi-self-obs
+  annotations:
+    grafana.app/folder: aip-oi
+  labels:
+    grafana.app/folder: aip-oi
+spec:
+  title: "aip-oi \u2014 self-observability"
+  description: 'Operational health of the aip-oi integrator itself (the aip_oi_* self-metrics; resource service.namespace=<product>-meta). Top-down triage: liveness -> emit pipeline -> upstream source health -> cardinality & governance. Stack-agnostic: pick the Prometheus datasource via the variable. NOTE: emitted/last_success/window_lag are recorded only on a SUCCESSFUL emit (the watermark must leave zero), so those panels are empty until a loop has committed once.'
+  tags:
+  - aip-oi
+  - self-obs
+  - gcx
+  editable: true
+  liveNow: false
+  preload: false
+  cursorSync: Crosshair
+  revision: 1
+  links: []
+  annotations:
+  - kind: AnnotationQuery
+    spec:
+      builtIn: true
+      enable: true
+      hide: true
+      iconColor: rgba(0, 211, 255, 1)
+      legacyOptions:
+        type: dashboard
+      name: Annotations & Alerts
+      query:
+        kind: DataQuery
+        group: grafana
+        version: v0
+        datasource:
+          name: -- Grafana --
+        spec: {}
+  timeSettings:
+    from: now-6h
+    to: now
+    timezone: browser
+    autoRefresh: 1m
+    autoRefreshIntervals:
+    - 5s
+    - 10s
+    - 30s
+    - 1m
+    - 5m
+    - 15m
+    - 30m
+    - 1h
+    fiscalYearStartMonth: 0
+    hideTimepicker: false
+  variables:
+  - kind: DatasourceVariable
+    spec:
+      name: datasource
+      label: Prometheus
+      pluginId: prometheus
+      current:
+        text: grafanacloud-prom
+        value: grafanacloud-prom
+      hide: dontHide
+      includeAll: false
+      multi: false
+      options: []
+      regex: ''
+      refresh: onDashboardLoad
+      skipUrlSync: false
+      allowCustomValue: true
+  - kind: QueryVariable
+    spec:
+      name: loop
+      label: Loop
+      definition: label_values(aip_oi_emit_errors_total,loop)
+      current:
+        text:
+        - All
+        value:
+        - $__all
+      hide: dontHide
+      includeAll: true
+      allValue: .+
+      multi: true
+      options: []
+      regex: ''
+      sort: alphabeticalAsc
+      refresh: onDashboardLoad
+      skipUrlSync: false
+      allowCustomValue: true
+      query:
+        kind: DataQuery
+        group: prometheus
+        version: v0
+        datasource:
+          name: ${datasource}
+        spec:
+          query: label_values(aip_oi_emit_errors_total,loop)
+          refId: PrometheusVariableQueryEditor-VariableQuery
+  elements:
+    panel-10:
+      kind: Panel
+      spec:
+        id: 10
+        title: Scrape healthy
+        description: "1 (HEALTHY) when every selected loop emitted successfully in the last 15m, 0 (STALE) if any is older. Computed inline from aip_oi_last_success_timestamp_seconds \u2014 no recording rule required. No data => no loop has ever emitted (see Leader present)."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: min((time() - aip_oi_last_success_timestamp_seconds{loop=~"$loop"}) < bool 900)
+                    legendFormat: ''
+                    range: false
+                    instant: true
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: stat
+          spec:
+            options:
+              colorMode: background
+              graphMode: none
+              justifyMode: auto
+              textMode: auto
+              reduceOptions:
+                calcs:
+                - lastNotNull
+                fields: ''
+                values: false
+              wideLayout: true
+              showPercentChange: false
+            fieldConfig:
+              defaults:
+                unit: none
+                color:
+                  mode: thresholds
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: red
+                    value: null
+                  - color: green
+                    value: 1
+                mappings:
+                - type: value
+                  options:
+                    '1':
+                      text: HEALTHY
+                      color: green
+                      index: 1
+                    '0':
+                      text: STALE
+                      color: red
+                      index: 0
+              overrides: []
+    panel-11:
+      kind: Panel
+      spec:
+        id: 11
+        title: Leader present
+        description: "1 (PRESENT) if aip_oi_last_success_timestamp_seconds was exported by any selected loop in the last 15m. ABSENT => leader gone / never emitted (distinct from stale). Computed inline \u2014 no recording rule required."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: max(present_over_time(aip_oi_last_success_timestamp_seconds{loop=~"$loop"}[15m]))
+                    legendFormat: ''
+                    range: false
+                    instant: true
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: stat
+          spec:
+            options:
+              colorMode: background
+              graphMode: none
+              justifyMode: auto
+              textMode: auto
+              reduceOptions:
+                calcs:
+                - lastNotNull
+                fields: ''
+                values: false
+              wideLayout: true
+              showPercentChange: false
+            fieldConfig:
+              defaults:
+                unit: none
+                color:
+                  mode: thresholds
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: red
+                    value: null
+                  - color: green
+                    value: 1
+                mappings:
+                - type: value
+                  options:
+                    '1':
+                      text: PRESENT
+                      color: green
+                      index: 0
+                - type: special
+                  options:
+                    match: 'null'
+                    result:
+                      text: ABSENT
+                      color: red
+                      index: 1
+              overrides: []
+    panel-12:
+      kind: Panel
+      spec:
+        id: 12
+        title: Replicas emitting
+        description: Distinct service_instance_id seen. Small is healthy; >2 sustained may indicate leader overlap (standby self-emits too, so 2 during failover is normal).
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: count(group by (service_instance_id) (aip_oi_queue_depth_ratio))
+                    legendFormat: ''
+                    range: false
+                    instant: true
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: stat
+          spec:
+            options:
+              colorMode: value
+              graphMode: none
+              justifyMode: auto
+              textMode: auto
+              reduceOptions:
+                calcs:
+                - lastNotNull
+                fields: ''
+                values: false
+              wideLayout: true
+              showPercentChange: false
+            fieldConfig:
+              defaults:
+                unit: short
+                color:
+                  mode: thresholds
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: green
+                    value: null
+                  - color: yellow
+                    value: 3
+              overrides: []
+    panel-13:
+      kind: Panel
+      spec:
+        id: 13
+        title: Max window lag
+        description: now - watermark frontier, worst loop. Floors at ~bucket_settle+cadence; a sustained rise means a loop is falling behind.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: max(aip_oi_window_lag_seconds{loop=~"$loop"})
+                    legendFormat: ''
+                    range: false
+                    instant: true
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: stat
+          spec:
+            options:
+              colorMode: value
+              graphMode: area
+              justifyMode: auto
+              textMode: auto
+              reduceOptions:
+                calcs:
+                - lastNotNull
+                fields: ''
+                values: false
+              wideLayout: true
+              showPercentChange: false
+            fieldConfig:
+              defaults:
+                unit: s
+                color:
+                  mode: thresholds
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: green
+                    value: null
+                  - color: yellow
+                    value: 600
+                  - color: red
+                    value: 1800
+              overrides: []
+    panel-14:
+      kind: Panel
+      spec:
+        id: 14
+        title: Last emit age (worst)
+        description: time() - aip_oi_last_success_timestamp_seconds, worst loop. Time since a loop last committed + emitted.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: max(time() - aip_oi_last_success_timestamp_seconds{loop=~"$loop"})
+                    legendFormat: ''
+                    range: false
+                    instant: true
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: stat
+          spec:
+            options:
+              colorMode: value
+              graphMode: none
+              justifyMode: auto
+              textMode: auto
+              reduceOptions:
+                calcs:
+                - lastNotNull
+                fields: ''
+                values: false
+              wideLayout: true
+              showPercentChange: false
+            fieldConfig:
+              defaults:
+                unit: s
+                color:
+                  mode: thresholds
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: green
+                    value: null
+                  - color: yellow
+                    value: 900
+                  - color: red
+                    value: 3600
+              overrides: []
+    panel-15:
+      kind: Panel
+      spec:
+        id: 15
+        title: Emit errors (1h)
+        description: sum(increase(aip_oi_emit_errors_total[1h])) across selected loops (all kinds). >0 => failed emits / checkpoint issues.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum(increase(aip_oi_emit_errors_total{loop=~"$loop"}[1h]))
+                    legendFormat: ''
+                    range: false
+                    instant: true
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: stat
+          spec:
+            options:
+              colorMode: background
+              graphMode: none
+              justifyMode: auto
+              textMode: auto
+              reduceOptions:
+                calcs:
+                - lastNotNull
+                fields: ''
+                values: false
+              wideLayout: true
+              showPercentChange: false
+            fieldConfig:
+              defaults:
+                unit: short
+                color:
+                  mode: thresholds
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: green
+                    value: null
+                  - color: yellow
+                    value: 1
+                  - color: red
+                    value: 10
+              overrides: []
+    panel-16:
+      kind: Panel
+      spec:
+        id: 16
+        title: Window lag by loop
+        description: aip_oi_window_lag_seconds per loop. Flat-low is healthy; a sustained climb means the loop is not advancing its watermark.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: aip_oi_window_lag_seconds{loop=~"$loop"}
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: s
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-17:
+      kind: Panel
+      spec:
+        id: 17
+        title: Time since last successful emit, by loop
+        description: time() - aip_oi_last_success_timestamp_seconds per loop. Sawtooth that resets each commit is healthy; a monotonic climb means emits are failing.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: time() - aip_oi_last_success_timestamp_seconds{loop=~"$loop"}
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: s
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-20:
+      kind: Panel
+      spec:
+        id: 20
+        title: Emitted samples /s by loop
+        description: rate(aip_oi_emitted_total). Metric data points successfully emitted. Zero across all loops while data exists upstream => emit is broken.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop) (rate(aip_oi_emitted_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-21:
+      kind: Panel
+      spec:
+        id: 21
+        title: Emitted logs /s by loop
+        description: 'rate(aip_oi_emitted_logs_total). Log records emitted (logs loops: logs_export, runs).'
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop) (rate(aip_oi_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-22:
+      kind: Panel
+      spec:
+        id: 22
+        title: Emit errors /s by loop & kind
+        description: rate(aip_oi_emit_errors_total) by kind (retryable_exhausted, collect, checkpoint_load, checkpoint_fenced, granularity_unexpected, bad_encoding, ...).
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop, kind) (rate(aip_oi_emit_errors_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}} / {{kind}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-23:
+      kind: Panel
+      spec:
+        id: 23
+        title: Queue depth by loop
+        description: aip_oi_queue_depth_ratio (OTLP unit-1 gauge; the '_ratio' suffix is the OTLP->Prom convention). Sustained non-zero => emit can't keep up with collect (backpressure).
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: max by (loop) (aip_oi_queue_depth_ratio{loop=~"$loop"})
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: short
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-24:
+      kind: Panel
+      spec:
+        id: 24
+        title: Samples skipped /s (counted gaps) by reason
+        description: "rate(aip_oi_samples_skipped_total) by reason (backfill_unstorable, quota_exceeded, out_of_order, duplicate_timestamp, ...). The loop advances past the bad bucket with a counted gap \u2014 never silent."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop, reason) (rate(aip_oi_samples_skipped_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}} / {{reason}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-25:
+      kind: Panel
+      spec:
+        id: 25
+        title: Samples capped /s (DPM)
+        description: rate(aip_oi_samples_capped_total{reason=dpm}). Samples coalesced (last-write-wins per series-minute) to honour max_dpm. Expected non-zero when source resolution > cap.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop) (rate(aip_oi_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-26:
+      kind: Panel
+      spec:
+        id: 26
+        title: Guard dropped /s by loop (governance)
+        description: rate(aip_oi_guard_dropped_total). Data points / logs dropped by the cardinality/content governance Guard (default-deny label allow-list, field denylist).
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop) (rate(aip_oi_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-27:
+      kind: Panel
+      spec:
+        id: 27
+        title: Buckets revised after settle /s
+        description: rate(aip_oi_bucket_revised_after_settle_total). A bucket changed value after the settle window (late arrivals beyond bucket_settle). Persistent non-zero => widen bucket_settle.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop) (rate(aip_oi_bucket_revised_after_settle_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-30:
+      kind: Panel
+      spec:
+        id: 30
+        title: Upstream request rate by target & status
+        description: rate(aip_oi_upstream_request_duration_seconds_count) by target (source API host) and status_class. The poller's own pull traffic to vendor APIs.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (target, status_class) (rate(aip_oi_upstream_request_duration_seconds_count[$__rate_interval]))
+                    legendFormat: '{{target}} {{status_class}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: reqps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-31:
+      kind: Panel
+      spec:
+        id: 31
+        title: Upstream latency p50/p95/p99 by target
+        description: "histogram_quantile over aip_oi_upstream_request_duration_seconds_bucket (cumulative histogram \u2014 rate() is correct here). Time-to-response-headers, excludes limiter wait."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: histogram_quantile(0.50, sum by (le, target) (rate(aip_oi_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    legendFormat: p50 {{target}}
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: B
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: histogram_quantile(0.95, sum by (le, target) (rate(aip_oi_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    legendFormat: p95 {{target}}
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: C
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: histogram_quantile(0.99, sum by (le, target) (rate(aip_oi_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    legendFormat: p99 {{target}}
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: s
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 0
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-32:
+      kind: Panel
+      spec:
+        id: 32
+        title: Upstream error ratio by target
+        description: Fraction of upstream requests with status_class 4xx/5xx/error. Rising => the source API is erroring or rejecting the poller.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: (sum by (target) (rate(aip_oi_upstream_request_duration_seconds_count{status_class=~"4xx|5xx|error"}[$__rate_interval])) or (sum by (target) (rate(aip_oi_upstream_request_duration_seconds_count[$__rate_interval])) * 0)) / clamp_min(sum by (target) (rate(aip_oi_upstream_request_duration_seconds_count[$__rate_interval])), 1e-9)
+                    legendFormat: '{{target}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: percentunit
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-33:
+      kind: Panel
+      spec:
+        id: 33
+        title: Auth errors /s (401/403)
+        description: "rate(aip_oi_auth_errors_total) by loop & source. Credential failure (wrong/expired key, missing scope) \u2014 distinct from slow/erroring endpoints. Alert on > 0."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop, source) (rate(aip_oi_auth_errors_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}} / {{source}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-34:
+      kind: Panel
+      spec:
+        id: 34
+        title: Source graph unavailable /s (404 / window truncated)
+        description: rate(aip_oi_source_graph_unavailable_total) by graph. Steady increments on a real graph => API permanently absent (permission/capability). graph=window_truncated => records dropped at the page cap.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop, graph) (rate(aip_oi_source_graph_unavailable_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}} / {{graph}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-40:
+      kind: Panel
+      spec:
+        id: 40
+        title: New label-value combinations /s by series (top 15)
+        description: "rate(aip_oi_new_label_values_total) by series. Each is a never-before-seen label combo for that metric series \u2014 a cardinality early-warning. A sustained climb on one series means its labels are unbounded."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: topk(15, sum by (series) (rate(aip_oi_new_label_values_total[$__rate_interval])))
+                    legendFormat: '{{series}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: right
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+  layout:
+    kind: RowsLayout
+    spec:
+      rows:
+      - kind: RowsLayoutRow
+        spec:
+          title: Poller health & liveness
+          collapse: false
+          hideHeader: false
+          layout:
+            kind: GridLayout
+            spec:
+              items:
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-10
+                  x: 0
+                  y: 0
+                  width: 4
+                  height: 4
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-11
+                  x: 4
+                  y: 0
+                  width: 4
+                  height: 4
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-12
+                  x: 8
+                  y: 0
+                  width: 4
+                  height: 4
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-13
+                  x: 12
+                  y: 0
+                  width: 4
+                  height: 4
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-14
+                  x: 16
+                  y: 0
+                  width: 4
+                  height: 4
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-15
+                  x: 20
+                  y: 0
+                  width: 4
+                  height: 4
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-16
+                  x: 0
+                  y: 4
+                  width: 12
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-17
+                  x: 12
+                  y: 4
+                  width: 12
+                  height: 8
+      - kind: RowsLayoutRow
+        spec:
+          title: Emit pipeline
+          collapse: false
+          hideHeader: false
+          layout:
+            kind: GridLayout
+            spec:
+              items:
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-20
+                  x: 0
+                  y: 0
+                  width: 8
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-21
+                  x: 8
+                  y: 0
+                  width: 8
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-22
+                  x: 16
+                  y: 0
+                  width: 8
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-23
+                  x: 0
+                  y: 8
+                  width: 8
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-24
+                  x: 8
+                  y: 8
+                  width: 8
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-25
+                  x: 16
+                  y: 8
+                  width: 8
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-26
+                  x: 0
+                  y: 16
+                  width: 12
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-27
+                  x: 12
+                  y: 16
+                  width: 12
+                  height: 8
+      - kind: RowsLayoutRow
+        spec:
+          title: Upstream source health
+          collapse: false
+          hideHeader: false
+          layout:
+            kind: GridLayout
+            spec:
+              items:
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-30
+                  x: 0
+                  y: 0
+                  width: 12
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-31
+                  x: 12
+                  y: 0
+                  width: 12
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-32
+                  x: 0
+                  y: 8
+                  width: 8
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-33
+                  x: 8
+                  y: 8
+                  width: 8
+                  height: 8
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-34
+                  x: 16
+                  y: 8
+                  width: 8
+                  height: 8
+      - kind: RowsLayoutRow
+        spec:
+          title: Cardinality & governance
+          collapse: true
+          hideHeader: false
+          layout:
+            kind: GridLayout
+            spec:
+              items:
+              - kind: GridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-40
+                  x: 0
+                  y: 0
+                  width: 24
+                  height: 8

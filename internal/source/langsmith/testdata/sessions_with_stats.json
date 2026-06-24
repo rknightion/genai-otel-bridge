@@ -1,0 +1,65 @@
+[
+  {
+    "id": "11111111-1111-1111-1111-111111111111",
+    "name": "proj-alpha_dev-aaaa1111",
+    "start_time": "2026-06-19T13:22:24.494946",
+    "end_time": null,
+    "description": "SYNTHETIC fixture — derived from a real LangSmith 0.13.5 capture; ids/values faked. Free-form description must never be emitted.",
+    "extra": { "metadata": { "git": { "tags": "fake-build-0.0.1-dev" } } },
+    "run_count": 450,
+    "latency_p50": 0.495,
+    "latency_p99": 56.35091,
+    "first_token_p50": null,
+    "first_token_p99": null,
+    "total_tokens": 16513488,
+    "prompt_tokens": 15634481,
+    "completion_tokens": 879007,
+    "total_cost": 0.0,
+    "prompt_cost": 0.0,
+    "completion_cost": 0.0,
+    "error_rate": 0.0,
+    "streaming_rate": 0.0,
+    "tenant_id": "00000000-0000-0000-0000-000000000000",
+    "last_run_start_time": "2026-06-19T13:28:43.583093",
+    "feedback_stats": {
+      "algo_accuracy": { "n": 450, "avg": 0.838, "stdev": 0.335, "errors": 0, "values": {}, "type": "primary" },
+      "domain_accuracy": { "n": 450, "avg": 0.795, "stdev": 0.21, "errors": 0, "values": {}, "type": "primary" },
+      "portkey_trace_id": { "n": 450, "avg": null, "stdev": null, "errors": 0, "values": { "fake-trace-aaaa": 1, "fake-trace-bbbb": 1, "fake-trace-cccc": 1 }, "type": "primary" },
+      "user_id": { "n": 450, "avg": null, "stdev": null, "errors": 0, "values": { "fake-user-1": 225, "fake-user-2": 225 }, "type": "primary" },
+      "model_provider": { "n": 450, "avg": null, "stdev": null, "errors": 0, "values": { "fake-provider": 450 }, "type": "primary" }
+    },
+    "session_feedback_stats": {
+      "algo_overall_accuracy": { "n": 1, "avg": 0.7326, "stdev": 0.0, "errors": 0, "values": {} }
+    },
+    "run_facets": null
+  },
+  {
+    "id": "22222222-2222-2222-2222-222222222222",
+    "name": "proj-beta-prd",
+    "start_time": "2026-06-19T10:00:00.000000",
+    "end_time": null,
+    "description": "another synthetic session",
+    "extra": null,
+    "run_count": 60,
+    "latency_p50": 70.685,
+    "latency_p99": 170.26769,
+    "first_token_p50": 1.23,
+    "first_token_p99": 4.56,
+    "total_tokens": 1200000,
+    "prompt_tokens": 1000000,
+    "completion_tokens": 200000,
+    "total_cost": "0.4523",
+    "prompt_cost": "0.4000",
+    "completion_cost": "0.0523",
+    "error_rate": 0.1,
+    "streaming_rate": 1.0,
+    "tenant_id": "00000000-0000-0000-0000-000000000000",
+    "last_run_start_time": "2026-06-19T11:30:00.000000",
+    "feedback_stats": {
+      "domain_accuracy": { "n": 60, "avg": 0.91, "stdev": 0.05, "errors": 0, "values": {}, "type": "primary" },
+      "request_id": { "n": 60, "avg": null, "stdev": null, "errors": 0, "values": { "fake-req-1": 30, "fake-req-2": 30 }, "type": "primary" }
+    },
+    "session_feedback_stats": {},
+    "run_facets": null
+  }
+]

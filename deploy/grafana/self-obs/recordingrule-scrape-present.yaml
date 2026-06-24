@@ -1,0 +1,28 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: RecordingRule
+metadata:
+  name: aipoi-scrape-present
+  annotations:
+    grafana.app/folder: aip-oi
+  labels:
+    grafana.app/folder: aip-oi
+spec:
+  title: aip_oi:scrape_present
+  metric: aip_oi:scrape_present
+  targetDatasourceUID: grafanacloud-prom
+  trigger:
+    interval: 1m
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      source: true
+      relativeTimeRange: {from: 16m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'present_over_time(aip_oi_last_success_timestamp_seconds[15m])'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query

@@ -1,0 +1,233 @@
+{{- /* [final-review] All-leader double-emit guard: ha.coordinator=none disables leader election, so
+       >1 replica means every pod polls + emits the same series. Fail the render on this combo. Skipped
+       when a raw configOverride is supplied (the operator owns correctness there); the binary re-checks
+       via the AIP_OI_REPLICAS env as defence-in-depth. */ -}}
+{{- if and (empty .Values.configOverride) (eq (dig "ha" "coordinator" "" .Values.config) "none") (gt (int .Values.replicas) 1) -}}
+{{- fail "ha.coordinator=none with replicas>1: all replicas would be leaders and double-emit. Use ha.coordinator=lease for multi-replica HA, or set replicas: 1." -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aip-oi
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aip-oi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  # RollingUpdate bounded to one pod at a time: with leader election only one replica is active, so a
+  # surge+drain of one pod at a time keeps a healthy standby ready to take the Lease throughout a roll.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.rollingUpdate.maxSurge }}
+  selector:
+    matchLabels:
+      {{- include "aip-oi.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aip-oi.labels" . | nindent 8 }}
+      {{- if .Values.rolloutOnConfigChange }}
+      annotations:
+        # Roll the pods when the rendered config ConfigMap changes. The binary reads config only at
+        # startup, so without this a `helm upgrade` that changes config: / configOverride updates the
+        # ConfigMap but leaves pods on stale config. Hashes ONLY templates/configmap.yaml (the
+        # aip-oi-config CM); the runtime aip-oi-checkpoints state CM is app-created, not chart-rendered,
+        # so it is intentionally not hashed here. A roll triggers one Lease failover, covered by the
+        # 300s graceful drain + lease handoff.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      {{- end }}
+    spec:
+      serviceAccountName: aip-oi
+      {{- with .Values.imagePullSecrets }}
+      # Private-registry pull secrets (e.g. regcred). Each is a {name: <secret>} for a
+      # dockerconfigjson Secret that must already exist in the release namespace. Empty by default.
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.shareProcessNamespace }}
+      # Off by default; an e2e/debug aid so a sidecar can signal the integrator process (which would
+      # otherwise be PID 1 and unsignalable from within its own PID namespace). Not for production.
+      shareProcessNamespace: true
+      {{- end }}
+
+      # Pod-level security: non-root UID 65532 (distroless default), RuntimeDefault seccomp.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Spread pods across nodes AND availability zones so neither a node nor an AZ failure takes both
+      # the leader and the standby. ScheduleAnyway (not DoNotSchedule) — scheduling must never block:
+      # strict spreading would prevent startup on a single-node/single-AZ cluster (e.g. dev). On a
+      # multi-AZ EKS cluster this lands the standby in a different AZ; on a 1-node dev cluster it's a no-op.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: aip-oi
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: aip-oi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+
+      containers:
+        - name: aip-oi
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+            - "-config=/etc/aip-oi/config.yaml"
+            - "-namespace=$(POD_NAMESPACE)"
+            - "-identity=$(POD_NAME)"
+            - "-container-mem-bytes=$(MEM_LIMIT)"
+
+          env:
+            # Downward API: pod identity for the Lease holder name and self-metric instance label.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Replica count: the binary fatals on ha.coordinator=none + replicas>1 (all-leader
+            # double-emit guard) — defence-in-depth with the chart-render guard at the top of this file.
+            - name: AIP_OI_REPLICAS
+              value: {{ .Values.replicas | quote }}
+            # GOMEMLIMIT: derived from the container's own memory limit at runtime (resourceFieldRef).
+            # The binary multiplies by 0.9 to leave headroom for GC overhead (DESIGN §4.1).
+            - name: MEM_LIMIT
+              valueFrom:
+                resourceFieldRef:
+                  containerName: aip-oi
+                  resource: limits.memory
+            # Non-secret, environment-specific config consumed as ${ENV} refs in config.yaml. Set these
+            # as literal env (NOT secret material) via runtimeEnv.*. Each is rendered ONLY when non-empty;
+            # when left empty (the default) the var keeps coming from the aip-oi-secrets Secret via
+            # envFrom below, so the hand-created-secret path is unaffected.
+            {{- if .Values.runtimeEnv.env }}
+            - name: ENV
+              value: {{ .Values.runtimeEnv.env | quote }}
+            {{- end }}
+            {{- if .Values.runtimeEnv.portkeyExpectedWorkspace }}
+            - name: PORTKEY_EXPECTED_WORKSPACE
+              value: {{ .Values.runtimeEnv.portkeyExpectedWorkspace | quote }}
+            {{- end }}
+            {{- if .Values.runtimeEnv.langsmithBaseUrl }}
+            - name: LANGSMITH_BASE_URL
+              value: {{ .Values.runtimeEnv.langsmithBaseUrl | quote }}
+            {{- end }}
+
+          # Runtime secrets (GC_OTLP_TOKEN, PORTKEY_API_KEY, …) injected from the aip-oi-secrets
+          # Secret. By default this Secret is managed outside the chart (create before deploying); when
+          # externalSecrets.enabled is set, it is created and kept in sync by the ExternalSecret
+          # (templates/externalsecret.yaml) from a cloud secrets manager.
+          envFrom:
+            - secretRef:
+                name: aip-oi-secrets
+
+          # Container-level hardening (Cdx-M10 / AR-H-tmp):
+          #   readOnlyRootFilesystem: all writable paths are explicit volume mounts below.
+          #   drop ALL capabilities: the binary is a pure network poller; it needs none.
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+          # Standard requests/limits map, set in values.yaml. GOMEMLIMIT is still derived at runtime
+          # from limits.memory via the MEM_LIMIT downward API ref above — independent of how it's set.
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          # Health probes. /readyz returns 200 once the leader has completed its first successful
+          # collect+emit cycle. /healthz returns 200 for both leader and standby (so standby pods
+          # don't flap — CP-C5). Probe intervals and thresholds are intentionally loose; the liveness
+          # threshold (4 failures × 15s = 60s) gives the retry budget time to exhaust before a restart.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 4
+
+          ports:
+            - containerPort: 8080
+              name: health
+              protocol: TCP
+{{- if and .Values.profiling.enabled (eq .Values.profiling.mode "pull") }}
+            # Self-profiling pprof endpoint (pull mode). Must match the config's
+            # selfobs.profiling.pull.addr port — these are separate knobs (config is not templated).
+            - containerPort: {{ .Values.profiling.pullPort }}
+              name: pprof
+              protocol: TCP
+{{- end }}
+
+          volumeMounts:
+            # Config from the aip-oi-config ConfigMap (config.yaml with ${ENV} refs pre-resolved).
+            - name: config
+              mountPath: /etc/aip-oi
+              readOnly: true
+            # State dir: used by the dev file-based checkpointer. With the production configmap
+            # checkpointer the watermark is stored in a ConfigMap; this emptyDir is harmless but
+            # required because readOnlyRootFilesystem=true forbids any unlisted writable path.
+            - name: state
+              mountPath: /var/lib/aip-oi
+            # /tmp: net/http and the OTLP encoder need a writable /tmp (TLS handshake temp files,
+            # proto marshal scratch). [AR-H-tmp] must be explicit under readOnlyRootFilesystem.
+            - name: tmp
+              mountPath: /tmp
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      volumes:
+        - name: config
+          configMap:
+            name: aip-oi-config
+        # emptyDir: lost on pod restart, which is correct (the durable watermark is the ConfigMap
+        # checkpoint; state/ is only ever written by the dev file checkpointer).
+        - name: state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      terminationGracePeriodSeconds: {{ .Values.terminationGraceSeconds }}

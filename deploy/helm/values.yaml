@@ -1,0 +1,487 @@
+# aip-oi Helm values — override per environment.
+#
+# Production: replicas: 2 (active/passive under Lease leader election) — only the Lease holder polls and
+# emits; the standby is healthy but idle, ready to take over (~LeaseDuration) on failure. 2 is the lean
+# HA default for a single-emit poller (replicas give standby redundancy, not capacity); raise to 3 for a
+# second standby (extra headroom during a node-consolidation / rolling-upgrade window).
+
+replicas: 2
+
+# Full image reference including tag. Override at deploy time to point at your registry:
+#   helm upgrade aip-oi ./deploy/helm --set image=<registry>/aip-oi:v0.1.0
+image: ghcr.io/grafana-ps/aip-oi:latest
+
+# Image pull secrets for a private registry. Each entry is a {name: <secret>} referencing a
+# kubernetes.io/dockerconfigjson Secret that must already exist in the release namespace. Default
+# empty (anonymous/public pull). For a private registry, create the pull secret and reference it:
+#   imagePullSecrets:
+#     - name: regcred
+imagePullSecrets: []
+
+# Container resources, standard requests/limits map. Requests (256Mi / 100m) suit the lean Go binary
+# plus the Portkey window buffer; the memory LIMIT also drives GOMEMLIMIT at runtime via the MEM_LIMIT
+# downward-API ref (resourceFieldRef: limits.memory), so raising limits.memory raises the GC ceiling too.
+resources:
+  requests:
+    cpu: "100m"
+    memory: "256Mi"
+  limits:
+    cpu: "1"
+    memory: "512Mi"
+
+# Deployment rollout controls. revisionHistoryLimit caps retained ReplicaSets (default upstream is 10).
+# RollingUpdate is bounded to one pod at a time so a healthy standby is always available to take the
+# Lease during an upgrade.
+revisionHistoryLimit: 3
+rollingUpdate:
+  maxUnavailable: 1
+  maxSurge: 1
+
+# Roll the pods automatically when the rendered config ConfigMap changes (adds a checksum/config pod
+# annotation). The binary reads config only at startup, so leave this true unless you want to stage a
+# config change and restart on your own schedule.
+rolloutOnConfigChange: true
+
+# PodDisruptionBudget: bound voluntary disruption (node drain, autoscaler/Karpenter consolidation) so
+# all replicas can't be evicted at once. maxUnavailable:1 serialises drains at replicas>=2 and is a
+# no-op at replicas:1 (no dev drain deadlock).
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# terminationGracePeriodSeconds must be >= the emit-retry budget so an in-flight emit can
+# complete before SIGKILL. 300s covers the 3x retry (exponential backoff, max ~90s total)
+# plus the checkpoint save and leadership handoff.
+terminationGraceSeconds: 300
+
+# NetworkPolicy egress — DNS + API server are matched robustly (label selector / configurable CIDR);
+# OTLP + source are CIDR-based. Standard NetworkPolicy cannot match FQDNs like api.portkey.ai; see
+# templates/networkpolicy.yaml. On EKS, enforcement requires the VPC CNI network-policy feature (or
+# Calico) to be enabled — otherwise these rules are a no-op.
+networkPolicy:
+  # Ingress is default-deny except these TCP ports. The pod serves only health on 8080 (self-metrics
+  # are OTLP-pushed, nothing scrapes it), so 8080 — the kubelet probe target — is the only prod entry.
+  # Widen ONLY for extra sidecar listeners that the kubelet or another pod must reach (e.g. the e2e's
+  # sink/mock probe ports). pprof (pull mode) is appended automatically. See templates/networkpolicy.yaml.
+  ingressPorts:
+    - 8080
+  # DNS is selected by LABEL (kube-system namespace + k8s-app=kube-dns), not CIDR — portable across
+  # CNIs and IP schemes (overlay pod CIDR on k3s/flannel, VPC IPs on EKS). Only the port is configurable.
+  dnsPort: 53
+  # Kubernetes API server egress (needed for Lease leader election + the ConfigMap checkpoint). Default
+  # is permissive; tighten per environment. On EKS the private API endpoint DNATs to control-plane ENIs
+  # in the cluster subnets, so this is typically the VPC CIDR (e.g. 10.0.0.0/16) rather than the
+  # 172.20/16 Service range.
+  apiServerCIDR: "0.0.0.0/0"
+  apiServerPort: 443
+  # Product OTLP egress (emit.telemetry → the product stack). If you use AWS PrivateLink (the intended
+  # topology), the Grafana Cloud OTLP endpoint resolves to an interface-endpoint ENI inside your VPC, so
+  # egress is in-VPC — this is typically the VPC CIDR (or the PrivateLink endpoint-subnet CIDR), the same
+  # shape as apiServerCIDR. If you egress over the public internet / a NAT instead, use the published
+  # Grafana Cloud regional CIDRs (https://grafana.com/docs/grafana-cloud/send-data/otlp/).
+  otlpEgressCIDR: "0.0.0.0/0"
+  otlpPort: 443
+  # Source API egress (e.g. Portkey's control plane api.portkey.ai). Portkey's public API is not usually
+  # available over PrivateLink, so this is typically public-FQDN egress via NAT — for tighter control use
+  # a Cilium CiliumNetworkPolicy toFQDNs (see networkpolicy.yaml). A self-hosted / in-VPC source (e.g. a
+  # private LangSmith) would instead be the VPC/endpoint CIDR.
+  sourceEgressCIDR: "0.0.0.0/0"
+  sourcePort: 443
+
+  # ── Self-o11y egress (the -meta stack) ─────────────────────────────────────────────────────────────
+  # These two are ONLY for the integrator's own observability (emit.self + self-profiles); product
+  # telemetry never uses them. Group them so it's obvious they target the self/-meta destination, which
+  # may be a different stack / PrivateLink endpoint than product.
+  #
+  # Self-o11y OTLP egress (emit.self → self-metrics + self-traces). Optional — leave empty and self
+  # telemetry rides the product otlpEgressCIDR rule above. Set this when self-o11y targets a different
+  # stack/endpoint than product (e.g. a separate PrivateLink endpoint, so a different in-VPC CIDR), as
+  # the EKS test split does (product → one stack, self-obs → another).
+  selfOtlpEgressCIDR: ""
+  selfOtlpPort: 443
+  # Self-o11y profiles egress — Grafana Cloud Profiles ingest (only rendered when profiling.enabled &&
+  # profiling.mode==push). Same PrivateLink shaping as the OTLP CIDRs: in-VPC under PrivateLink (the VPC
+  # CIDR), else the published regional CIDR. 0.0.0.0/0 is permissive — tighten per environment.
+  profilesEgressCIDR: "0.0.0.0/0"
+  profilesPort: 443
+
+# Image pull policy. IfNotPresent lets a locally-imported (k3d) image be used without a registry pull.
+imagePullPolicy: IfNotPresent
+
+# Pod scheduling/placement. All default to no-op (empty), so the chart schedules anywhere unless you
+# constrain it. On EKS these let you pin to a Karpenter node pool / instance type, tolerate dedicated-node
+# taints, set anti-affinity beyond the built-in zone/host topology spread, or assign a PriorityClass —
+# without forking the chart.
+nodeSelector: {}     # e.g. { karpenter.sh/nodepool: aip-oi }
+tolerations: []      # e.g. [{ key: dedicated, operator: Equal, value: aip-oi, effect: NoSchedule }]
+affinity: {}         # standard pod/node affinity; the chart already spreads by host+zone (topologySpreadConstraints)
+priorityClassName: "" # e.g. system-cluster-critical for a prod o11y workload that must not be preempted
+
+# Verbatim config.yaml override (string). When empty, the chart renders the generated `config:` map
+# below. When set, this raw string is used as-is (e.g. an e2e supplies a fully-resolved config). The
+# content is still subject to the binary's own validation (internal/config).
+configOverride: ""
+
+# ── generated default config ──────────────────────────────────────────────────
+# The `config:` map below is GENERATED from the Go config schema (internal/config/config.go) by
+# `make generate`. Field comments are the Go doc-comments; values/env-refs come from the helm:"..."
+# struct tags. Do not hand-edit between the markers — the gate test (internal/config) fails on drift.
+# ${ENV} refs are injected from the aip-oi-secrets Secret via envFrom at runtime.
+# >>> BEGIN generated config — do not edit by hand; run `make generate` <<<
+config:
+  emit:
+    telemetry:
+      otlp:
+        # Grafana Cloud OTLP gateway base URL (no trailing /v1/metrics — the emitter appends it).
+        endpoint: ${GC_OTLP_ENDPOINT}
+        instance_id: ${GC_INSTANCE_ID}
+        token: ${GC_OTLP_TOKEN}
+        # AllowInsecure opts this endpoint out of the https-only gate for an IN-CLUSTER cleartext OTLP
+        # receiver — the regulated/EKS topology where aip-oi emits to an in-cluster Alloy (which holds the
+        # real Grafana Cloud credentials) over the pod network rather than straight to the public gateway.
+        # [CP-M7] Default false (https or loopback required). When true, an http NON-loopback endpoint is
+        # permitted ONLY IF (a) no credential is set — instance_id/token must be empty, so nothing rides the
+        # cleartext link (the collector authenticates to Grafana Cloud, not aip-oi); and (b) the host is a
+        # private target — an IP literal must be RFC-1918/loopback/link-local (a public IP is rejected), while
+        # a DNS name (e.g. a Kubernetes Service) is permitted since it can't be resolved at config-load time.
+        # https endpoints ignore this flag.
+        allow_insecure: false
+  identity:
+    service_namespace: aip-oi
+    # Deployment environment label (e.g. dev, staging, prod).
+    deployment_environment: ${ENV}
+  ha:
+    # lease: use a k8s Lease for leader election (production multi-replica). none: disable HA (single-replica dev/test).
+    coordinator: lease
+    # configmap: durable watermark in a k8s ConfigMap (required with coordinator=lease). file: local file (dev only).
+    checkpoint: configmap
+  queue:
+    # Per-loop in-memory queue depth (batches). At ~1 batch/min this is ~4h of backlog before the
+    # queue blocks the scheduler (the block-on-full backpressure path).
+    max_batches: 256
+    # Per-batch size cap in bytes (~1 MiB). An over-cap batch is proactively split before transmit;
+    # a 413 from the gateway triggers a reactive split (DESIGN §4.5/C11).
+    max_batch_bytes: 1048576
+    # emit_workers must be 1: per-loop single-flight emit so the watermark advances monotonically to
+    # the contiguous successor (DESIGN §4.2/C3; config validates this).
+    emit_workers: 1
+  governance:
+    # PerMetricCardinalityBudget caps the number of DISTINCT label-sets tracked per metric NAME — not
+    # a global cap. Over-budget series are dropped and counted (aip_oi_guard_dropped_total). Unset (0)
+    # defaults to defaultPerMetricCardinalityBudget. The real ceiling is the downstream Mimir/Adaptive
+    # Metrics limit (DESIGN §7 GS2/GS3), not this guard.
+    per_metric_cardinality_budget: 10000
+    # MaxDPM hard-caps every exported series at ≤ N data points per minute of SERIES (sample-timestamp)
+    # time, on BOTH planes. Product plane: emit.CoalesceDPM collapses each (series, 60s) group LWW.
+    # Self plane: the PeriodicReader interval is clamped to ≥ 60s/MaxDPM. Unset (0) ⇒ defaultMaxDPM (1);
+    # negative is rejected. (followup.md §0.)
+    max_dpm: 1
+    # MaxCatchupPerTick bounds how many windows a backlogged loop drains per cadence period: when a loop
+    # is more than one window behind (only possible when max_backfill > window, e.g. raised per GS2), the
+    # scheduler accelerates the tick interval to drain up to N windows, then takes a cadence breather —
+    # bounded and fair, and won't burst the source (each call is still rate-limited). Unset (0) ⇒
+    # defaultMaxCatchupPerTick (1) ⇒ one window per cadence, i.e. no acceleration (the v1 behaviour);
+    # negative is rejected. (DESIGN §7a Cdx-C13/F44.)
+    max_catchup_per_tick: 1
+    # MaxStreamLabelKeys caps how many OTLP resource attributes a single LOGS loop may contribute to a
+    # Loki stream: aip-oi's product identity resource attrs (service.name/service.namespace/
+    # deployment.environment.name) PLUS the loop's indexed attrs (its base content-free set ∪
+    # settings.extra_indexed_fields). Loki's max_label_names_per_series (Grafana Cloud default 15) REJECTS
+    # — silently drops — a stream over the limit, so the composition root fails fast at startup if a loop
+    # would exceed it. Unset (0) ⇒ DefaultMaxStreamLabelKeys (15). Raise ONLY to match a Grafana-staff
+    # tenant override of max_label_names_per_series. In the in-cluster-Alloy topology, Alloy's k8s.*/cloud.*
+    # enrichment attrs share this same budget — leave headroom.
+    max_stream_label_keys: 15
+    # AllowLabelKeys are EXTRA content-free attribute keys the operator opts into the cardinality guard's
+    # indexed/label allow-list, ON TOP OF the keys each enabled source already declares (so a default
+    # deployment needs nothing here). Use it to promote a content-free log attribute to the indexed tier
+    # (OTLP resource attr → Loki stream-label candidate). Default empty.
+
+    # LIMITATION (label promotion): listing a key here only allows it PAST the guard. A promoted
+    # attribute becomes a QUERYABLE Loki stream label only if it is in the Grafana OTel gateway's default
+    # label configuration; any label NOT in that default needs a Grafana support ticket before
+    # `{label="…"}` matches — until promoted stack-side it lands as structured metadata, not a stream
+    # label. Content-floor keys (message bodies / injected PII) are REJECTED here at startup.
+    allow_label_keys: []
+  log:
+    # Log output format: logfmt (default, key=value) or json.
+    format: logfmt
+    # Minimum level emitted: debug, info (default), warn, or error. Info keeps warnings and errors
+    # visible on kubectl logs out of the box; raise to debug at bring-up for per-tick detail.
+    level: info
+  selfobs:
+    profiling:
+      enabled: false
+      mode: pull
+      pull:
+        addr: :6060
+    tracing:
+      enabled: false
+  sources:
+    - type: portkey
+      enabled: true
+      # Source API base URL (public control plane). MUST be https unless http.allow_private is set.
+      base_url: https://api.portkey.ai/v1
+      # source_instance is part of the CheckpointKey — it namespaces the watermark. Use a stable,
+      # env-scoped identifier; changing it resets the watermark (a new bootstrap).
+      source_instance: portkey-${ENV}
+      auth:
+        header: x-portkey-api-key
+        value: ${PORTKEY_API_KEY}
+      rate_limit:
+        # Sustained request rate (req/s). Portkey's shared budget is ~10 req/10s across tenants — stay well under (DESIGN §15).
+        rps: 1
+        burst: 3
+      loops:
+        analytics:
+          enabled: true
+          # Poll cadence (± 10% jitter applied by the scheduler).
+          cadence: 60s
+          # Query window; 50m keeps bucket granularity at 1 minute (≤55m clamp; H5/OP5c).
+          window: 50m
+          # bucket_settle: age at which a source bucket stops changing after first observation. 10m is the
+          # live-measured default (3m was insufficient); tune up if late-arrival lag is observed in prod.
+          bucket_settle: 10m
+          # On first run (or after a watermark reset), how far back to bootstrap. Must be ≤ max_backfill.
+          bootstrap_lookback: 50m
+          # Maximum backfill window. Capped by the metrics backend's accept window — on Grafana Cloud the
+          # Mimir out_of_order_time_window is 2h (per-tenant; raise via GS2). 90m leaves margin for clock
+          # skew + the catch-up walk; samples older than now-max_backfill are abandoned loud
+          # (backfill_unstorable_total). NOTE: unrelated to the ≤55m Portkey granularity clamp.
+          max_backfill: 90m
+          metric_prefix: portkey_api
+          # Configured graph set. An unknown graph is logged and skipped; an all-unknown response is an error
+          # (no silent-healthy advance without data).
+          graphs:
+            - requests
+            - cost
+            - tokens
+            - latency
+            - errors
+# >>> END generated config <<<
+
+# ── source examples (generated; commented-out, not active) ─────────────────────
+# >>> BEGIN generated source examples — do not edit by hand; run `make generate` <<<
+# Example source(s) — NOT active. Copy under `config.sources`, set the secret(s), and
+# adjust per environment. Generated from each source package's ExampleSource().
+# sources:
+#   - type: portkey
+#     enabled: true
+#     base_url: https://api.portkey.ai/v1
+#     source_instance: portkey-${ENV}
+#     auth:
+#       header: x-portkey-api-key
+#       value: ${PORTKEY_API_KEY}
+#     rate_limit:
+#       rps: 1
+#       burst: 3
+#     loops:
+#       groups:
+#         enabled: true
+#         cadence: 1m
+#         settings:
+#           # analytics/groups FILTER (optional): scope every graph/group to these Portkey api-key UUIDs (csv), exactly like the notebook's api_key_ids filter. Empty ⇒ workspace-wide (all keys). Set the SAME value on analytics+groups so the per-key aggregates and the per-model/metadata breakdowns agree. NOTE the UUID is the api-key's id (from GET /api-keys), NOT the key secret — and a read-only poller key has no inference traffic of its own, so point this at the key(s) your application actually calls Portkey with.
+#           api_key_ids: ""
+#           # groups: emit the per-dimension cost gauge in USD (÷100 from Portkey's cents); ON by default
+#           emit_cost: "true"
+#           # groups: per-prompt request dimension (adds requests_by_prompt{prompt}); default ON, set false to opt out. Prompt slug is a content-free identifier, not content.
+#           emit_prompts: "true"
+#           # analytics/groups SAFETY (optional): assert the API key's analytics scope is EXACTLY this workspace (slug, e.g. ws-acme-001) before emitting — catches a too-broad/global key (which Portkey can't request-scope on analytics). Mismatch ⇒ refuse to emit + alert; empty ⇒ no check. Set the same value on analytics+groups.
+#           expected_workspace: ""
+#           # groups: per-poll cap on distinct dimension rows (cardinality guard)
+#           max_groups: "10000"
+#           # groups: opt-in per-metadata-field group endpoints (csv); each adds a _by_metadata gauge
+#           metadata_keys: use_case
+#           # page size per fetch (groups: dimension rows; logs_export: records per export page, server ceiling 50000)
+#           page_size: "1000"
+#           # exclude the still-mutating recent tail from the query upper bound
+#           settle: 10m
+#           # groups: trailing query window [now-window_span, now-settle]
+#           window_span: 1h
+#       logs_export:
+#         enabled: true
+#         cadence: 1m
+#         settings:
+#           # logs_export: per-Collect emit chunk (bounds memory; the export file is never buffered whole)
+#           chunk_max_records: "5000"
+#           # logs_export: signed-URL object GET timeout (S3 downloads are larger than control-plane calls)
+#           download_timeout: 5m
+#           # logs_export: promote content-free fields to the INDEXED (Loki stream-label) tier (csv, default empty); auto-allow-listed in the guard; creates Loki streams (keep LOW cardinality — the per-metric budget is the backstop); needs GS1 stack-side promotion to be queryable as {label=…}; bodies hard-denied
+#           extra_indexed_fields: ""
+#           # logs_export: opt content-free fields into the structured-metadata allow-list (csv); bodies hard-denied
+#           extra_record_fields: cache_status
+#           # logs_export: abandon a stuck job after this interval (cancel + restart the window)
+#           job_poll_timeout: 30m
+#           # logs_export: watermark older than now-max_backfill skipped LOUD. Cap ≤ Loki reject_old_samples_max_age (GC default 7d). Default 24h.
+#           max_backfill: 24h
+#           # logs_export: tripwire — a window exceeding this pages advances-past with a counted gap (never stalls)
+#           max_pages_per_window: "50"
+#           # logs_export: lift named sub-keys OUT of the (otherwise hard-denied) Portkey metadata blob into the structured-metadata tier (csv, default empty) — e.g. correlation_id. Only operator-named content-free sub-keys are extracted; the rest of metadata (PII) stays dropped. Bodies hard-denied.
+#           metadata_record_fields: ""
+#           # logs_export: name ONE metadata sub-key whose UUID value is also mapped to the OTLP log trace_id (logs↔traces correlation), e.g. correlation_id (default empty). Auto-lifted into the record tier too. Bodies hard-denied.
+#           metadata_trace_id_field: ""
+#           # page size per fetch (groups: dimension rows; logs_export: records per export page, server ceiling 50000)
+#           page_size: "50000"
+#           # logs_export: fields requested of Portkey export (NOT an egress filter — the client-side strip governs egress)
+#           requested_data: ai_model,ai_org,cost,created_at,id,prompt_id,prompt_slug,prompt_version_id,req_units,res_units,response_status_code,response_time,total_units,trace_id
+#           # exclude the still-mutating recent tail from the query upper bound
+#           settle: 10m
+#           # logs_export: REQUIRED — allow-list of S3 hosts for the signed download URL (SSRF guard)
+#           signed_url_allow_hosts: ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com
+#           # logs_export: per-export query span; the scheduler is snapshot-gated (LoopConfig.Window==0)
+#           window: 1h
+#           # logs_export: REQUIRED — Portkey workspace id
+#           workspace_id: <your-workspace-id>
+#     api_key_use_cases:
+#       - label: Data Gen
+#         api_key_ids:
+#           - <api-key-uuid>
+#   - type: langsmith
+#     enabled: true
+#     base_url: https://api.smith.langchain.com
+#     source_instance: langsmith-${ENV}
+#     auth:
+#       header: x-api-key
+#       value: ${LANGSMITH_API_KEY}
+#     rate_limit:
+#       rps: 10
+#       burst: 20
+#     loops:
+#       runs:
+#         enabled: true
+#         cadence: 1m
+#         settings:
+#           # runs: promote content-free fields to the INDEXED (Loki stream-label) tier (csv, default empty); auto-allow-listed in the guard; creates Loki streams (keep LOW cardinality — the per-metric budget is the backstop); needs GS1 stack-side promotion to be queryable as {label=…}; message bodies are hard-denied.
+#           extra_indexed_fields: ""
+#           # opt content-free fields into the structured-metadata allow-list (csv); message bodies are hard-denied.
+#           extra_record_fields: tags,child_run_ids,app_path
+#           # runs: watermark older than now-max_backfill is skipped LOUD (counted gap). Cap ≤ Loki reject_old_samples_max_age (Grafana Cloud default 7d). Default 24h.
+#           max_backfill: 24h
+#           # runs: drain cap per window; a window exceeding this advances-past with a counted gap (never stalls)
+#           max_pages_per_window: "100"
+#           # runs: per-page decode cap (default 32MiB); an oversize page is a loud counted truncation.
+#           max_response_bytes: "33554432"
+#           # cap on discovered/used sessions (projects) per poll (loud truncation when hit).
+#           max_sessions: "1000"
+#           # runs: page size for runs/query (server ceiling 100)
+#           page_size: "100"
+#           # runs: when true, only emit root runs (one log per trace); reduces volume for trace-level correlation
+#           root_only: "false"
+#           # runs: optional single run_type filter (e.g. chain, llm, tool); empty = all types
+#           run_type: chain
+#           # filter-bounded session auto-discovery via GET /sessions (alternative to session_ids for the runs loop; also scopes the sessions loop).
+#           session_filter: eq(name, "my-project")
+#           # runs: static scope (csv of project UUIDs). EITHER this OR session_filter is REQUIRED — never firehose all projects.
+#           session_ids: <project-uuid-1>,<project-uuid-2>
+#           # runs: auto-discovery session cache TTL (re-queries /sessions after this interval)
+#           session_refresh: 5m
+#           # runs: exclude the still-running/late tail — runs within settle of now may still be mutating
+#           settle: 10m
+#           # runs: trailing query span pulled per poll (Window==0 ⇒ snapshot-scheduled)
+#           window: 1h
+#       sessions:
+#         enabled: true
+#         cadence: 1m
+#         metric_prefix: langsmith
+#         settings:
+#           # sessions: emit numeric feedback_stats gauges (score averages by feedback key)
+#           emit_feedback: "true"
+#           # sessions: optional allow-list of feedback keys to emit (csv, content-free operational names); empty = all numeric keys
+#           feedback_keys: correctness,helpfulness
+#           # cap on discovered/used sessions (projects) per poll (loud truncation when hit).
+#           max_sessions: "1000"
+#           # sessions: page size for the sessions list endpoint (offset/limit pagination)
+#           page_limit: "100"
+#           # filter-bounded session auto-discovery via GET /sessions (alternative to session_ids for the runs loop; also scopes the sessions loop).
+#           session_filter: eq(name, "my-project")
+#           # sessions: per-session label value — "id" (default, bounded) or "name" (human-readable but potentially high-cardinality)
+#           session_label_value: id
+#           # sessions: rolling aggregate window [now-stats_window, now] (snapshot; not time-bucketed)
+#           stats_window: 1h
+#           # sessions: use approximate (cheaper) backend stats computation
+#           use_approx_stats: "false"
+# >>> END generated source examples <<<
+
+# Extra sidecar containers / volumes (e.g. an e2e loopback OTLP sink). Default: none.
+extraContainers: []
+extraVolumes: []
+
+# Share the pod PID namespace. Off in production (security). The e2e turns it on so a debug
+# sidecar can SIGSTOP the integrator process (PID 1 is unsignalable from its own namespace).
+shareProcessNamespace: false
+
+# Opt-in self-profiling (continuous profiling of the integrator's own runtime). Default off.
+# pull  → exposes net/http/pprof on profiling.pullPort for an Alloy/k8s-monitoring pod scrape (no new egress).
+# push  → the pyroscope-go agent pushes to Grafana Cloud Profiles (needs networkPolicy.profilesEgressCIDR).
+# NOTE: the chart does NOT template the runtime config from these values — enabling profiling here only
+# opens the container/service port (pull) or the egress CIDR (push). The actual selfobs.profiling block
+# lives in the configmap baked default (or a `config:` override) and pullPort must match its pull.addr port.
+profiling:
+  enabled: false
+  mode: pull
+  pullPort: 6060
+
+# Uninstall cleanup. The binary creates the leader-election Lease and the watermark-checkpoint
+# ConfigMap at runtime, so `helm uninstall` does not track them and would orphan them. When enabled
+# (default), a post-delete hook Job runs `aip-oi -cleanup` (under a dedicated, delete-only, ephemeral
+# ServiceAccount/Role) to remove them, leaving the namespace clean.
+cleanup:
+  enabled: true
+  # retainCheckpoint: keep the checkpoint ConfigMap on uninstall so a later reinstall RESUMES the
+  # watermark instead of re-bootstrapping (the durable-state-survives-uninstall pattern, like Helm not
+  # deleting PVCs). The lease is always removed regardless — it is pure ephemeral coordination state.
+  # When true, the cleanup hook also drops the configmap-delete grant from its Role (tighter scope).
+  retainCheckpoint: false
+
+# ── AWS / External Secrets Operator (ESO) ──────────────────────────────────────
+# Optional. When externalSecrets.enabled is true, the chart renders a SecretStore + ExternalSecret
+# (templates/secretstore.yaml, templates/externalsecret.yaml) that build the aip-oi-secrets Secret
+# from a cloud secrets manager instead of requiring it to be hand-created. Default OFF — the chart
+# renders exactly as before (the Secret must be created out-of-band and is read via envFrom).
+
+# AWS region for the SecretStore provider. Required when externalSecrets.enabled is true.
+aws:
+  region: ""
+
+# ServiceAccount references. The Deployment's own ServiceAccount (aip-oi) is created by rbac.yaml.
+# esoName names a SEPARATE, IRSA/workload-identity-annotated SA used ONLY by the ESO SecretStore for
+# IAM-based secrets-manager access; it is provisioned out-of-band (e.g. by infra IaC), not by this
+# chart. Required when externalSecrets.enabled is true.
+serviceAccount:
+  esoName: ""
+
+# External Secrets Operator integration. Each *Secret value is the NAME of a secrets-manager secret
+# (not an ARN). The ExternalSecret maps these into the aip-oi-secrets k8s Secret consumed via envFrom.
+externalSecrets:
+  # enabled: render the SecretStore + ExternalSecret. Default OFF (out-of-band Secret as before).
+  enabled: false
+  # Connection config secret. Properties: otlp-url, otlp-username (shared by product + self-obs OTLP),
+  # and — when profiling.enabled — pyroscope-url (the Grafana Cloud Profiles ingest URL; the self-profiling
+  # GC_PYROSCOPE_* keys reuse otlp-username as the instance ID and the self token below as the password).
+  grafanaConfigSecret: ""
+  # Access-policy token secret for PRODUCT telemetry (property: token). Set this ONLY when the product
+  # plane emits DIRECT to Grafana Cloud — then the GC_OTLP_* keys are provisioned. Leave "" for the
+  # in-cluster-collector topology (product → a local Alloy holding the GC creds, token-less); the product
+  # GC_OTLP_* keys are then omitted from the ExternalSecret.
+  grafanaProductTokenSecret: ""
+  # Access-policy token secret for SELF-OBS telemetry (property: token). Backs GC_SELF_OTLP_TOKEN and,
+  # when profiling.enabled, GC_PYROSCOPE_PASSWORD (its scope must include profiles:write).
+  grafanaSelfTokenSecret: ""
+  # Portkey API key secret (property: api_key).
+  portkeySecret: ""
+  # LangSmith API key secret (property: api_key).
+  langsmithSecret: ""
+
+# ── Runtime env (non-secret, environment-specific) ─────────────────────────────
+# Literal values injected as plain container env vars (NOT via the secret) to satisfy the ${ENV} refs
+# in config.yaml. Each is rendered ONLY when non-empty — when empty (the default), nothing is emitted
+# and the corresponding var keeps coming from the aip-oi-secrets Secret via envFrom (unchanged
+# behaviour for the hand-created-secret path).
+runtimeEnv:
+  # ENV — deployment environment label (identity.deployment_environment) and the source_instance
+  # suffix (portkey-${ENV}, langsmith-${ENV}).
+  env: ""
+  # PORTKEY_EXPECTED_WORKSPACE — Portkey workspace SLUG for the key scope-assert; empty disables it.
+  portkeyExpectedWorkspace: ""
+  # LANGSMITH_BASE_URL — self-hosted LangSmith endpoint; MUST include /api/v1.
+  langsmithBaseUrl: ""

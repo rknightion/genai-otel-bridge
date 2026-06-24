@@ -1,0 +1,149 @@
+{{- if .Values.cleanup.enabled }}
+{{- /*
+  Uninstall cleanup. The binary creates the leader-election Lease (aip-oi-leader) and the watermark
+  checkpoint ConfigMap (aip-oi-checkpoints) at RUNTIME, so `helm uninstall` never tracks them and
+  would orphan them. This post-delete hook runs `aip-oi -cleanup` to delete them.
+
+  Why post-delete (not pre-delete): pre-delete runs while the Deployment is still up, so the live
+  leader would immediately re-create the lease/checkpoint after we delete them. post-delete runs
+  AFTER the workload is gone — nothing left to recreate them.
+
+  Why dedicated hook RBAC (not the app's Role): (a) by post-delete the app's SA/Role/RoleBinding are
+  already deleted (normal release resources go before post-delete hooks), so they can't be reused;
+  (b) least-privilege — the running app never deletes its own lease/checkpoint, so it must not carry
+  `delete`. This grant is delete-only, resourceName-scoped, and exists only for the uninstall window.
+*/}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aip-oi-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aip-oi.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aip-oi-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aip-oi.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  # delete-only, scoped to the single lease (delete supports resourceNames, unlike create).
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    resourceNames:
+      - aip-oi-leader
+    verbs:
+      - delete
+  {{- if not .Values.cleanup.retainCheckpoint }}
+  # Only granted when the checkpoint is being deleted; omitted under retainCheckpoint (tighter scope).
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - aip-oi-checkpoints
+    verbs:
+      - delete
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aip-oi-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aip-oi.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "-3"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: aip-oi-cleanup
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: aip-oi-cleanup
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aip-oi-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aip-oi.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  # Bound the hook so a stuck delete can't hang `helm uninstall` indefinitely (binary self-times-out
+  # at 30s; this is the outer ceiling incl. image pull).
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "aip-oi.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: aip-oi-cleanup
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cleanup
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+            - "-cleanup"
+            - "-namespace=$(POD_NAMESPACE)"
+            {{- if .Values.cleanup.retainCheckpoint }}
+            - "-cleanup-retain-checkpoint"
+            {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              memory: "128Mi"
+          volumeMounts:
+            # client-go TLS to the API server may need a writable /tmp under readOnlyRootFilesystem.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

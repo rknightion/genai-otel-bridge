@@ -28,9 +28,9 @@ make lint     # golangci-lint run  (config is .golangci.yml, v2 schema)
 go test -tags acceptance ./internal/app/   # §9 acceptance gates (failover, outage, soak)
 ```
 
-Go 1.26. Module path: `github.com/rknightion/genai-otel-bridge` (the intended public GitHub home). The canonical
-dev remote is currently the self-hosted Forgejo, not GitHub — use `gh` only if a real GitHub remote
-exists; default is the self-hosted forge.
+Go 1.26. Module path: `github.com/rknightion/genai-otel-bridge`. GitHub (`rknightion/genai-otel-bridge`)
+is the canonical remote — commit to `main`, tag `vX.Y.Z` to release (the tag drives the GHCR publish job).
+The repo is currently private; a self-hosted Forgejo mirror is kept as a cold archive only.
 
 ## Architecture (the seams)
 

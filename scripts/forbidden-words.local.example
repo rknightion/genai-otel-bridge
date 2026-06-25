@@ -1,0 +1,16 @@
+# forbidden-words.local.example — template for the (gitignored) scripts/forbidden-words.local.
+#
+# The forbidden-words guard scans the tree for deployment-specific identifiers that must never be
+# committed to this repo. The list is environment-specific, so it lives OUTSIDE git:
+#
+#   - locally: copy this file to scripts/forbidden-words.local and put your real terms in it
+#   - in CI:   inject a ready alternation regex via the $FORBIDDEN_WORDS_PATTERN env var (from a secret)
+#
+# Format: one regex fragment per line; blank lines and #-comments are ignored; matched case-insensitively.
+# Use \b...\b for whole-word matches and escape literal dots (\.) so e.g. an internal hostname matches.
+#
+# Examples (replace with your own — these are illustrative only):
+your-customer-name
+your-internal-host\.example\.net
+123456789012
+\bYOURTAG\b

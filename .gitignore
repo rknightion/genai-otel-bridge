@@ -21,6 +21,8 @@ go.work.sum
 config.local.*
 *.local.yaml
 *.secret.*
+# the real banned-term list (see scripts/forbidden-words.local.example)
+scripts/forbidden-words.local
 
 # Scratch: specs, plans, brainstorming drafts — persist on disk, never enter git history
 docs/superpowers/

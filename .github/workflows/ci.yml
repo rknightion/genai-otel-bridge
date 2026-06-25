@@ -1,6 +1,6 @@
-# GitHub Actions CI for the public repo. Installed by promote.sh as .github/workflows/ci.yml.
+# GitHub Actions CI. This repo is canonical.
 # Gate + k3d e2e on every push/PR; on a v* tag, publish the multi-arch image + Helm chart to GHCR.
-# Releases are still CUT upstream and promoted here — the tag that lands via promotion drives publish.
+# Releases are cut here: commit to main, then tag vX.Y.Z — the tag drives the publish job.
 name: CI
 on:
   push:

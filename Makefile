@@ -21,7 +21,7 @@ GIT_CLIFF := $(shell command -v git-cliff 2>/dev/null || echo $(TOOLS_DIR)/git-c
 .PHONY: build test vet lint gate generate generate-check \
         tools tools-e2e \
         ci ci-build ci-vet ci-lint ci-lint-acceptance ci-test ci-race ci-acceptance ci-envtest \
-        forbidden-words spdx-check helm-lint changelog install-hooks promote gen-dashboard \
+        forbidden-words spdx-check helm-lint changelog install-hooks gen-dashboard \
         ci-e2e image image-local helm-package k3d-up k3d-down k3d-e2e \
         publish
 
@@ -94,12 +94,11 @@ ci-acceptance:
 	$(GO) test -tags acceptance ./internal/app/
 ci-envtest: tools
 	bash scripts/envtest.sh
-# forbidden-words: PRIVATE dev/promotion gate (scans the public surface for terms that must not reach
-# the external repos). The script is in PRIVATE_PATHS — excluded from the external repos — so it
-# self-skips when absent, keeping the shipped `make ci` green there. When present it runs and propagates
-# its exit code (a real hit fails the build).
+# forbidden-words: hygiene guard — scans the tree for deployment-specific identifiers that must never be
+# committed (see scripts/forbidden-words.sh). Self-skips when the script is absent (e.g. a clone without
+# it). When present it runs and propagates its exit code (a real hit fails the build).
 forbidden-words:
-	@if [ -f scripts/forbidden-words.sh ]; then bash scripts/forbidden-words.sh; else echo "forbidden-words: skipped (private gate not present in this repo)"; fi
+	@if [ -f scripts/forbidden-words.sh ]; then bash scripts/forbidden-words.sh; else echo "forbidden-words: skipped (guard not present in this repo)"; fi
 spdx-check:
 	bash scripts/spdx-check.sh
 helm-lint: tools-e2e
@@ -133,7 +132,7 @@ ci-e2e: helm-package k3d-e2e
 publish: tools-e2e
 	HELM=$(TOOLS_DIR)/helm bash scripts/publish.sh
 
-# ── release tooling (private; excluded from external repos) ───────────────────
+# ── release tooling ───────────────────────────────────────────────────────────
 # git-cliff: install a pinned binary into .tools/ unless one is already on PATH.
 tools-changelog:
 	@command -v git-cliff >/dev/null 2>&1 && exit 0; \
@@ -164,10 +163,3 @@ changelog: tools-changelog
 install-hooks:
 	@mkdir -p .git/hooks
 	@for h in scripts/git-hooks/*; do ln -sf "../../$$h" ".git/hooks/$$(basename $$h)"; echo "installed $$(basename $$h)"; done
-
-# Promote the sanitised public surface to an external repo as a release commit (runs the forbidden-words
-# gate first). promote.sh maps each target to its default clone dir + CI; override dir with TARGET_DIR=<path>.
-# Usage: make promote TO=customer VERSION=v1.1.0     (TO = customer | public)
-promote: tools-changelog
-	@test -n "$(TO)" || { echo "usage: make promote TO=<customer|public> VERSION=vX.Y.Z" >&2; exit 1; }
-	bash scripts/promote.sh "$(TO)" "$(VERSION)" "$(TARGET_DIR)"

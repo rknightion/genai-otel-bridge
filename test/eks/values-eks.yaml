@@ -12,9 +12,9 @@
 
 replicas: 2
 
-# Container image. `:main` + imagePullPolicy: Always means deleting a pod pulls the newest main build;
-# pin a specific `:<gitsha>` or `:vX.Y.Z` tag instead for a fully reproducible deploy.
-image: ghcr.io/rknightion/decant:main
+# Container image. `:latest` tracks the most recent release; pin a specific `:vX.Y.Z` tag instead for a
+# fully reproducible deploy. imagePullPolicy: Always so deleting a pod re-pulls a moved `:latest`.
+image: ghcr.io/rknightion/decant:latest
 imagePullPolicy: Always
 
 # Image pull secret (a kubernetes.io/dockerconfigjson Secret in the release namespace). Required when the

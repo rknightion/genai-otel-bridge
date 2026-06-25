@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to decant. Generated from Conventional Commits.
+## [2.1.1] - 2026-06-25
+
+### Bug Fixes
+- Empty-array-safe PRIVATE_NAMES expansion (bash 3.2 + set -u)
+- Example image -> ghcr.io/rknightion/decant:latest (GHCR has no :main)
+- Log in to the registry host, not host/namespace (GHCR support)
 ## [2.1.0] - 2026-06-25
 
 ### Build & CI

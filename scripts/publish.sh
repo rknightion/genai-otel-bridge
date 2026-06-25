@@ -44,6 +44,9 @@ HELM="${HELM:-helm}"
 : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD is required}"
 
 IMAGE="${REGISTRY}/${IMAGE_REPO}"
+# docker/helm login take a registry HOST (e.g. ghcr.io), not host/namespace (ghcr.io/owner). REGISTRY
+# may carry a namespace path (GHCR), so strip it for login; the full REGISTRY is still used for tags/push.
+REGISTRY_HOST="${REGISTRY%%/*}"
 
 # ── resolve versions/tags from RELEASE_TAG ────────────────────────────────────
 if [ -n "${RELEASE_TAG:-}" ]; then
@@ -67,8 +70,8 @@ fi
 echo "==> publishing image=${IMAGE} tags=[${image_tags}] app=${app_version} chart=${chart_version}"
 
 # ── login (docker + helm OCI share the same registry creds) ───────────────────
-printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
-printf '%s' "$REGISTRY_PASSWORD" | "$HELM" registry login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
+printf '%s' "$REGISTRY_PASSWORD" | "$HELM" registry login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
 
 # ── multi-arch buildx setup ───────────────────────────────────────────────────
 if [ "${SETUP_BUILDX:-1}" = "1" ]; then

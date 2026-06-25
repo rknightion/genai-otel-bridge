@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a defect in genai-otel-bridge
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please do **not** include secrets, tokens, or any prompt/response
+        content in this report.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, config (with secrets redacted), and the source/loop involved.
+      placeholder: |
+        1. Config used (redact ${ENV} values) ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `decant --version` (or the image tag / chart version).
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: How it runs (binary / Helm / k8s), Go version if built from source, OS/arch.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / self-obs metrics
+      description: Redacted logs or `decant_*` self-observability metrics. No content/credentials.
+      render: shell
+    validations:
+      required: false

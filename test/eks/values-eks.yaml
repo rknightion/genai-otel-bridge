@@ -1,0 +1,234 @@
+# Example decant Helm overrides for an EKS cluster (private API endpoint, NAT egress, direct-to-Grafana-Cloud).
+#
+# Deploy: helm upgrade --install decant ./deploy/helm -n default -f test/eks/values-eks.yaml
+#
+# Prereq: the `decant-secrets` Secret must exist in the target namespace first — create it with
+# test/eks/make-decant-secret.sh (which reads the required values from your environment). The ${ENV}
+# refs in configOverride below are resolved by the binary from that Secret (envFrom); an unset ref is fatal.
+#
+# Telemetry: product metrics/logs and self-observability go to Grafana Cloud over https via the cluster
+# NAT. We do NOT route through an in-cluster cleartext OTLP receiver — the emit cleartext-credential guard
+# ([CP-M7]) forbids plain-http emit endpoints (tracked followup.md §2).
+
+replicas: 2
+
+# Container image. `:main` + imagePullPolicy: Always means deleting a pod pulls the newest main build;
+# pin a specific `:<gitsha>` or `:vX.Y.Z` tag instead for a fully reproducible deploy.
+image: ghcr.io/rknightion/decant:main
+imagePullPolicy: Always
+
+# Image pull secret (a kubernetes.io/dockerconfigjson Secret in the release namespace). Required when the
+# registry/package is private; omit once the image is public.
+imagePullSecrets:
+  - name: regcred
+
+# NetworkPolicy — EKS specifics. Enforcement requires the VPC-CNI network-policy feature (or Calico)
+# to be enabled on the cluster; otherwise these rules are a no-op (verify before relying on them).
+networkPolicy:
+  ingressPorts:
+    - 8080
+  dnsPort: 53
+  # EKS private API endpoint: kube-apiserver traffic DNATs to control-plane ENIs that live in the
+  # cluster subnets, so egress is evaluated on the VPC CIDR (not the 172.20/16 service IP). REQUIRED
+  # for lease leader-election + the ConfigMap checkpoint. Set to your VPC CIDR.
+  apiServerCIDR: "10.1.0.0/16"
+  apiServerPort: 443
+  # Grafana Cloud OTLP reached over the public internet via the NAT instance.
+  # Permissive for a first deploy; tighten to the Grafana Cloud OTLP CIDR per region later.
+  otlpEgressCIDR: "0.0.0.0/0"
+  otlpPort: 443
+  # Source control plane (e.g. api.portkey.ai) — FQDN, can't be matched by plain NetworkPolicy CIDR, so
+  # left permissive (egress via NAT). Use a CiliumNetworkPolicy toFQDNs for tight control later.
+  sourceEgressCIDR: "0.0.0.0/0"
+  sourcePort: 443
+  # Grafana Cloud Profiles (Pyroscope) for push-mode self-profiling, via NAT. Only rendered when
+  # profiling.enabled && profiling.mode==push (below). Permissive for the deploy.
+  profilesEgressCIDR: "0.0.0.0/0"
+  profilesPort: 443
+
+# Self-profiling: PUSH the integrator's own runtime profiles to a Grafana Cloud Pyroscope endpoint.
+# This chart block only opens the egress (profilesEgressCIDR above) — the actual pyroscope target is in
+# the configOverride's selfobs.profiling.push block (must stay consistent with this).
+profiling:
+  enabled: true
+  mode: push
+
+# Fully-resolved runtime config (verbatim). Secret-bearing fields use ${ENV} refs injected from the
+# decant-secrets Secret; everything else is literal. Product -> emit.telemetry, self-obs -> emit.self,
+# self-profiles -> Pyroscope (selfobs.profiling.push).
+configOverride: |
+  emit:
+    telemetry:
+      otlp:
+        endpoint: ${GC_OTLP_ENDPOINT}
+        instance_id: ${GC_INSTANCE_ID}
+        token: ${GC_OTLP_TOKEN}
+        # [CP-M7] https direct to Grafana Cloud — NOT an in-cluster cleartext-Alloy topology, so false.
+        allow_insecure: false
+    self:
+      otlp:
+        endpoint: ${GC_SELF_OTLP_ENDPOINT}
+        instance_id: ${GC_SELF_OTLP_INSTANCE_ID}
+        token: ${GC_SELF_OTLP_TOKEN}
+        allow_insecure: false
+  identity:
+    service_namespace: decant
+    deployment_environment: eks-test
+  ha:
+    coordinator: lease
+    checkpoint: configmap
+  queue:
+    max_batches: 256
+    max_batch_bytes: 1048576
+    emit_workers: 1
+  governance:
+    per_metric_cardinality_budget: 10000
+    max_dpm: 1
+    max_catchup_per_tick: 1
+    # Loki stream-label budget (max_label_names_per_series, GC default 15). The logs loops here promote
+    # only their base content-free indexed attrs, well under budget; default 15. Raise only on a tenant override.
+    max_stream_label_keys: 15
+    # Extra content-free indexed/label keys ON TOP of what each source declares. Empty: the sources'
+    # built-in indexed attrs suffice for this deploy.
+    allow_label_keys: []
+  log:
+    # logfmt (key=value) scraped by k8s-monitoring then sent to Loki. json also supported.
+    format: logfmt
+    # info (the production default); warns/errors show at any level. Raise to debug only for per-tick
+    # detail during a fresh bring-up.
+    level: info
+  selfobs:
+    # Continuous self-profiling pushed to a Grafana Cloud Pyroscope endpoint (self-observability).
+    # endpoint must be https (cleartext-credential gate).
+    profiling:
+      enabled: true
+      mode: push
+      push:
+        endpoint: ${GC_PYROSCOPE_URL}
+        instance_id: ${GC_PYROSCOPE_USER}
+        token: ${GC_PYROSCOPE_PASSWORD}
+    # Self-APM tracing of our OWN poll/emit pipeline (rides the emit.self OTLP path into Tempo, no
+    # separate egress; covered by otlpEgressCIDR). Enabled here to exercise the full self-o11y stack.
+    tracing:
+      enabled: true
+  sources:
+    # ── Portkey (LLM gateway) — both planes, all loops ────────────────────────
+    # The source API key's ANALYTICS data is scoped to a single workspace (the analytics
+    # groups/workspace endpoint returns one row), so analytics+groups can't be request-targeted to a
+    # workspace. They DO carry an optional SAFETY assertion: expected_workspace = the workspace SLUG
+    # (env-injected via ${PORTKEY_EXPECTED_WORKSPACE}, kept out of git — it is what /analytics/groups/
+    # workspace returns, NOT the UUID that logs_export uses). A mismatch (e.g. a global key pasted by
+    # mistake) ⇒ refuse to emit + alert. logs_export takes the explicit workspace_id (UUID), which
+    # Portkey respects. Multi-workspace fan-out: followup.md §4.
+    - type: portkey
+      enabled: true
+      base_url: https://api.portkey.ai/v1
+      source_instance: portkey-eks-test
+      auth:
+        header: x-portkey-api-key
+        value: ${PORTKEY_API_KEY}
+      rate_limit:
+        rps: 1
+        burst: 3
+      loops:
+        # METRICS — time-bucketed analytics aggregate.
+        analytics:
+          enabled: true
+          cadence: 60s
+          window: 50m
+          bucket_settle: 10m
+          bootstrap_lookback: 50m
+          max_backfill: 90m
+          metric_prefix: portkey_api
+          graphs: [requests, cost, tokens, latency, errors]
+          settings:
+            expected_workspace: ${PORTKEY_EXPECTED_WORKSPACE}   # SLUG (not the UUID), env-injected; scope-assert the key, refuse-to-emit on mismatch
+        # METRICS — per-dimension cost/usage group gauges (cost emitted in USD).
+        groups:
+          enabled: true
+          cadence: 60s
+          settings:
+            emit_cost: "true"
+            max_groups: "10000"
+            metadata_keys: use_case
+            page_size: "1000"
+            settle: 10m
+            window_span: 1h
+            expected_workspace: ${PORTKEY_EXPECTED_WORKSPACE}   # SLUG (not the UUID), env-injected; scope-assert the key, refuse-to-emit on mismatch
+        # LOGS — Portkey log export → signed-URL S3 download. workspace_id REQUIRED (UUID form, per
+        # the live API), env-injected and kept out of git; signed_url_allow_hosts is the SSRF allow-list.
+        logs_export:
+          enabled: true
+          cadence: 60s
+          settings:
+            workspace_id: ${PORTKEY_WORKSPACE_ID}
+            signed_url_allow_hosts: ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com
+            requested_data: ai_model,ai_org,cost,created_at,id,prompt_id,prompt_slug,prompt_version_id,req_units,res_units,response_status_code,response_time,total_units,trace_id
+            extra_record_fields: cache_status
+            # Map the source's native top-level trace_id field → OTLP log trace_id (native logs↔traces
+            # correlation). Real UUIDs are mapped; free-text caller labels that don't parse → trace_id
+            # unset (counted via trace_id_unparsed) but the raw value still ships as a record attr.
+            # Mutually exclusive with metadata_trace_id_field.
+            trace_id_field: trace_id
+            window: 1h
+            settle: 10m
+            max_backfill: 24h
+            max_pages_per_window: "50"
+            page_size: "50000"
+            chunk_max_records: "5000"
+            download_timeout: 5m
+            job_poll_timeout: 30m
+    # ── LangSmith (eval platform) — both planes, all loops ────────────────────
+    # Key is tenant-scoped (one tenant_id, many projects). The base URL MUST include /api/v1
+    # (the client appends only /sessions, /runs/query). sessions=metrics, runs=logs.
+    # base_url is env-injected (instance-specific endpoint, kept out of git) via LANGSMITH_BASE_URL
+    # in the decant-secrets Secret — see test/eks/make-decant-secret.sh.
+    - type: langsmith
+      enabled: true
+      base_url: ${LANGSMITH_BASE_URL}
+      source_instance: langsmith-eks-test
+      auth:
+        header: x-api-key
+        value: ${LANGSMITH_API_KEY}
+      # Tenant-wide client-side limiter (shared by sessions+runs). Tune per instance; a self-hosted
+      # LangSmith with no rate-limit headers can sustain a higher rps than the documented cloud limit —
+      # rps=10 lets the runs loop drain many projects' windows far faster than rps=1.
+      rate_limit:
+        rps: 10
+        burst: 20
+      loops:
+        # METRICS — per-project (session) eval/usage snapshot gauges. No session_filter ⇒ all
+        # projects in the tenant (bounded by max_sessions).
+        sessions:
+          enabled: true
+          cadence: 60s
+          metric_prefix: langsmith
+          settings:
+            emit_feedback: "true"
+            max_sessions: "1000"
+            page_limit: "100"
+            session_label_value: id
+            stats_window: 1h
+            use_approx_stats: "false"
+        # LOGS — per-run logs. runs/query REQUIRES a scope; the neq(name,…) match-all filter covers
+        # all projects in the tenant and auto-discovers new ones each session_refresh. With many
+        # projects the runs loop can lag its cadence (loud, bounded — by design).
+        runs:
+          enabled: true
+          cadence: 60s
+          settings:
+            session_filter: 'neq(name, "__none__")'
+            session_refresh: 5m
+            max_sessions: "1000"
+            extra_record_fields: tags,child_run_ids,app_path
+            window: 1h
+            settle: 10m
+            max_backfill: 24h
+            # Per-window drain ceiling = max_pages_per_window * page_size = 100 * 100 = 10000 runs/window.
+            # Size for the peak 1h run count with headroom; draining 100 pages at rps=10 costs ~10s,
+            # trivial within the 60s cadence. A window over this advances PAST with a LOUD counted gap
+            # (window_truncated) — watch that metric; raise further if it ever fires.
+            max_pages_per_window: "100"
+            max_response_bytes: "33554432"
+            page_size: "100"
+            root_only: "false"

@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an enhancement or a new source/loop
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to achieve? What operational signal is missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        What you'd like to see. Note the project is decoupled and content-free by design — proposals
+        must keep identity/metrics/labels configurable and must never require prompt/response content.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

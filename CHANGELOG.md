@@ -1,6 +1,24 @@
 # Changelog
 
 All notable changes to decant. Generated from Conventional Commits.
+## [2.1.0] - 2026-06-25
+
+### Build & CI
+- Disable tag-triggered auto-promotion (freeze customer promotion during rename)
+- Narrow .github exclude to workflows/ so issue+PR templates promote
+- Publish image + chart to GHCR from the public repo on v* tags
+
+### Documentation
+- Add OSS governance files + README quickstart
+- Sanitize root CLAUDE.md + put CLAUDE.md on the public surface
+
+### Features
+- Add 'decant -validate-config' for secret-free config/overlay validation
+
+### Refactor
+- Rename make-aip-oi-secret.sh -> make-decant-secret.sh
+- Genericize EKS example, move onto the public surface
+- Extract customer delivery artifacts out of the product repo
 ## [2.0.0] - 2026-06-25
 
 ### Dependencies

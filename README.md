@@ -18,6 +18,55 @@ single-emit), self-observing, and resilient to downstream slowness.
 allow/deny-list governs every emitted field, enforced as a release gate — operational telemetry
 (latency/tokens/cost/errors) only, never inference content.
 
+## Quickstart
+
+Write a config file (`config.yaml`). Secrets are resolved from `${ENV}` / `file:/path` refs at load
+time, so no credentials live in the file:
+
+```yaml
+emit:
+  telemetry:
+    otlp:
+      endpoint: ${GC_OTLP_ENDPOINT}      # an OTLP/HTTP endpoint (Grafana Cloud or a local collector)
+      instance_id: ${GC_INSTANCE_ID}
+      token: ${GC_OTLP_TOKEN}
+identity:
+  service_namespace: decant
+  deployment_environment: ${ENV}
+sources:
+  - type: portkey
+    enabled: true
+    base_url: https://api.portkey.ai/v1
+    source_instance: portkey-${ENV}
+    auth: { header: x-portkey-api-key, value: ${PORTKEY_API_KEY} }
+    loops:
+      analytics:
+        enabled: true
+        cadence: 60s
+        window: 50m
+        bucket_settle: 3m
+        max_backfill: 55m
+        metric_prefix: portkey_api
+        graphs: [requests, cost, tokens, latency, errors]
+```
+
+Build and run:
+
+```bash
+make build
+GC_OTLP_ENDPOINT=... GC_INSTANCE_ID=... GC_OTLP_TOKEN=... ENV=dev PORTKEY_API_KEY=... \
+  bin/decant --config config.yaml
+```
+
+Or deploy to Kubernetes with the bundled chart (leader-elected HA, ConfigMap checkpoint store):
+
+```bash
+helm install decant ./deploy/helm -f my-values.yaml
+```
+
+See [`deploy/helm/values.yaml`](./deploy/helm/values.yaml) — every source/loop knob is surfaced there
+at its default with a comment.
+
 ## Status
 
 Feature-complete across both source vendors (Portkey, LangSmith) and both telemetry planes
@@ -32,7 +81,7 @@ See [`followup.md`](./followup.md) for deferred/future work.
 ## Build & test
 
 ```bash
-make gate     # vet + test + lint + decouple-check + spdx-check + build  — the green bar before any commit
+make gate     # vet + test + lint + spdx-check + build  — the green bar before any commit
 make build    # -> bin/decant (version stamped via git describe)
 make test     # go test ./...
 make lint     # golangci-lint run

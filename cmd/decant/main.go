@@ -52,7 +52,19 @@ func main() {
 	cpFile := flag.String("checkpoint-file", "/var/lib/decant/checkpoints.yaml", "path for the file checkpoint store (only used when ha.checkpoint=file)")
 	cleanupMode := flag.Bool("cleanup", false, "delete the app-created lease + checkpoint ConfigMap, then exit (the chart's post-delete uninstall hook)")
 	cleanupRetainCheckpoint := flag.Bool("cleanup-retain-checkpoint", false, "with -cleanup: keep the checkpoint ConfigMap (only remove the lease) so a reinstall resumes the watermark")
+	validateConfigMode := flag.Bool("validate-config", false, "load + validate the -config file (placeholdering unset ${ENV} refs so secrets aren't needed), print the result, and exit 0/1")
 	flag.Parse()
+
+	// Config-validation path: load + schema/semantic-check the -config file and exit. No wiring, no
+	// secrets required (unset ${ENV} refs get placeholders). For pre-deploy / CI overlay validation.
+	if *validateConfigMode {
+		if err := app.ValidateConfigFile(*cfgPath); err != nil {
+			fmt.Fprintf(os.Stderr, "validate-config: FAIL: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("validate-config: OK (%s)\n", *cfgPath)
+		return
+	}
 
 	// Uninstall cleanup path (chart post-delete hook). Self-contained: build a client and delete the
 	// runtime-created HA objects helm can't track, then exit — no config/emit/coordinator wiring.

@@ -1,0 +1,57 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: decant-upstream-error-budget
+  annotations:
+    grafana.app/folder: decant
+  labels:
+    grafana.app/folder: decant
+spec:
+  title: DecantUpstreamErrorBudget
+  # >20% of the poller's requests to the upstream source API are failing (4xx/5xx/error incl.
+  # timeouts) over a 10m window. This is the vendor API health signal — a high error ratio means the
+  # source is rejecting, rate-limiting, or timing out the poller. Collect retries will eventually
+  # exhaust and loops will stall. Self-contained: does not depend on recording rules.
+  execErrState: Ok
+  noDataState: Ok
+  for: 15m
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "decant upstream {{ $labels.target }} error ratio >20%"
+    description: "More than 20% of decant's requests to upstream source API {{ $labels.target }} are returning 4xx/5xx/error (including timeouts) over a 10m window. The vendor API is erroring, rejecting, or timing out the poller. If the ratio is sustained, collect retries will exhaust and loops will stall. Check the vendor API status page, decant_upstream_request_duration_seconds labels for error detail, and the pod logs for context-deadline/timeout messages. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 11m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: '(sum by (target) (rate(decant_upstream_request_duration_seconds_count{status_class=~"4xx|5xx|error"}[10m])) / clamp_min(sum by (target) (rate(decant_upstream_request_duration_seconds_count[10m])), 1e-9)) > 0.2'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

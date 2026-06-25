@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	cpfile "github.com/grafana-ps/aip-oi/internal/checkpoint/file"
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	cpfile "github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // [ext-review-2] The watermark must not advance once leadership is lost — even when the checkpointer

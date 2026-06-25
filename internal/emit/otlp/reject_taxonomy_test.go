@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/grafana-ps/aip-oi/internal/emit"
+	"github.com/rknightion/genai-otel-bridge/internal/emit"
 )
 
 func TestReviewUnauthorizedIsTerminalReject(t *testing.T) {

@@ -11,15 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/checkpoint"
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
-	"github.com/grafana-ps/aip-oi/internal/emit"
-	"github.com/grafana-ps/aip-oi/internal/logging"
-	"github.com/grafana-ps/aip-oi/internal/schedule"
-	"github.com/grafana-ps/aip-oi/internal/source"
-	"github.com/grafana-ps/aip-oi/internal/source/langsmith"
-	"github.com/grafana-ps/aip-oi/internal/source/portkey"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/emit"
+	"github.com/rknightion/genai-otel-bridge/internal/logging"
+	"github.com/rknightion/genai-otel-bridge/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/source/langsmith"
+	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 )
 
 type App struct {
@@ -108,7 +108,7 @@ func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, co
 		deps.OnAuthError = authErrorHook(m, logging.NewLimiter(time.Minute))
 	}
 	// [Loki stream-label budget] A logs loop's IndexedAttributes become OTLP resource attrs → Loki stream
-	// labels once GS1 promotes them; together with aip-oi's product identity resource attrs (all in the GC
+	// labels once GS1 promotes them; together with decant's product identity resource attrs (all in the GC
 	// Loki default-promoted set) they consume the tenant's max_label_names_per_series budget. Loki REJECTS
 	// (silently drops) a stream over that limit — which the operationally-honest rule forbids — so fail
 	// fast here, not at emit time. Ceiling = governance.max_stream_label_keys (default = the GC Loki

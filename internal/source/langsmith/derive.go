@@ -11,7 +11,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // tracerSession decodes ONLY the fields we emit. Free-form/content + high-cardinality id fields

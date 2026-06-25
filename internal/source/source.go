@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/httpx"
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // Sentinel Collect outcomes a source can signal without importing schedule (the scheduler maps
@@ -47,7 +47,7 @@ type SeriesDeclarer interface {
 // IndexedKeyDeclarer is an OPTIONAL capability (not part of the frozen Loop): a LOGS loop that promotes
 // record fields to LogRecord.IndexedAttributes (OTLP resource attrs → Loki stream labels via GS1)
 // declares the FULL set it may emit (its base content-free allow-list ∪ settings.extra_indexed_fields).
-// The composition root sums these with aip-oi's product identity resource attrs and rejects a config
+// The composition root sums these with decant's product identity resource attrs and rejects a config
 // that would exceed the Loki max_label_names_per_series budget (governance.max_stream_label_keys) — a
 // stream over that limit is REJECTED (silently dropped) by Loki. Mirrors SeriesDeclarer.
 type IndexedKeyDeclarer interface {
@@ -61,11 +61,12 @@ type Deps struct {
 	// upstream-request histogram. nil ⇒ no instrumentation.
 	UpstreamObserver httpx.Observer
 	// OnBucketRevised, if set, is called by a source when it observes an ALREADY-EMITTED (settled)
-	// bucket change value on a later poll — i.e. a late arrival landed after bucket_settle. The source
-	// does NOT re-emit (that would break gap-free / byte-identical emit); it only signals. The
-	// composition root wires this to metrics.BucketRevisedAfterSettle{loop}. nil ⇒ no detection.
+	// bucket change value on a later poll — i.e. a late arrival landed after bucket_settle. `age` is how
+	// late the revision is (now − bucketEnd; always ≥ settle). The source does NOT re-emit (that would
+	// break gap-free / byte-identical emit); it only signals. The composition root wires this to
+	// metrics.BucketRevisedAfterSettle{loop,age} (count + age histogram). nil ⇒ no detection.
 	// Mirrors the GuardConfig.OnNewLabelValue early-warning hook pattern.
-	OnBucketRevised func(loop string)
+	OnBucketRevised func(loop string, age time.Duration)
 	// OnGraphSkipped, if set, is called when a source skips a configured sub-stream on a poll because it
 	// 404'd (capability detection / permission / absence) — by-design, the loop derives from the rest and
 	// advances, but the skip was previously SILENT (only a log). The composition root wires this to

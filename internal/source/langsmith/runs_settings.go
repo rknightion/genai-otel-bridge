@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/httpx"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 const runsPageSizeMax = 100 // runs/query hard server `limit` ceiling (live-confirmed)

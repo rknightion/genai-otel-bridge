@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
 )
 
 // sessionsDefaults holds the package-canonical defaults for the sessions loop — the single source of

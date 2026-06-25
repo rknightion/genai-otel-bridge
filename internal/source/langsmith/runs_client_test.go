@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/grafana-ps/aip-oi/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
 )
 
 func runsTestClient(t *testing.T) *httpx.Client {

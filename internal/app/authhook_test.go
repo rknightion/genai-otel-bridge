@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/logging"
-	"github.com/grafana-ps/aip-oi/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/logging"
+	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 )
 
 // authStub counts AuthError calls; embeds NoopMetrics for the rest of the schedule.Metrics interface.

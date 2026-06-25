@@ -1,0 +1,32 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: RecordingRule
+metadata:
+  name: decant-freshness-ratio
+  annotations:
+    grafana.app/folder: decant
+  labels:
+    grafana.app/folder: decant
+spec:
+  title: decant:freshness_ratio
+  metric: decant:freshness_ratio
+  targetDatasourceUID: grafanacloud-prom
+  trigger:
+    interval: 1m
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      source: true
+      relativeTimeRange: {from: 6h0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        # Per-loop staleness normalised to the loop's OWN 6h p90 baseline: >1 means "staler than this loop
+        # normally gets", regardless of whether normal is 2m (sessions) or 40m (runs). One uniform scale
+        # the dashboard colours on (green <1.5, yellow 1.5-2, red >2) — no per-loop or per-deployment
+        # constants anywhere. clamp_min(...,120) stops a fast/quiet loop dividing by ~0. Self-contained.
+        expr: '(time() - max by (loop) (decant_last_success_timestamp_seconds)) / clamp_min(quantile_over_time(0.9, (time() - max by (loop) (decant_last_success_timestamp_seconds))[6h:1m]), 120)'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query

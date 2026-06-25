@@ -3,7 +3,7 @@
 // Package cleanup deletes the app-created HA state objects that `helm uninstall` cannot remove on
 // its own — the leader-election Lease and the watermark-checkpoint ConfigMap. The binary creates
 // both at runtime (not the chart), so Helm never tracks them; without this they are orphaned in the
-// namespace after an uninstall. The chart's post-delete hook runs `aip-oi -cleanup`, which calls Run.
+// namespace after an uninstall. The chart's post-delete hook runs `decant -cleanup`, which calls Run.
 // Post-delete (not pre-delete) is deliberate: by then the Deployment is gone, so no live leader can
 // re-create the lease/checkpoint after we delete them.
 package cleanup

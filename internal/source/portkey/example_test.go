@@ -5,8 +5,8 @@ package portkey_test
 import (
 	"testing"
 
-	"github.com/grafana-ps/aip-oi/internal/source"
-	. "github.com/grafana-ps/aip-oi/internal/source/portkey"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
+	. "github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 )
 
 // TestExampleSourceBuildable guards that ExampleSource() produces a SourceConfig that passes

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/checkpoint"
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
-	"github.com/grafana-ps/aip-oi/internal/emit"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/emit"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // --- test doubles ---

@@ -1,34 +1,36 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: aipoi-poller-stale
+  name: decant-poller-stale
   annotations:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
   labels:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
 spec:
-  title: AipOiPollerStale
-  # A loop is still exporting its self-metrics (process up) but has not committed a successful emit in
-  # >15m, so its last_success timestamp keeps ageing => collection/emit is wedged for that loop. The
-  # "leader entirely gone" case (no series at all) is covered by AipOiLeaderAbsent, hence noData=Ok here.
-  execErrState: OK
-  noDataState: OK
-  for: 5m
+  title: DecantPollerStale
+  # A loop is still exporting its self-metrics (process up) but its last-success age has exceeded 2x its
+  # own trailing-6h p90 baseline AND the 300s absolute floor — it is staler than normal for THIS loop.
+  # The threshold is self-relative so fast loops (e.g. analytics at ~60s cadence) fire quickly while
+  # slow loops (e.g. log-export at ~5m) don't false-positive. The "leader entirely gone" case (no series
+  # at all) is covered by DecantLeaderAbsent, hence noData=Ok here.
+  execErrState: Ok
+  noDataState: Ok
+  for: 15m
   trigger:
     interval: 1m
   labels:
     severity: warning
   annotations:
-    summary: "aip-oi {{ $labels.loop }} loop is stale (no successful emit in >15m)"
-    description: "time() - aip_oi_last_success_timestamp_seconds for the {{ $labels.loop }} loop has exceeded 900s while the process is still running. The loop is not advancing its watermark (emit failing, source wedged, or quota). Check aip_oi_emit_errors_total / aip_oi_window_lag_seconds and the pod logs. See deploy/grafana/README.md."
+    summary: "decant {{ $labels.loop }} loop is stale vs its own baseline"
+    description: "The {{ $labels.loop }} loop's last-success age has exceeded 2x its own trailing-6h p90 baseline AND the 300s absolute floor — it is staler than normal for this loop (not a flat threshold, so it won't false-positive on the slow log-export loops). The loop is not advancing its watermark: collect/emit is wedged or the source is failing. Check decant_emit_errors_total / decant_window_lag_seconds and the pod logs. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
       queryType: prometheus
-      relativeTimeRange: {from: 16m0s, to: 0s}
+      relativeTimeRange: {from: 6h0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: '(time() - max by (loop) (aip_oi_last_success_timestamp_seconds)) > 900'
+        expr: '(time() - max by (loop) (decant_last_success_timestamp_seconds)) > (2 * quantile_over_time(0.9, (time() - max by (loop) (decant_last_success_timestamp_seconds))[6h:1m])) and (time() - max by (loop) (decant_last_success_timestamp_seconds)) > 300'
         instant: true
         range: false
         intervalMs: 1000

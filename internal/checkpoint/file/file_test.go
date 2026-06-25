@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/checkpoint"
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 func TestFileRoundTripAndFence(t *testing.T) {

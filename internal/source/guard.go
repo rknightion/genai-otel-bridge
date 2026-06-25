@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // GuardConfig configures the governance guard.

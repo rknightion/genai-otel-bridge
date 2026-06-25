@@ -11,7 +11,7 @@ import (
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 func logRec(body, sev string, indexed, record map[string]string, ts time.Time) model.LogRecord {
@@ -35,8 +35,8 @@ func decodeLogs(t *testing.T, body []byte) *logspb.LogsData {
 func TestEncodeLogsDeterministic(t *testing.T) {
 	ts1 := time.Unix(1_700_000_000, 0).UTC()
 	ts2 := time.Unix(1_700_000_005, 0).UTC()
-	id1 := map[string]string{"service.namespace": "aip-oi-meta", "deployment.environment.name": "dev"}
-	id2 := map[string]string{"deployment.environment.name": "dev", "service.namespace": "aip-oi-meta"}
+	id1 := map[string]string{"service.namespace": "decant-meta", "deployment.environment.name": "dev"}
+	id2 := map[string]string{"deployment.environment.name": "dev", "service.namespace": "decant-meta"}
 	l1 := []model.LogRecord{
 		logRec("", "INFO", map[string]string{"ai_model": "gpt-5", "ai_provider": "openai"}, map[string]string{"trace_id": "t1", "cost": "0.1"}, ts1),
 		logRec("", "INFO", map[string]string{"ai_provider": "openai", "ai_model": "gpt-5"}, map[string]string{"cost": "0.2", "trace_id": "t2"}, ts2),
@@ -91,7 +91,7 @@ func TestEncodeLogsTraceID(t *testing.T) {
 // identity ∪ that group's indexed attrs.
 func TestEncodeLogsGroupsByIndexedAttrs(t *testing.T) {
 	ts := time.Unix(1_700_000_000, 0).UTC()
-	id := map[string]string{"service.namespace": "aip-oi-meta"}
+	id := map[string]string{"service.namespace": "decant-meta"}
 	logs := []model.LogRecord{
 		logRec("", "INFO", map[string]string{"ai_model": "gpt-5"}, nil, ts),
 		logRec("", "INFO", map[string]string{"ai_model": "gpt-5"}, nil, ts),
@@ -105,7 +105,7 @@ func TestEncodeLogsGroupsByIndexedAttrs(t *testing.T) {
 	var gpt5Records int
 	for _, rl := range ld.ResourceLogs {
 		attrs := kvMap(rl.Resource.Attributes)
-		if attrs["service.namespace"] != "aip-oi-meta" {
+		if attrs["service.namespace"] != "decant-meta" {
 			t.Fatalf("resource missing identity attr: %v", attrs)
 		}
 		if attrs["ai_model"] == "gpt-5" {
@@ -123,7 +123,7 @@ func TestEncodeLogsGroupsByIndexedAttrs(t *testing.T) {
 // empty Body→nil, Severity→SeverityText, Timestamp→TimeUnixNano.
 func TestEncodeLogsAttributeMapping(t *testing.T) {
 	ts := time.Unix(1_700_000_123, 0).UTC()
-	id := map[string]string{"service.namespace": "aip-oi-meta"}
+	id := map[string]string{"service.namespace": "decant-meta"}
 	logs := []model.LogRecord{
 		logRec("", "INFO", map[string]string{"ai_model": "gpt-5"}, map[string]string{"trace_id": "abc", "response_time": "1485"}, ts),
 	}
@@ -133,7 +133,7 @@ func TestEncodeLogsAttributeMapping(t *testing.T) {
 	}
 	rl := ld.ResourceLogs[0]
 	res := kvMap(rl.Resource.Attributes)
-	if res["ai_model"] != "gpt-5" || res["service.namespace"] != "aip-oi-meta" {
+	if res["ai_model"] != "gpt-5" || res["service.namespace"] != "decant-meta" {
 		t.Fatalf("resource attrs wrong: %v", res)
 	}
 	if _, isContent := res["trace_id"]; isContent {

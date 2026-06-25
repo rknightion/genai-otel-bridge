@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // realAIModels24h is a verbatim capture of GET /v1/analytics/groups/ai-models over 24h (groups PoC,

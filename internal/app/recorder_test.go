@@ -23,14 +23,14 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/grafana-ps/aip-oi/internal/checkpoint/file"
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
-	"github.com/grafana-ps/aip-oi/internal/emit/otlp"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/schedule"
-	"github.com/grafana-ps/aip-oi/internal/source"
-	"github.com/grafana-ps/aip-oi/internal/source/portkey"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 )
 
 // mimirRecorder models the GC OTLP gateway → Mimir: it records each (series, ts)→value and returns
@@ -289,7 +289,7 @@ func buildCycleApp(t *testing.T, cpPath, pkURL, gwURL string, clock func() time.
 	}
 	em := otlp.New(otlp.Config{
 		Endpoint: gwURL, InstanceID: "1", Token: "t",
-		Identity: map[string]string{"service.namespace": "aip-oi"}, MaxBytes: 1 << 20,
+		Identity: map[string]string{"service.namespace": "decant"}, MaxBytes: 1 << 20,
 		Retry: otlp.RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 1.5, MaxElapsed: 30 * time.Millisecond, Jitter: 0},
 	})
 	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, m, source.Deps{})

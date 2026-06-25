@@ -57,7 +57,7 @@ func TestStartProfilingPullServesPprof(t *testing.T) {
 func TestBuildPyroscopeConfig(t *testing.T) {
 	cfg := ProfilingConfig{
 		Mode: "push", PushEndpoint: "https://profiles.example", PushInstanceID: "42", PushToken: "tok",
-		ServiceNamespace: "aip-oi-meta", DeploymentEnvironment: "prod", Instance: "pod-abc",
+		ServiceNamespace: "decant-meta", DeploymentEnvironment: "prod", Instance: "pod-abc",
 	}
 	pc := buildPyroscopeConfig(cfg)
 	if pc.ServerAddress != "https://profiles.example" {
@@ -66,7 +66,7 @@ func TestBuildPyroscopeConfig(t *testing.T) {
 	if pc.BasicAuthUser != "42" || pc.BasicAuthPassword != "tok" {
 		t.Errorf("basic auth = %q/%q", pc.BasicAuthUser, pc.BasicAuthPassword)
 	}
-	if pc.Tags["service_namespace"] != "aip-oi-meta" || pc.Tags["deployment_environment_name"] != "prod" || pc.Tags["service_instance_id"] != "pod-abc" {
+	if pc.Tags["service_namespace"] != "decant-meta" || pc.Tags["deployment_environment_name"] != "prod" || pc.Tags["service_instance_id"] != "pod-abc" {
 		t.Errorf("tags = %#v", pc.Tags)
 	}
 	if len(pc.ProfileTypes) == 0 {

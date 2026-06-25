@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 func sample(name string, labels map[string]string, ts time.Time, val float64) model.Sample {
@@ -28,8 +28,8 @@ func TestEncodeDeterministicUnderMapShuffle(t *testing.T) {
 	ts3 := time.Unix(1_700_000_120, 0).UTC()
 
 	// identity maps with reversed key insertion order — Go randomises map iteration
-	id1 := map[string]string{"service.namespace": "aip-oi", "deployment.environment.name": "dev", "region": "us-west-2"}
-	id2 := map[string]string{"region": "us-west-2", "deployment.environment.name": "dev", "service.namespace": "aip-oi"}
+	id1 := map[string]string{"service.namespace": "decant", "deployment.environment.name": "dev", "region": "us-west-2"}
+	id2 := map[string]string{"region": "us-west-2", "deployment.environment.name": "dev", "service.namespace": "decant"}
 
 	// input 1: samples in forward order, labels in one insertion order
 	s1 := []model.Sample{

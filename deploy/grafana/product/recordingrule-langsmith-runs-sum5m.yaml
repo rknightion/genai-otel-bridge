@@ -1,0 +1,32 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: RecordingRule
+metadata:
+  name: decant-langsmith-runs-sum5m
+  annotations:
+    grafana.app/folder: decant
+  labels:
+    grafana.app/folder: decant
+spec:
+  title: langsmith:runs:sum_5m
+  metric: langsmith:runs:sum_5m
+  targetDatasourceUID: grafanacloud-prom
+  trigger:
+    interval: 1m
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      source: true
+      relativeTimeRange: {from: 5m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        # Fleet run volume over a trailing 5m. langsmith_* are per-bucket GAUGES (one point per 1-minute
+        # bucket) — aggregate with sum_over_time, NEVER rate()/increase(). The raw metric carries a
+        # high-cardinality `session` label (~700 series); this rule sums across sessions to a per-env
+        # fleet total (drop `session`) — query the raw metric for per-session drilldown.
+        expr: 'sum by (deployment_environment_name, service_namespace) (sum_over_time(langsmith_runs[5m]))'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query

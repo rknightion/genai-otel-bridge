@@ -16,10 +16,10 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
-const scopeName = "aip-oi"
+const scopeName = "decant"
 
 // sortedKVs converts a map to []*KeyValue in sorted-key order (deterministic).
 func sortedKVs(m map[string]string) []*commonpb.KeyValue {

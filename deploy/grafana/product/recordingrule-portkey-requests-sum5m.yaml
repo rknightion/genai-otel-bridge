@@ -1,11 +1,11 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: RecordingRule
 metadata:
-  name: aipoi-portkey-requests-sum5m
+  name: decant-portkey-requests-sum5m
   annotations:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
   labels:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
 spec:
   title: portkey:requests:sum_5m
   metric: portkey:requests:sum_5m

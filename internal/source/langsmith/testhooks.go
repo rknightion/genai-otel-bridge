@@ -5,7 +5,7 @@ package langsmith
 import (
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // SetLoopClockForTest overrides a loop's wall-clock so acceptance tests (in another package) can

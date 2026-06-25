@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // revisionHistory is the BOUNDED in-memory record of what we emitted, used to detect
@@ -44,23 +44,25 @@ func newRevisionHistory(band time.Duration) *revisionHistory {
 	}
 }
 
-// observe records the settled samples for this poll and returns how many of them are REVISIONS —
-// buckets we have a remembered value for whose value changed. `now` is the poll's reference time,
-// used to evict entries older than the trailing band. Brand-new buckets and unchanged re-fetches
-// are not revisions. observe updates the remembered value to the latest (so a revision is counted
-// once, not every subsequent poll).
-func (h *revisionHistory) observe(samples []model.Sample, now time.Time) int {
-	revisions := 0
+// observe records the settled samples for this poll and returns the bucketEnd timestamp of each one
+// that is a REVISION — a bucket we have a remembered value for whose value changed. len(result) is
+// the revision count; the caller turns each bucketEnd into a lateness age (now − bucketEnd) for the
+// bucket_revised_after_settle_age_seconds histogram, so we measure HOW LATE revisions are, not just
+// how many. `now` is the poll's reference time, used to evict entries older than the trailing band.
+// Brand-new buckets and unchanged re-fetches are not revisions. observe updates the remembered value
+// to the latest (so a revision is reported once, not every subsequent poll).
+func (h *revisionHistory) observe(samples []model.Sample, now time.Time) []time.Time {
+	var revised []time.Time
 	for _, s := range samples {
 		k := revisionKey(s)
 		if prev, known := h.seen[k]; known && prev != s.Value {
-			revisions++
+			revised = append(revised, s.Timestamp)
 		}
 		h.seen[k] = s.Value
 		h.when[k] = s.Timestamp
 	}
 	h.evict(now)
-	return revisions
+	return revised
 }
 
 // evict drops entries whose bucketEnd is older than (now − band) so memory stays bounded.

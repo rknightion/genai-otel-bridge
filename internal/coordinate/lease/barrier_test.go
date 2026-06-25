@@ -27,7 +27,7 @@ func TestReviewRunCanReturnBeforeAsyncOnStartedLeadingStarts(t *testing.T) {
 		cancel()
 		return false, nil, nil
 	})
-	c := New(cs, "aip-oi", "aip-oi-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
+	c := New(cs, "decant", "decant-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	returned := make(chan struct{})

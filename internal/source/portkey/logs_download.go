@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/httpx"
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // defaultDownloadMaxBytes caps a single signed-URL object read (defence against a server returning an
@@ -126,7 +126,7 @@ func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, sk
 		// Operationally honest: if a trace-id field is configured and its value was present (shipped as an
 		// attr) but did not parse to a UUID, the OTLP trace_id mapping was lost — count it so a systematically
 		// broken upstream format is alertable (the log record itself is unaffected).
-		if f := l.policy.metadataTraceID; f != "" && len(rec.TraceID) == 0 && rec.RecordAttributes[f] != "" {
+		if f := l.policy.traceIDAttrKey(); f != "" && len(rec.TraceID) == 0 && rec.RecordAttributes[f] != "" {
 			l.traceIDUnparsed()
 		}
 		recs = append(recs, rec)

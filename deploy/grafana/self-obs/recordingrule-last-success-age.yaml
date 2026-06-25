@@ -1,0 +1,31 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: RecordingRule
+metadata:
+  name: decant-last-success-age
+  annotations:
+    grafana.app/folder: decant
+  labels:
+    grafana.app/folder: decant
+spec:
+  title: decant:last_success_age:seconds
+  metric: decant:last_success_age:seconds
+  targetDatasourceUID: grafanacloud-prom
+  trigger:
+    interval: 1m
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      source: true
+      relativeTimeRange: {from: 5m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        # Seconds since each loop last committed+emitted. The dashboard's freshness panels and the
+        # self-relative DecantPollerStale baseline read this. Per loop (max collapses replicas — the
+        # standby self-emits too). Floors at ~bucket_settle+cadence by design; what matters is the trend.
+        expr: 'time() - max by (loop) (decant_last_success_timestamp_seconds)'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query

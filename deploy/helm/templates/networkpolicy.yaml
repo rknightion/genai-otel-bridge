@@ -14,12 +14,12 @@
 #        apiVersion: cilium.io/v2
 #        kind: CiliumNetworkPolicy
 #        metadata:
-#          name: aip-oi-egress
+#          name: decant-egress
 #          namespace: <namespace>
 #        spec:
 #          endpointSelector:
 #            matchLabels:
-#              app: aip-oi
+#              app: decant
 #          egressDeny: []    # default-deny covered by CiliumClusterWideNetworkPolicy
 #          egress:
 #            - toFQDNs:
@@ -45,14 +45,14 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: aip-oi
+  name: decant
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "aip-oi.labels" . | nindent 4 }}
+    {{- include "decant.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "aip-oi.selectorLabels" . | nindent 6 }}
+      {{- include "decant.selectorLabels" . | nindent 6 }}
 
   policyTypes:
     - Ingress

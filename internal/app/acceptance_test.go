@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 )
 
 // Step 1 — gap-free failover handoff is contiguous and value-stable.

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 func buildRunsSettings(s map[string]string) (runsSettings, error) {

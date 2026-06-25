@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/grafana-ps/aip-oi/internal/config/gen/helmgen"
+	"github.com/rknightion/genai-otel-bridge/internal/config/gen/helmgen"
 )
 
 // TestHelmGeneratedConfigUpToDate is the forcing function that keeps the Helm chart's default

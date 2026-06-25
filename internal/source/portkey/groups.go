@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/httpx"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // groupsSettings are the decoupled knobs the groups loop reads from the per-loop `settings` map (so no

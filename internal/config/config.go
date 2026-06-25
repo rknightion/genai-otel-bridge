@@ -46,7 +46,7 @@ const defaultMaxCatchupPerTick = 1
 
 // DefaultMaxStreamLabelKeys is applied when governance.max_stream_label_keys is unset (0). It is the
 // Grafana Cloud Loki `max_label_names_per_series` default — the hard ceiling on stream-label names per
-// log series; Loki REJECTS (silently drops) a stream that exceeds it. aip-oi's product identity resource
+// log series; Loki REJECTS (silently drops) a stream that exceeds it. decant's product identity resource
 // attrs PLUS each logs loop's indexed attrs consume this budget once GS1 promotes the indexed attrs to
 // stream labels. The limit is per-tenant overridable by Grafana staff, so an operator whose tenant limit
 // was raised sets the knob to match. NOTE: in the in-cluster-Alloy topology, Alloy's enrichment attrs
@@ -121,7 +121,7 @@ type ProfilingPush struct {
 // GovernanceConfig configures the cardinality/content guard (DESIGN §7 Cdx-H6/H7).
 type GovernanceConfig struct {
 	// PerMetricCardinalityBudget caps the number of DISTINCT label-sets tracked per metric NAME — not
-	// a global cap. Over-budget series are dropped and counted (aip_oi_guard_dropped_total). Unset (0)
+	// a global cap. Over-budget series are dropped and counted (decant_guard_dropped_total). Unset (0)
 	// defaults to defaultPerMetricCardinalityBudget. The real ceiling is the downstream Mimir/Adaptive
 	// Metrics limit (DESIGN §7 GS2/GS3), not this guard.
 	PerMetricCardinalityBudget int `yaml:"per_metric_cardinality_budget" helm:"default=10000"`
@@ -138,7 +138,7 @@ type GovernanceConfig struct {
 	// negative is rejected. (DESIGN §7a Cdx-C13/F44.)
 	MaxCatchupPerTick int `yaml:"max_catchup_per_tick" helm:"default=1"`
 	// MaxStreamLabelKeys caps how many OTLP resource attributes a single LOGS loop may contribute to a
-	// Loki stream: aip-oi's product identity resource attrs (service.name/service.namespace/
+	// Loki stream: decant's product identity resource attrs (service.name/service.namespace/
 	// deployment.environment.name) PLUS the loop's indexed attrs (its base content-free set ∪
 	// settings.extra_indexed_fields). Loki's max_label_names_per_series (Grafana Cloud default 15) REJECTS
 	// — silently drops — a stream over the limit, so the composition root fails fast at startup if a loop
@@ -186,31 +186,31 @@ type OTLPConn struct {
 	InstanceID string `yaml:"instance_id" helm:"env=GC_INSTANCE_ID"`
 	Token      string `yaml:"token" helm:"env=GC_OTLP_TOKEN"`
 	// AllowInsecure opts this endpoint out of the https-only gate for an IN-CLUSTER cleartext OTLP
-	// receiver — the regulated/EKS topology where aip-oi emits to an in-cluster Alloy (which holds the
+	// receiver — the regulated/EKS topology where decant emits to an in-cluster Alloy (which holds the
 	// real Grafana Cloud credentials) over the pod network rather than straight to the public gateway.
 	// [CP-M7] Default false (https or loopback required). When true, an http NON-loopback endpoint is
 	// permitted ONLY IF (a) no credential is set — instance_id/token must be empty, so nothing rides the
-	// cleartext link (the collector authenticates to Grafana Cloud, not aip-oi); and (b) the host is a
+	// cleartext link (the collector authenticates to Grafana Cloud, not decant); and (b) the host is a
 	// private target — an IP literal must be RFC-1918/loopback/link-local (a public IP is rejected), while
 	// a DNS name (e.g. a Kubernetes Service) is permitted since it can't be resolved at config-load time.
 	// https endpoints ignore this flag.
 	AllowInsecure bool `yaml:"allow_insecure" helm:"default=false"`
 }
 type IdentityConfig struct {
-	ServiceNamespace string `yaml:"service_namespace" helm:"default=aip-oi"`
+	ServiceNamespace string `yaml:"service_namespace" helm:"default=decant"`
 	// Deployment environment label (e.g. dev, staging, prod).
 	DeploymentEnvironment string `yaml:"deployment_environment" helm:"env=ENV"`
 }
 
-// ProductIdentity is the OTLP resource-attribute identity map aip-oi stamps on every emitted PRODUCT
-// resource (cmd/aip-oi passes it to the emitter). All three keys are in the Grafana Cloud Loki
+// ProductIdentity is the OTLP resource-attribute identity map decant stamps on every emitted PRODUCT
+// resource (cmd/decant passes it to the emitter). All three keys are in the Grafana Cloud Loki
 // `default_resource_attributes_as_index_labels` set, so each consumes one max_label_names_per_series
-// stream-label slot. SINGLE SOURCE OF TRUTH: cmd/aip-oi builds the emitter Identity from this, and the
+// stream-label slot. SINGLE SOURCE OF TRUTH: cmd/decant builds the emitter Identity from this, and the
 // composition root counts len(ProductIdentity) against governance.max_stream_label_keys — so the two
 // can't drift.
 func (ic IdentityConfig) ProductIdentity() map[string]string {
 	return map[string]string{
-		"service.name":                "aip-oi",
+		"service.name":                "decant",
 		"service.namespace":           ic.ServiceNamespace,
 		"deployment.environment.name": ic.DeploymentEnvironment,
 	}
@@ -382,7 +382,7 @@ func injectEnvPlaceholders(s string) (string, map[string]string, error) {
 			}
 			return m
 		}
-		tok := fmt.Sprintf("aipoiXsecretX%dXaipoi", i)
+		tok := fmt.Sprintf("decantXsecretX%dXdecant", i)
 		i++
 		ph[tok] = v
 		return tok

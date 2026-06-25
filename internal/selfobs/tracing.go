@@ -19,7 +19,7 @@ import (
 // Cloud OTLP gateway (→ Tempo) on the same `-meta` self identity — there is no separate egress channel.
 type TracingConfig struct {
 	Endpoint, InstanceID, Token string
-	ServiceNamespace            string // DISTINCT from product (H4), e.g. "aip-oi-meta"
+	ServiceNamespace            string // DISTINCT from product (H4), e.g. "decant-meta"
 	Environment                 string
 	Instance                    string // [CP-H8] per-replica id (POD_NAME)
 }
@@ -46,7 +46,7 @@ func NewTracerProvider(ctx context.Context, cfg TracingConfig) (*sdktrace.Tracer
 	// return ErrSchemaURLConflict) — the same minimal distinct self identity as the metric provider (H4).
 	res := resource.NewSchemaless(
 		attribute.String("service.namespace", cfg.ServiceNamespace),
-		attribute.String("service.name", "aip-oi"),
+		attribute.String("service.name", "decant"),
 		attribute.String("deployment.environment.name", cfg.Environment),
 		attribute.String("service.instance.id", cfg.Instance),
 	)

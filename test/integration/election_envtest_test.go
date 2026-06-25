@@ -21,7 +21,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	lease "github.com/grafana-ps/aip-oi/internal/coordinate/lease"
+	lease "github.com/rknightion/genai-otel-bridge/internal/coordinate/lease"
 )
 
 // startEnv boots an envtest apiserver+etcd and returns a clientset + a created namespace.
@@ -37,7 +37,7 @@ func startEnv(t *testing.T) (*kubernetes.Clientset, string) {
 	if err != nil {
 		t.Fatalf("clientset: %v", err)
 	}
-	const ns = "aip-oi-test"
+	const ns = "decant-test"
 	_, err = cs.CoreV1().Namespaces().Create(context.Background(),
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
@@ -52,7 +52,7 @@ func TestRealApiserverSingleLeader(t *testing.T) {
 	var active, maxActive int32
 	lead := func(id string) context.CancelFunc {
 		ctx, cancel := context.WithCancel(context.Background())
-		c := lease.New(cs, ns, "aip-oi-leader", id, 4*time.Second, 3*time.Second, 1*time.Second)
+		c := lease.New(cs, ns, "decant-leader", id, 4*time.Second, 3*time.Second, 1*time.Second)
 		go func() {
 			_ = c.Run(ctx, func(leaderCtx context.Context) {
 				n := atomic.AddInt32(&active, 1)

@@ -1,4 +1,4 @@
-# ai-platform-o11y-integrator (`aip-oi`)
+# genai-otel-bridge (`decant`)
 
 A generic, vendor-neutral integrator that pulls **operational telemetry** from AI-platform
 APIs and emits it to Grafana Cloud (or any OTLP endpoint) as **metrics and logs**.
@@ -9,12 +9,12 @@ It targets two categories of source:
 - **LLM evaluation / observability platforms** (e.g. LangSmith) — project stats, eval-score
   facets, and a content-free run index.
 
-`aip-oi` polls each source's API on a cadence, derives a vendor-neutral set of metrics and
+`decant` polls each source's API on a cadence, derives a vendor-neutral set of metrics and
 log records, and pushes them via OTLP/HTTP. It is designed to sit on the critical
 observability path for production workloads: it is highly-available (leader-elected,
 single-emit), self-observing, and resilient to downstream slowness.
 
-**Content-free by design:** `aip-oi` never requests prompt/response bodies. An outbound field
+**Content-free by design:** `decant` never requests prompt/response bodies. An outbound field
 allow/deny-list governs every emitted field, enforced as a release gate — operational telemetry
 (latency/tokens/cost/errors) only, never inference content.
 
@@ -33,7 +33,7 @@ See [`followup.md`](./followup.md) for deferred/future work.
 
 ```bash
 make gate     # vet + test + lint + decouple-check + spdx-check + build  — the green bar before any commit
-make build    # -> bin/aip-oi (version stamped via git describe)
+make build    # -> bin/decant (version stamped via git describe)
 make test     # go test ./...
 make lint     # golangci-lint run
 ```
@@ -58,6 +58,6 @@ Requires Go 1.26+. Acceptance gates: `go test -tags acceptance ./internal/app/`.
 
 ## License
 
-`aip-oi` is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).
+`decant` is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).
 See [LICENSE](./LICENSE) and [LICENSING.md](./LICENSING.md). Every Go source file carries an
 `SPDX-License-Identifier: AGPL-3.0-only` header.

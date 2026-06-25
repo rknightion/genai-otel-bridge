@@ -1,25 +1,25 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: aipoi-auth-errors
+  name: decant-auth-errors
   annotations:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
   labels:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
 spec:
-  title: AipOiAuthErrors
+  title: DecantAuthErrors
   # Upstream source API returned 401/403 => credential failure (wrong/expired key, missing scope).
   # Distinct from slow/erroring endpoints; data is lost until the secret is fixed, so alert on any.
-  execErrState: OK
-  noDataState: OK
+  execErrState: Ok
+  noDataState: Ok
   for: 0s
   trigger:
     interval: 1m
   labels:
     severity: critical
   annotations:
-    summary: "aip-oi {{ $labels.loop }} loop hit auth errors against {{ $labels.source }}"
-    description: "aip_oi_auth_errors_total increased for the {{ $labels.loop }} loop ({{ $labels.source }} source) in the last 10m: the upstream API rejected the poller's credentials (401/403). Rotate/repair the source API key or scope. See deploy/grafana/README.md."
+    summary: "decant {{ $labels.loop }} loop hit auth errors against {{ $labels.source }}"
+    description: "decant_auth_errors_total increased for the {{ $labels.loop }} loop ({{ $labels.source }} source) in the last 10m: the upstream API rejected the poller's credentials (401/403). Rotate/repair the source API key or scope. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -27,7 +27,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop, source) (increase(aip_oi_auth_errors_total[10m])) > 0'
+        expr: 'sum by (loop, source) (increase(decant_auth_errors_total[10m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

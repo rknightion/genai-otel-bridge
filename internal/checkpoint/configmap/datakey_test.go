@@ -7,7 +7,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // [ext-review-1] CheckpointKey.String() joins fields with '/', which is a valid YAML map key (file

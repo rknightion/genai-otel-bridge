@@ -16,13 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/checkpoint/file"
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
-	"github.com/grafana-ps/aip-oi/internal/emit/otlp"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/schedule"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // runsSecretMarkers are DISTINCTIVE values placed in the content fields LangSmith returns on a run
@@ -90,7 +90,7 @@ func newFakeRuns(t *testing.T) *fakeRuns {
 func langsmithRunsConfig(baseURL string) *config.Config {
 	return &config.Config{
 		Emit:     config.EmitConfig{Telemetry: config.OTLPTarget{OTLP: config.OTLPConn{Endpoint: "https://otlp.example", InstanceID: "1", Token: "t"}}},
-		Identity: config.IdentityConfig{ServiceNamespace: "aip-oi", DeploymentEnvironment: "dev"},
+		Identity: config.IdentityConfig{ServiceNamespace: "decant", DeploymentEnvironment: "dev"},
 		HA:       config.HAConfig{Coordinator: "none", Checkpoint: "file"},
 		Queue:    config.QueueConfig{MaxBatches: 4, MaxBatchBytes: 1 << 20, EmitWorkers: 1},
 		Sources: []config.SourceConfig{{
@@ -136,7 +136,7 @@ func TestLangsmithRunsContentLeakConformanceGate(t *testing.T) {
 	cfg := langsmithRunsConfig(f.URL)
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t",
-		Identity: map[string]string{"service.namespace": "aip-oi"}, MaxBytes: 1 << 20})
+		Identity: map[string]string{"service.namespace": "decant"}, MaxBytes: 1 << 20})
 	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestLangsmithRunsExtraRecordFieldFlows(t *testing.T) {
 
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t",
-		Identity: map[string]string{"service.namespace": "aip-oi"}, MaxBytes: 1 << 20})
+		Identity: map[string]string{"service.namespace": "decant"}, MaxBytes: 1 << 20})
 	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +314,7 @@ func TestLangsmithRunsExtraIndexedFieldFlows(t *testing.T) {
 
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t",
-		Identity: map[string]string{"service.namespace": "aip-oi"}, MaxBytes: 1 << 20})
+		Identity: map[string]string{"service.namespace": "decant"}, MaxBytes: 1 << 20})
 	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
 	if err != nil {
 		t.Fatal(err)

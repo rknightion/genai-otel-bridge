@@ -15,14 +15,14 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/grafana-ps/aip-oi/internal/logging"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/logging"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // tracerName scopes the self-APM spans this package emits. Spans go through the OTel GLOBAL tracer, so
 // when self-tracing is disabled (the default) the global is a no-op and a tick allocates a no-op span —
 // negligible at cadence ≥ 10s. main installs a real TracerProvider only when selfobs.tracing.enabled.
-const tracerName = "aip-oi/schedule"
+const tracerName = "decant/schedule"
 
 // DegradedBackoff is the slow interval a degraded/halted loop is retried on instead of every cadence
 // (no hammering). Exported so the composition root derives the /healthz liveness threshold from the

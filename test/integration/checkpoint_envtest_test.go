@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/checkpoint"
-	cpcm "github.com/grafana-ps/aip-oi/internal/checkpoint/configmap"
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
+	cpcm "github.com/rknightion/genai-otel-bridge/internal/checkpoint/configmap"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // Under a REAL apiserver (resource-version optimistic concurrency), a forward Save persists and a
@@ -20,7 +20,7 @@ import (
 // this is the layer that proves the monotonic fence holds against real etcd RMW.
 func TestRealApiserverCheckpointMonotonic(t *testing.T) {
 	cs, ns := startEnv(t)
-	store := cpcm.New(cs, ns, "aip-oi-checkpoints")
+	store := cpcm.New(cs, ns, "decant-checkpoints")
 	ctx := context.Background()
 	key := model.CheckpointKey{SourceInstance: "portkey-e2e", Loop: "analytics", OutputFingerprint: "testfp"}
 

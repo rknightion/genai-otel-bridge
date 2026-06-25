@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/emit"
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/emit"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 func oneLogBatch() model.Batch {

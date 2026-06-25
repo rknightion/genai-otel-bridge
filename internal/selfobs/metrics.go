@@ -16,29 +16,29 @@ import (
 type Metrics struct {
 	emitted, emittedLogs, skipped, emitErr, guardDropped, revised, newLabel, capped, srcGraphUnavail, authErr metric.Int64Counter
 	lastSuccess, windowLag, queueDepth                                                                        metric.Float64Gauge
-	upstreamDur                                                                                               metric.Float64Histogram
+	upstreamDur, revisedAge                                                                                   metric.Float64Histogram
 }
 
 func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
-	me := mp.Meter("aip-oi/selfobs")
+	me := mp.Meter("decant/selfobs")
 	var err error
 	m := &Metrics{}
 	mk := func(n, desc string) metric.Int64Counter {
-		c, e := me.Int64Counter("aip_oi_"+n, metric.WithDescription(desc))
+		c, e := me.Int64Counter("decant_"+n, metric.WithDescription(desc))
 		if e != nil {
 			err = e
 		}
 		return c
 	}
 	mg := func(n, desc, unit string) metric.Float64Gauge {
-		g, e := me.Float64Gauge("aip_oi_"+n, metric.WithDescription(desc), metric.WithUnit(unit))
+		g, e := me.Float64Gauge("decant_"+n, metric.WithDescription(desc), metric.WithUnit(unit))
 		if e != nil {
 			err = e
 		}
 		return g
 	}
 	mh := func(n, desc, unit string, bounds []float64) metric.Float64Histogram {
-		h, e := me.Float64Histogram("aip_oi_"+n, metric.WithDescription(desc), metric.WithUnit(unit), metric.WithExplicitBucketBoundaries(bounds...))
+		h, e := me.Float64Histogram("decant_"+n, metric.WithDescription(desc), metric.WithUnit(unit), metric.WithExplicitBucketBoundaries(bounds...))
 		if e != nil {
 			err = e
 		}
@@ -62,6 +62,12 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	// are in SECONDS (the default OTel boundaries are ms-shaped and wrong for a _seconds histogram).
 	m.upstreamDur = mh("upstream_request_duration_seconds", "outbound request latency to upstream source APIs (time to response headers)", "s",
 		[]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10})
+	// How LATE each post-settle bucket revision is (now − bucketEnd, SECONDS). Pairs with the
+	// bucket_revised_after_settle_total counter: the counter says how often, this says how late, so
+	// bucket_settle can be tuned to data (e.g. p95 of this) instead of a guess. Age is ≥ bucket_settle
+	// by construction and bounded by the detection band (≈2×settle), so boundaries span ~5m–1h.
+	m.revisedAge = mh("bucket_revised_after_settle_age_seconds", "age (now − bucketEnd) of a settled bucket observed to change after bucket_settle — how late the late arrival is", "s",
+		[]float64{300, 600, 900, 1200, 1500, 1800, 2400, 3000, 3600})
 	return m, err
 }
 
@@ -84,8 +90,9 @@ func (m *Metrics) EmitError(loop, kind string) {
 func (m *Metrics) GuardDropped(loop string, n int) {
 	m.guardDropped.Add(context.Background(), int64(n), loopAttr(loop))
 }
-func (m *Metrics) BucketRevisedAfterSettle(loop string) {
+func (m *Metrics) BucketRevisedAfterSettle(loop string, age time.Duration) {
 	m.revised.Add(context.Background(), 1, loopAttr(loop))
+	m.revisedAge.Record(context.Background(), age.Seconds(), loopAttr(loop))
 }
 func (m *Metrics) NewLabelValue(series string) {
 	m.newLabel.Add(context.Background(), 1, metric.WithAttributes(attribute.String("series", series)))

@@ -1,22 +1,22 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: aipoi-window-truncated
+  name: decant-window-truncated
   annotations:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
   labels:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
 spec:
-  title: AipOiWindowTruncatedDroppingRecords
-  execErrState: OK
-  noDataState: OK
+  title: DecantWindowTruncatedDroppingRecords
+  execErrState: Ok
+  noDataState: Ok
   for: 0s
   trigger:
     interval: 1m
   labels:
     severity: warning
   annotations:
-    summary: "aip-oi {{ $labels.loop }} loop is dropping records (window exceeded max_pages_per_window)"
+    summary: "decant {{ $labels.loop }} loop is dropping records (window exceeded max_pages_per_window)"
     description: "The {{ $labels.loop }} loop truncated >=1 polling window in the last 10m and advanced past undrained records (counted gap). Raise settings.max_pages_per_window or shrink settings.window. See deploy/grafana/README.md."
   expressions:
     query:
@@ -25,7 +25,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop) (increase(aip_oi_source_graph_unavailable_total{graph="window_truncated"}[10m])) > 0'
+        expr: 'sum by (loop) (increase(decant_source_graph_unavailable_total{graph="window_truncated"}[10m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

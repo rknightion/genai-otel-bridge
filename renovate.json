@@ -1,6 +1,74 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    ":dependencyDashboard",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Europe/London",
+  "schedule": ["before 9am on monday"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 0,
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "labels": ["dependencies"],
+  "description": "chore(deps) keeps dep bumps out of the git-cliff CHANGELOG (chore is excluded); see CLAUDE.md release ritual. Weekly batch to cut PR noise on a critical-path service.",
+  "postUpdateOptions": [
+    "gomodTidy",
+    "gomodUpdateImportPaths",
+    "gomodVendor"
+  ],
+  "minimumReleaseAge": "5 days",
+  "internalChecksFilter": "strict",
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "minimumReleaseAge": null,
+    "schedule": ["at any time"]
+  },
+  "packageRules": [
+    {
+      "description": "Batch all non-major Go module bumps into one weekly PR — most are transitive churn not worth a PR each.",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "go modules (non-major)"
+    },
+    {
+      "description": "OpenTelemetry packages release in lockstep — group across all update types so a bump is coherent (and never a partial set).",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["go.opentelemetry.io/**"],
+      "groupName": "opentelemetry"
+    },
+    {
+      "description": "Grafana libraries (pyroscope, etc.) move together.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/grafana/**"],
+      "groupName": "grafana"
+    },
+    {
+      "description": "Kubernetes client/apimachinery libs are co-versioned — bumping one without the others breaks the build.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["k8s.io/**", "sigs.k8s.io/**"],
+      "groupName": "kubernetes libraries"
+    },
+    {
+      "description": "gRPC + protobuf are tightly coupled.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["google.golang.org/grpc", "google.golang.org/protobuf"],
+      "groupName": "grpc + protobuf"
+    },
+    {
+      "description": "The golang builder image must track go.mod's Go version — bump it with the toolchain, separately from the distroless runtime base.",
+      "matchManagers": ["dockerfile", "gitlabci"],
+      "matchPackageNames": ["golang", "mirror.gcr.io/library/golang"],
+      "groupName": "go toolchain (docker base)"
+    },
+    {
+      "description": "CI actions (Forgejo/GitHub) grouped — they're all major-pinned tags.",
+      "matchManagers": ["github-actions"],
+      "groupName": "ci actions"
+    }
   ]
 }

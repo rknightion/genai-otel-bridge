@@ -1,17 +1,17 @@
 {{- /* [final-review] All-leader double-emit guard: ha.coordinator=none disables leader election, so
        >1 replica means every pod polls + emits the same series. Fail the render on this combo. Skipped
        when a raw configOverride is supplied (the operator owns correctness there); the binary re-checks
-       via the AIP_OI_REPLICAS env as defence-in-depth. */ -}}
+       via the DECANT_REPLICAS env as defence-in-depth. */ -}}
 {{- if and (empty .Values.configOverride) (eq (dig "ha" "coordinator" "" .Values.config) "none") (gt (int .Values.replicas) 1) -}}
 {{- fail "ha.coordinator=none with replicas>1: all replicas would be leaders and double-emit. Use ha.coordinator=lease for multi-replica HA, or set replicas: 1." -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: aip-oi
+  name: decant
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "aip-oi.labels" . | nindent 4 }}
+    {{- include "decant.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicas }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
@@ -24,23 +24,23 @@ spec:
       maxSurge: {{ .Values.rollingUpdate.maxSurge }}
   selector:
     matchLabels:
-      {{- include "aip-oi.selectorLabels" . | nindent 6 }}
+      {{- include "decant.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "aip-oi.labels" . | nindent 8 }}
+        {{- include "decant.labels" . | nindent 8 }}
       {{- if .Values.rolloutOnConfigChange }}
       annotations:
         # Roll the pods when the rendered config ConfigMap changes. The binary reads config only at
         # startup, so without this a `helm upgrade` that changes config: / configOverride updates the
         # ConfigMap but leaves pods on stale config. Hashes ONLY templates/configmap.yaml (the
-        # aip-oi-config CM); the runtime aip-oi-checkpoints state CM is app-created, not chart-rendered,
+        # decant-config CM); the runtime decant-checkpoints state CM is app-created, not chart-rendered,
         # so it is intentionally not hashed here. A roll triggers one Lease failover, covered by the
         # 300s graceful drain + lease handoff.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
       {{- end }}
     spec:
-      serviceAccountName: aip-oi
+      serviceAccountName: decant
       {{- with .Values.imagePullSecrets }}
       # Private-registry pull secrets (e.g. regcred). Each is a {name: <secret>} for a
       # dockerconfigjson Secret that must already exist in the release namespace. Empty by default.
@@ -72,13 +72,13 @@ spec:
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              app: aip-oi
+              app: decant
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              app: aip-oi
+              app: decant
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -96,11 +96,11 @@ spec:
       {{- end }}
 
       containers:
-        - name: aip-oi
+        - name: decant
           image: {{ .Values.image }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
-            - "-config=/etc/aip-oi/config.yaml"
+            - "-config=/etc/decant/config.yaml"
             - "-namespace=$(POD_NAMESPACE)"
             - "-identity=$(POD_NAME)"
             - "-container-mem-bytes=$(MEM_LIMIT)"
@@ -117,18 +117,18 @@ spec:
                   fieldPath: metadata.namespace
             # Replica count: the binary fatals on ha.coordinator=none + replicas>1 (all-leader
             # double-emit guard) — defence-in-depth with the chart-render guard at the top of this file.
-            - name: AIP_OI_REPLICAS
+            - name: DECANT_REPLICAS
               value: {{ .Values.replicas | quote }}
             # GOMEMLIMIT: derived from the container's own memory limit at runtime (resourceFieldRef).
             # The binary multiplies by 0.9 to leave headroom for GC overhead (DESIGN §4.1).
             - name: MEM_LIMIT
               valueFrom:
                 resourceFieldRef:
-                  containerName: aip-oi
+                  containerName: decant
                   resource: limits.memory
             # Non-secret, environment-specific config consumed as ${ENV} refs in config.yaml. Set these
             # as literal env (NOT secret material) via runtimeEnv.*. Each is rendered ONLY when non-empty;
-            # when left empty (the default) the var keeps coming from the aip-oi-secrets Secret via
+            # when left empty (the default) the var keeps coming from the decant-secrets Secret via
             # envFrom below, so the hand-created-secret path is unaffected.
             {{- if .Values.runtimeEnv.env }}
             - name: ENV
@@ -143,13 +143,13 @@ spec:
               value: {{ .Values.runtimeEnv.langsmithBaseUrl | quote }}
             {{- end }}
 
-          # Runtime secrets (GC_OTLP_TOKEN, PORTKEY_API_KEY, …) injected from the aip-oi-secrets
+          # Runtime secrets (GC_OTLP_TOKEN, PORTKEY_API_KEY, …) injected from the decant-secrets
           # Secret. By default this Secret is managed outside the chart (create before deploying); when
           # externalSecrets.enabled is set, it is created and kept in sync by the ExternalSecret
           # (templates/externalsecret.yaml) from a cloud secrets manager.
           envFrom:
             - secretRef:
-                name: aip-oi-secrets
+                name: decant-secrets
 
           # Container-level hardening (Cdx-M10 / AR-H-tmp):
           #   readOnlyRootFilesystem: all writable paths are explicit volume mounts below.
@@ -199,15 +199,15 @@ spec:
 {{- end }}
 
           volumeMounts:
-            # Config from the aip-oi-config ConfigMap (config.yaml with ${ENV} refs pre-resolved).
+            # Config from the decant-config ConfigMap (config.yaml with ${ENV} refs pre-resolved).
             - name: config
-              mountPath: /etc/aip-oi
+              mountPath: /etc/decant
               readOnly: true
             # State dir: used by the dev file-based checkpointer. With the production configmap
             # checkpointer the watermark is stored in a ConfigMap; this emptyDir is harmless but
             # required because readOnlyRootFilesystem=true forbids any unlisted writable path.
             - name: state
-              mountPath: /var/lib/aip-oi
+              mountPath: /var/lib/decant
             # /tmp: net/http and the OTLP encoder need a writable /tmp (TLS handshake temp files,
             # proto marshal scratch). [AR-H-tmp] must be explicit under readOnlyRootFilesystem.
             - name: tmp
@@ -219,7 +219,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: aip-oi-config
+            name: decant-config
         # emptyDir: lost on pod restart, which is correct (the durable watermark is the ConfigMap
         # checkpoint; state/ is only ever written by the dev file checkpointer).
         - name: state

@@ -21,8 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/grafana-ps/aip-oi/internal/checkpoint"
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 const maxConfigMapBytes = 900 * 1024 // headroom under the 1 MiB API limit
@@ -153,7 +153,7 @@ func dataBytes(d map[string]string) int {
 // apiConflict returns a Conflict API error for use in tests that inject a conflict to
 // exercise the RMW retry loop.
 func apiConflict() error {
-	return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "aip-oi-checkpoints", fmt.Errorf("resourceVersion mismatch"))
+	return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "decant-checkpoints", fmt.Errorf("resourceVersion mismatch"))
 }
 
 var _ checkpoint.Checkpointer = (*Store)(nil)

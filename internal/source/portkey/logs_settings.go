@@ -12,9 +12,9 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/httpx"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // portkeyPageSizeMax is Portkey's hard per-export page_size ceiling (PoC §5: a 1,022,784-match export
@@ -47,6 +47,11 @@ type logsSettings struct {
 	// metadataTraceIDField names the ONE metadata sub-key whose UUID value also populates the OTLP
 	// LogRecord.TraceID (logs↔traces correlation). Empty = no trace mapping; auto-lifted into the record tier.
 	metadataTraceIDField string
+	// traceIDField names the ONE TOP-LEVEL export field (e.g. Portkey's native `trace_id`) whose UUID value
+	// populates the OTLP LogRecord.TraceID — the alternative to metadataTraceIDField for deployments that
+	// stamp the trace id as a first-class field rather than a metadata sub-key. Auto-added to the record
+	// allow-list + requested_data. Mutually exclusive with metadataTraceIDField (one OTLP trace_id source).
+	traceIDField string
 }
 
 // hardDeniedLogFields are fields that must NEVER be opt-in-able via extra_record_fields. Opting one in
@@ -139,6 +144,8 @@ func applyLogsSettings(ls *logsSettings, s map[string]string) error {
 			ls.metadataRecordFields = splitCSV(v)
 		case "metadata_trace_id_field":
 			ls.metadataTraceIDField = v
+		case "trace_id_field":
+			ls.traceIDField = v
 		case "signed_url_allow_hosts":
 			ls.signedURLAllowHosts = splitCSV(v)
 		case "workspace_id":
@@ -199,6 +206,17 @@ func validateLogsSettings(ls *logsSettings) error {
 		}
 		if strings.Contains(f, ",") {
 			return fmt.Errorf("portkey logs_export: metadata_trace_id_field must name a SINGLE metadata sub-key, got %q (it is not csv — use metadata_record_fields for multiple)", f)
+		}
+	}
+	if f := ls.traceIDField; f != "" {
+		if hardDeniedLogFields[f] {
+			return fmt.Errorf("portkey logs_export: trace_id_field cannot be %q — it is a hard-denied content/PII field", f)
+		}
+		if strings.Contains(f, ",") {
+			return fmt.Errorf("portkey logs_export: trace_id_field must name a SINGLE top-level export field, got %q (it is not csv)", f)
+		}
+		if ls.metadataTraceIDField != "" {
+			return fmt.Errorf("portkey logs_export: trace_id_field and metadata_trace_id_field are mutually exclusive — both map to the OTLP trace_id; set exactly one (top-level field vs metadata sub-key)")
 		}
 	}
 	if len(ls.extraIndexedFields) > 0 {
@@ -271,7 +289,7 @@ func newLogsExportLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps so
 	}
 	ua := cfg.HTTP.UserAgent
 	if ua == "" {
-		ua = "aip-oi/0.1"
+		ua = "decant/0.1"
 	}
 	dl := httpx.New(httpx.Config{
 		UserAgent: ua, Timeout: ls.downloadTimeout,
@@ -288,9 +306,11 @@ func newLogsExportLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps so
 	// return a fresh fieldPolicy{...} literal that does NOT copy useCase, so threading it through the
 	// chain would silently drop it. Zero value (uc.slug=="") ⇒ no-op in stampUseCaseRecord (legacy path).
 	policy := defaultLogFieldPolicy().withExtraRecordFields(ls.extraRecordFields).withExtraIndexedFields(ls.extraIndexedFields).
-		withMetadataFields(ls.metadataRecordFields, ls.metadataTraceIDField)
+		withMetadataFields(ls.metadataRecordFields, ls.metadataTraceIDField).withTraceIDField(ls.traceIDField)
 	policy.useCase = uc.slug
-	requested := mergeSortedUnique(ls.requestedData, ls.extraRecordFields, ls.extraIndexedFields)
+	// trace_id_field names a top-level export field (unlike a metadata sub-key, which Portkey injects), so
+	// ask Portkey to include it; content-free (validated) so the requested_data minimisation invariant holds.
+	requested := mergeSortedUnique(ls.requestedData, ls.extraRecordFields, ls.extraIndexedFields, []string{ls.traceIDField})
 	return &logsExportLoop{
 		baseURL: cfg.BaseURL, authHdr: cfg.Auth.Header, authVal: cfg.Auth.Value,
 		hc: hc, dlClient: dl, sourceInstance: cfg.SourceInstance, workspaceID: ls.workspaceID,

@@ -72,7 +72,7 @@ func New(cfg Config) *Client {
 		// request context (the schedule loop.tick span). When self-tracing is disabled the global
 		// TracerProvider is the no-op tracer, so this costs ~nothing. We pass a no-op MeterProvider so
 		// otelhttp does NOT emit its own http.client.* metrics — the upstream duration histogram is
-		// already covered by Config.Observer (aip_oi_upstream_request_duration_seconds), and we keep the
+		// already covered by Config.Observer (decant_upstream_request_duration_seconds), and we keep the
 		// self-metric cardinality controlled. Trace-context is NOT propagated to vendor APIs (no global
 		// propagator is set), so our internal trace IDs never leak to Portkey/LangSmith.
 		Transport: otelhttp.NewTransport(tr, otelhttp.WithMeterProvider(noopmetric.NewMeterProvider())),

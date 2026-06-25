@@ -11,11 +11,11 @@ ARG TARGETOS TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -trimpath \
-      -ldflags="-s -w -X github.com/grafana-ps/aip-oi/internal/version.Version=${VERSION}" \
-      -o /aip-oi ./cmd/aip-oi
+      -ldflags="-s -w -X github.com/rknightion/genai-otel-bridge/internal/version.Version=${VERSION}" \
+      -o /decant ./cmd/decant
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=builder /aip-oi /aip-oi
+COPY --from=builder /decant /decant
 USER 65532:65532
 EXPOSE 8080
-ENTRYPOINT ["/aip-oi"]
+ENTRYPOINT ["/decant"]

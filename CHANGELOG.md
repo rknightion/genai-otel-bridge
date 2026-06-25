@@ -1,6 +1,32 @@
 # Changelog
 
-All notable changes to aip-oi. Generated from Conventional Commits.
+All notable changes to decant. Generated from Conventional Commits.
+## [2.0.0] - 2026-06-25
+
+### Dependencies
+- Optimise renovate config for vendored go + conventional commits
+
+### Refactor
+- Rename project to genai-otel-bridge, artifacts to decant
+## [1.5.0] - 2026-06-24
+
+### Bug Fixes
+- Correct alert state enum OK -> Ok
+
+### Documentation
+- Correct GS1 promote-lists to live indexed sets
+- Document v2 dashboard, dynamic thresholds, 11-alert set
+- Note langsmith product rules + per-bucket-gauge staleness gotcha
+- Record late-data investigation (§11) + revision-age instrumentation
+
+### Features
+- Add self-relative staleness recording rules
+- Self-relative PollerStale + 7 new self-obs alerts
+- Rebuild self-obs dashboard as v2 tabs + dynamic layout
+- Add LangSmith product recording rules
+- Instrument bucket-revision lateness (age histogram)
+- Add bucket-revision lateness panel (age p50/p95)
+- Map native top-level trace_id field to OTLP trace_id
 ## [1.4.0] - 2026-06-24
 
 ### Bug Fixes
@@ -27,7 +53,7 @@ All notable changes to aip-oi. Generated from Conventional Commits.
 - ValidateOwnership passes with api_key_use_cases (M7 regression guard)
 # Changelog
 
-All notable changes to aip-oi. Subsequent releases are generated from Conventional Commits.
+All notable changes to decant. Subsequent releases are generated from Conventional Commits.
 
 ## [1.3.1] - 2026-06-23
 
@@ -74,7 +100,7 @@ All notable changes to aip-oi. Subsequent releases are generated from Convention
 
 ### Features
 
-- Add aip-oi self-observability dashboard (v2, self-obs role)
+- Add decant self-observability dashboard (v2, self-obs role)
 - Stamp a `source` record attribute on product logs (portkey/langsmith)
 
 ## [1.1.1] - 2026-06-23
@@ -129,7 +155,7 @@ All notable changes to aip-oi. Subsequent releases are generated from Convention
 
 Initial release.
 
-aip-oi is a vendor-neutral integrator that polls AI-platform APIs (LLM gateways such as Portkey,
+decant is a vendor-neutral integrator that polls AI-platform APIs (LLM gateways such as Portkey,
 evaluation platforms such as LangSmith) and emits operational telemetry to Grafana Cloud as OTLP
 metrics and logs.
 

@@ -5,7 +5,7 @@ package source
 import (
 	"testing"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
 )
 
 type fakeSource struct {

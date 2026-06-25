@@ -15,7 +15,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
 )
 
 type Coordinator struct {

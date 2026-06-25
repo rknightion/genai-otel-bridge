@@ -1,0 +1,30 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: RecordingRule
+metadata:
+  name: decant-langsmith-tokens-sum5m
+  annotations:
+    grafana.app/folder: decant
+  labels:
+    grafana.app/folder: decant
+spec:
+  title: langsmith:tokens:sum_5m
+  metric: langsmith:tokens:sum_5m
+  targetDatasourceUID: grafanacloud-prom
+  trigger:
+    interval: 1m
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      source: true
+      relativeTimeRange: {from: 5m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        # Fleet token throughput over a trailing 5m. Per-bucket gauge → sum_over_time (NOT rate()).
+        # Summed across the ~700 per-session series to a per-env total; raw metric retains `session`.
+        expr: 'sum by (deployment_environment_name, service_namespace) (sum_over_time(langsmith_tokens[5m]))'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query

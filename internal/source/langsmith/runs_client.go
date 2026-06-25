@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
 )
 
 // defaultRunsResponseBytes is the per-page decode cap (DoS backstop). [adversarial-review M3] kept

@@ -2,22 +2,22 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: aip-oi
+  name: decant
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "aip-oi.labels" . | nindent 4 }}
+    {{- include "decant.labels" . | nindent 4 }}
 
 ---
-# Namespaced Role (NOT ClusterRole) — aip-oi only needs access to resources in its own
+# Namespaced Role (NOT ClusterRole) — decant only needs access to resources in its own
 # namespace: Leases for leader election, and ConfigMaps for the watermark checkpoint.
 # ARCHITECTURE.md §8: keep RBAC minimal and namespace-scoped.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: aip-oi
+  name: decant
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "aip-oi.labels" . | nindent 4 }}
+    {{- include "decant.labels" . | nindent 4 }}
 rules:
   # Lease leader election (coordination.k8s.io/leases). create is unscoped because RBAC resourceNames
   # cannot gate create (the object name does not exist yet); get/update are scoped to the single lease.
@@ -32,14 +32,14 @@ rules:
     resources:
       - leases
     resourceNames:
-      - aip-oi-leader
+      - decant-leader
     verbs:
       - get
       - update
 
   # ConfigMap watermark checkpoint. Same pattern: create unscoped (resourceNames can't gate create),
   # get/update scoped to the checkpoint ConfigMap only — so the pod can NOT read/modify its own
-  # aip-oi-config (or any other ConfigMap) in the namespace.
+  # decant-config (or any other ConfigMap) in the namespace.
   - apiGroups:
       - ""
     resources:
@@ -51,7 +51,7 @@ rules:
     resources:
       - configmaps
     resourceNames:
-      - aip-oi-checkpoints
+      - decant-checkpoints
     verbs:
       - get
       - update
@@ -60,15 +60,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: aip-oi
+  name: decant
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "aip-oi.labels" . | nindent 4 }}
+    {{- include "decant.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: aip-oi
+    name: decant
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role
-  name: aip-oi
+  name: decant
   apiGroup: rbac.authorization.k8s.io

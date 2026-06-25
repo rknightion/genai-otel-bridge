@@ -1,5 +1,5 @@
 apiVersion: v2
-name: aip-oi
+name: decant
 description: AI Platform Observability Integrator — polls AI platform APIs (Portkey/LangSmith) and pushes OTLP metrics to Grafana Cloud.
 type: application
 # PodDisruptionBudget policy/v1 is the floor (stable since 1.21). Validated with Helm 4.x.
@@ -7,4 +7,4 @@ kubeVersion: ">=1.21.0-0"
 version: 0.5.0
 # appVersion tracks the released app version (surfaces as app.kubernetes.io/version). Auto-stamped by
 # `make changelog VERSION=vX.Y.Z` so it never drifts; bump by hand only if releasing without that step.
-appVersion: "1.4.0"
+appVersion: "2.0.0"

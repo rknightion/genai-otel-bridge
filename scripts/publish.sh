@@ -26,7 +26,7 @@
 #   GIT_SHA                            commit sha (only needed for main builds)
 #
 # Optional env (defaults shown):
-#   IMAGE_REPO=aip-oi                  image repository path under the registry
+#   IMAGE_REPO=decant                  image repository path under the registry
 #   CHART_REPO=charts                  OCI namespace for the chart
 #   PLATFORMS=linux/amd64,linux/arm64  buildx target platforms
 #   HELM=helm                          helm binary (CI passes .tools/helm)
@@ -34,7 +34,7 @@
 set -euo pipefail
 
 : "${REGISTRY:?REGISTRY is required (e.g. ghcr.io/your-org)}"
-IMAGE_REPO="${IMAGE_REPO:-aip-oi}"
+IMAGE_REPO="${IMAGE_REPO:-decant}"
 CHART_REPO="${CHART_REPO:-charts}"       # separate path from the image so the chart
                                          # and container don't collide in one OCI package
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
@@ -76,8 +76,8 @@ if [ "${SETUP_BUILDX:-1}" = "1" ]; then
   # BUILDX_CREATE_ARGS lets a Docker-in-Docker-out runner give the buildkit
   # container host networking, so it can resolve a registry only known to the
   # host (e.g. a registry reachable only on the host network).
-  docker buildx create --use --name aip-oi-builder ${BUILDX_CREATE_ARGS:-} >/dev/null 2>&1 \
-    || docker buildx use aip-oi-builder
+  docker buildx create --use --name decant-builder ${BUILDX_CREATE_ARGS:-} >/dev/null 2>&1 \
+    || docker buildx use decant-builder
 fi
 
 # ── build + push image (all tags in one buildx invocation) ────────────────────
@@ -96,6 +96,6 @@ docker buildx build --platform "$PLATFORMS" \
 # ── package + push chart ──────────────────────────────────────────────────────
 rm -rf dist && mkdir -p dist
 "$HELM" package deploy/helm --version "$chart_version" --app-version "$app_version" -d dist/
-"$HELM" push "dist/aip-oi-${chart_version}.tgz" "oci://${REGISTRY}/${CHART_REPO}"
+"$HELM" push "dist/decant-${chart_version}.tgz" "oci://${REGISTRY}/${CHART_REPO}"
 
-echo "==> done: ${IMAGE} + oci://${REGISTRY}/${CHART_REPO}/aip-oi:${chart_version}"
+echo "==> done: ${IMAGE} + oci://${REGISTRY}/${CHART_REPO}/decant:${chart_version}"

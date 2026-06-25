@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // TestValidateOwnershipWithUseCases is the M7 regression guard for the api_key_use_case feature.

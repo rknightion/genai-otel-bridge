@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // newMutablePortkey is a fake Portkey whose per-graph response is read fresh on each request via
@@ -65,8 +65,8 @@ func TestRevisionHistoryDetectsChange(t *testing.T) {
 		sampleAt("portkey_api_requests", nil, base.Add(1*time.Minute), 10),
 		sampleAt("portkey_api_requests", nil, base.Add(2*time.Minute), 20),
 	}, base.Add(2*time.Minute))
-	if n != 0 {
-		t.Fatalf("first observation must report 0 revisions, got %d", n)
+	if len(n) != 0 {
+		t.Fatalf("first observation must report 0 revisions, got %d", len(n))
 	}
 
 	// Re-observe both UNCHANGED, plus a brand-new forward bucket → still 0 revisions.
@@ -75,8 +75,8 @@ func TestRevisionHistoryDetectsChange(t *testing.T) {
 		sampleAt("portkey_api_requests", nil, base.Add(2*time.Minute), 20),
 		sampleAt("portkey_api_requests", nil, base.Add(3*time.Minute), 30), // new forward bucket
 	}, base.Add(3*time.Minute))
-	if n != 0 {
-		t.Fatalf("unchanged re-observe + new bucket must report 0 revisions, got %d", n)
+	if len(n) != 0 {
+		t.Fatalf("unchanged re-observe + new bucket must report 0 revisions, got %d", len(n))
 	}
 
 	// Now bucket base+2m CHANGES value (late arrival after settle) → exactly one revision.
@@ -85,16 +85,21 @@ func TestRevisionHistoryDetectsChange(t *testing.T) {
 		sampleAt("portkey_api_requests", nil, base.Add(2*time.Minute), 999), // changed!
 		sampleAt("portkey_api_requests", nil, base.Add(3*time.Minute), 30),
 	}, base.Add(3*time.Minute))
-	if n != 1 {
-		t.Fatalf("changed settled bucket must report exactly 1 revision, got %d", n)
+	if len(n) != 1 {
+		t.Fatalf("changed settled bucket must report exactly 1 revision, got %d", len(n))
+	}
+	// the returned bucketEnd must be the changed bucket's end (base+2m) — that's what the caller turns
+	// into a lateness age (now − bucketEnd) for the age histogram.
+	if !n[0].Equal(base.Add(2 * time.Minute)) {
+		t.Fatalf("revision bucketEnd = %v, want %v", n[0], base.Add(2*time.Minute))
 	}
 
 	// Re-observe with the new value present → no further revision (history was updated).
 	n = h.observe([]model.Sample{
 		sampleAt("portkey_api_requests", nil, base.Add(2*time.Minute), 999),
 	}, base.Add(3*time.Minute))
-	if n != 0 {
-		t.Fatalf("re-observe of updated value must report 0 revisions, got %d", n)
+	if len(n) != 0 {
+		t.Fatalf("re-observe of updated value must report 0 revisions, got %d", len(n))
 	}
 }
 
@@ -113,8 +118,8 @@ func TestRevisionHistoryDistinctSeries(t *testing.T) {
 		sampleAt("portkey_api_latency_seconds", map[string]string{"quantile": "p50"}, bt, 0.1),
 		sampleAt("portkey_api_latency_seconds", map[string]string{"quantile": "p90"}, bt, 0.9),
 	}, bt)
-	if n != 1 {
-		t.Fatalf("distinct-series change must report exactly 1 revision, got %d", n)
+	if len(n) != 1 {
+		t.Fatalf("distinct-series change must report exactly 1 revision, got %d", len(n))
 	}
 }
 
@@ -138,8 +143,8 @@ func TestRevisionHistoryEvicts(t *testing.T) {
 	// The old bucket re-appearing with a different value is treated as NEW (it aged out), not a
 	// revision — bounded memory means we accept this blind spot beyond the band.
 	n := h.observe([]model.Sample{sampleAt("m", nil, old, 12345)}, newT)
-	if n != 0 {
-		t.Fatalf("re-learning an evicted bucket must not count as a revision, got %d", n)
+	if len(n) != 0 {
+		t.Fatalf("re-learning an evicted bucket must not count as a revision, got %d", len(n))
 	}
 }
 
@@ -148,12 +153,14 @@ func TestRevisionHistoryEvicts(t *testing.T) {
 type revisionRecorder struct {
 	mu    sync.Mutex
 	loops []string
+	ages  []time.Duration
 }
 
-func (r *revisionRecorder) hook(loop string) {
+func (r *revisionRecorder) hook(loop string, age time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.loops = append(r.loops, loop)
+	r.ages = append(r.ages, age)
 }
 
 func (r *revisionRecorder) count() int {
@@ -162,7 +169,7 @@ func (r *revisionRecorder) count() int {
 	return len(r.loops)
 }
 
-func mkSourceWithRevision(t *testing.T, baseURL string, now time.Time, onRevised func(string)) *analyticsLoop {
+func mkSourceWithRevision(t *testing.T, baseURL string, now time.Time, onRevised func(string, time.Duration)) *analyticsLoop {
 	t.Helper()
 	cfg := config.SourceConfig{
 		Type: "portkey", Enabled: true, BaseURL: baseURL, SourceInstance: "pk-test",
@@ -236,6 +243,13 @@ func TestCollectFiresRevisionHook(t *testing.T) {
 	if rec.count() != 1 {
 		t.Fatalf("changed settled bucket must fire revision once, got %d", rec.count())
 	}
+	// the hook must carry a positive lateness age (now − bucketEnd) for the age histogram, not 0.
+	rec.mu.Lock()
+	age := rec.ages[0]
+	rec.mu.Unlock()
+	if age <= 0 {
+		t.Fatalf("revision age must be positive (now − bucketEnd), got %v", age)
+	}
 }
 
 // TestCollectFetchWindowNeverExceeds55m is the granularity-safety regression guard. The detection
@@ -263,7 +277,7 @@ func TestCollectFetchWindowNeverExceeds55m(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lp := mkSourceWithRevision(t, srv.URL, now, func(string) {})
+	lp := mkSourceWithRevision(t, srv.URL, now, func(string, time.Duration) {})
 	lp.maxBackfill = 120 * time.Minute             // raised for long-outage recovery (uncapped, GS2)
 	lp.settle = 10 * time.Minute                   // the new default
 	lp.band = detectionBand(10 * time.Minute)      // band = 20m

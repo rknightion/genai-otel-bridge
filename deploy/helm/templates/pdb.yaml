@@ -9,13 +9,13 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: aip-oi
+  name: decant
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "aip-oi.labels" . | nindent 4 }}
+    {{- include "decant.labels" . | nindent 4 }}
 spec:
   maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
   selector:
     matchLabels:
-      {{- include "aip-oi.selectorLabels" . | nindent 6 }}
+      {{- include "decant.selectorLabels" . | nindent 6 }}
 {{- end }}

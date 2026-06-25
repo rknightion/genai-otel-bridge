@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 func g(name string, ts time.Time, v float64, labels map[string]string) model.Sample {

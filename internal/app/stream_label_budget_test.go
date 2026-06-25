@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/grafana-ps/aip-oi/internal/checkpoint/file"
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
-	"github.com/grafana-ps/aip-oi/internal/schedule"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // nIndexedFields returns n synthetic content-free field names, comma-joined — operator-promoted indexed

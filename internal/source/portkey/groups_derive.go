@@ -8,7 +8,7 @@ import (
 	"maps"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // groupsResponse is the /analytics/groups/* envelope: a flat WINDOW-TOTAL list (one aggregate row per

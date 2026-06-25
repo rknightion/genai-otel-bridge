@@ -1,5 +1,5 @@
 GO ?= go
-LDFLAGS := -X github.com/grafana-ps/aip-oi/internal/version.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X github.com/rknightion/genai-otel-bridge/internal/version.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # ── pinned tool versions (override via env; majors are load-bearing) ──────────
 GOLANGCI_LINT_VERSION ?= v2.12.2
@@ -9,8 +9,8 @@ HELM_VERSION          ?= v3.18.3
 K3D_VERSION           ?= v5.9.0
 K3S_IMAGE             ?= rancher/k3s:v1.35.1-k3s1
 GIT_CLIFF_VERSION     ?= v2.13.1
-IMAGE                 ?= aip-oi:dev
-E2E_HELPER_IMAGE      ?= aip-oi-e2e-helper:dev
+IMAGE                 ?= decant:dev
+E2E_HELPER_IMAGE      ?= decant-e2e-helper:dev
 
 TOOLS_DIR := $(CURDIR)/.tools
 export PATH := $(TOOLS_DIR):$(PATH)
@@ -21,13 +21,13 @@ GIT_CLIFF := $(shell command -v git-cliff 2>/dev/null || echo $(TOOLS_DIR)/git-c
 .PHONY: build test vet lint gate generate generate-check \
         tools tools-e2e \
         ci ci-build ci-vet ci-lint ci-lint-acceptance ci-test ci-race ci-acceptance ci-envtest \
-        forbidden-words spdx-check helm-lint changelog install-hooks promote \
+        forbidden-words spdx-check helm-lint changelog install-hooks promote gen-dashboard \
         ci-e2e image image-local helm-package k3d-up k3d-down k3d-e2e \
         publish
 
 # ── legacy (kept for local muscle memory) ─────────────────────────────────────
 build:
-	$(GO) build -ldflags "$(LDFLAGS)" -o bin/aip-oi ./cmd/aip-oi
+	$(GO) build -ldflags "$(LDFLAGS)" -o bin/decant ./cmd/decant
 test:
 	$(GO) test ./...
 vet:
@@ -47,6 +47,10 @@ generate:
 generate-check: generate
 	@git diff --exit-code -- deploy/helm/values.yaml || \
 	  (echo "deploy/helm/values.yaml is stale — run 'make generate' and commit" && exit 1)
+# Regenerate the self-observability dashboard manifest (deploy/grafana/self-obs/dashboard-self-obs.yaml)
+# from its Python generator. Run after editing gen_dashboard.py; commit the emitted YAML. Needs PyYAML.
+gen-dashboard:
+	python3 deploy/grafana/self-obs/gen_dashboard.py
 
 # ── tooling (idempotent; installs into .tools/) ───────────────────────────────
 tools:
@@ -75,7 +79,7 @@ tools-e2e:
 # ── fast gate (no Docker) ─────────────────────────────────────────────────────
 ci-build:
 	$(GO) build ./...
-	$(GO) build -o /dev/null ./cmd/aip-oi
+	$(GO) build -o /dev/null ./cmd/decant
 ci-vet:
 	$(GO) vet ./...
 ci-lint: tools

@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	testNS    = "aip-oi"
-	testLease = "aip-oi-leader"
-	testCM    = "aip-oi-checkpoints"
+	testNS    = "decant"
+	testLease = "decant-leader"
+	testCM    = "decant-checkpoints"
 )
 
 func newLease(ns, name string) *coordv1.Lease {

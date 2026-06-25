@@ -9,12 +9,12 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
 )
 
 func TestLeaseElectsAndCancelsOnStop(t *testing.T) {
 	cs := fake.NewSimpleClientset()
-	c := New(cs, "aip-oi", "aip-oi-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
+	c := New(cs, "decant", "decant-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	elected := make(chan int64, 1)
 	leaderCancelled := make(chan struct{}, 1)

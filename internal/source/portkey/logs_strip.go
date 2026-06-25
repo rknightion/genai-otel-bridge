@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // fieldPolicy is the content-free ALLOW-LIST applied to every downloaded export record before a
@@ -37,6 +37,11 @@ type fieldPolicy struct {
 	// placed on LogRecord.TraceID (OTLP trace_id) for logs↔traces correlation. It is auto-lifted into the
 	// record tier too, so the raw value is always queryable even when only the trace mapping is configured.
 	metadataTraceID string
+	// traceIDField, if set, names the ONE TOP-LEVEL export field whose value is parsed as a UUID and placed
+	// on LogRecord.TraceID — the Portkey-native trace_id path, complementing metadataTraceID. Auto-unioned
+	// into the record allow-list so the raw value always ships as a content-free attr too. Mutually
+	// exclusive with metadataTraceID (validated in logs_settings): both map to the one OTLP trace_id.
+	traceIDField string
 }
 
 // defaultLogFieldPolicy is the §3 content-free field set. Indexed = the low-cardinality routing
@@ -138,6 +143,35 @@ func (p fieldPolicy) withMetadataFields(record []string, traceID string) fieldPo
 	return fieldPolicy{indexed: p.indexed, record: p.record, metadataRecord: mr, metadataTraceID: traceID}
 }
 
+// withTraceIDField returns a copy that maps a named TOP-LEVEL export field's UUID value to
+// LogRecord.TraceID (settings.trace_id_field) — the Portkey-native trace_id path, complementing the
+// metadata-sub-key path (withMetadataFields). The field is auto-unioned into the RECORD allow-list so its
+// raw value always ships as a content-free attr too (the caller also adds it to requested_data). Mutually
+// exclusive with metadataTraceID — validated in logs_settings — so strip never double-sources TraceID.
+// Empty ⇒ the policy is unchanged.
+func (p fieldPolicy) withTraceIDField(field string) fieldPolicy {
+	if field == "" {
+		return p
+	}
+	rec := make(map[string]bool, len(p.record)+1)
+	for k := range p.record {
+		rec[k] = true
+	}
+	rec[field] = true
+	return fieldPolicy{indexed: p.indexed, record: rec, metadataRecord: p.metadataRecord, metadataTraceID: p.metadataTraceID, traceIDField: field}
+}
+
+// traceIDAttrKey returns the record-attr key whose raw value feeds OTLP trace_id — the metadata sub-key
+// (metadataTraceID) OR the top-level field (traceIDField), or "" if no trace mapping is configured. The
+// two are mutually exclusive (validated), so at most one is non-empty. Used to detect a present-but-
+// unparseable value for the trace_id_unparsed self-metric, regardless of which path is configured.
+func (p fieldPolicy) traceIDAttrKey() string {
+	if p.metadataTraceID != "" {
+		return p.metadataTraceID
+	}
+	return p.traceIDField
+}
+
 // strip maps a raw export record to a content-free LogRecord. Body is never set (FR10). The Timestamp
 // is parsed from created_at when possible, else the supplied fallback (a valid timestamp is always set).
 func (p fieldPolicy) strip(raw map[string]json.RawMessage, fallbackTS time.Time) model.LogRecord {
@@ -160,6 +194,11 @@ func (p fieldPolicy) strip(raw map[string]json.RawMessage, fallbackTS time.Time)
 			*dst = map[string]string{}
 		}
 		(*dst)[k] = s
+		if p.traceIDField != "" && k == p.traceIDField { // Portkey-native trace_id path → OTLP trace_id
+			if tid, ok := parseTraceID(s); ok {
+				lr.TraceID = tid
+			}
+		}
 	}
 	p.liftMetadata(raw["metadata"], &lr)
 	if v, ok := raw["created_at"]; ok {

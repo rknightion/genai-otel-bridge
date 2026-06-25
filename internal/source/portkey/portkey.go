@@ -23,10 +23,10 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/httpx"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 const granularity = time.Minute // the 1-min regime we pin via the ≤55m window clamp (H5)
@@ -99,7 +99,7 @@ func New(cfg config.SourceConfig, deps source.Deps) (source.Source, error) {
 func newClient(cfg config.SourceConfig, deps source.Deps) *httpx.Client {
 	ua := cfg.HTTP.UserAgent
 	if ua == "" {
-		ua = "aip-oi/0.1"
+		ua = "decant/0.1"
 	}
 	return httpx.New(httpx.Config{
 		UserAgent: ua, Timeout: 10 * time.Second,
@@ -198,7 +198,7 @@ type analyticsLoop struct {
 	// first poll(s) after failover re-learn the trailing band and cannot flag a revision that
 	// happened across the handoff. Accepted blind spot (the metric is a drift indicator, not a
 	// correctness gate).
-	onBucketRevised func(loop string)
+	onBucketRevised func(loop string, age time.Duration)
 	onGraphSkipped  func(loop, graph string)
 	onAuthError     func(loop, source string)
 	// expectedWorkspace, if set (settings.expected_workspace), asserts the key's analytics scope is exactly
@@ -340,10 +340,13 @@ func (l *analyticsLoop) collectPass(ctx context.Context, p resolvedUseCase, star
 	// [settle-exceedance] Detection pass — does NOT affect emit/watermark (DESIGN §3.3/F6).
 	if h := l.histories[p.slug]; h != nil {
 		if settled, derr := derive(resp, l.prefix, fetchStart, now, l.settle, granularity, l.startSemantics); derr == nil {
-			if revised := h.observe(settled, until); revised > 0 && l.onBucketRevised != nil {
-				for i := 0; i < revised; i++ {
-					l.onBucketRevised("analytics")
+			if l.onBucketRevised != nil {
+				for _, bucketEnd := range h.observe(settled, until) {
+					// age = how late the revision is (now − bucketEnd); always ≥ settle by construction.
+					l.onBucketRevised("analytics", now.Sub(bucketEnd))
 				}
+			} else {
+				h.observe(settled, until) // keep history current even with no hook wired
 			}
 		}
 	}

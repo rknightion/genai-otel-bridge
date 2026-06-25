@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // useCaseLabelKey carries the per-api-key use-case name (metrics label + logs record attribute).

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // TestRunsDiscoveryFrozenWhileDraining_H1 [adversarial-review H1]: under auto-discovery, the resolved
@@ -71,7 +71,7 @@ func TestRunsDiscoveryFrozenWhileDraining_H1(t *testing.T) {
 }
 
 // TestSessionDiscoveryTruncationCounted_M1 [adversarial-review M1]: a max_sessions truncation must be
-// COUNTED (OnGraphSkipped → aip_oi_source_graph_unavailable_total), not merely logged — otherwise a
+// COUNTED (OnGraphSkipped → decant_source_graph_unavailable_total), not merely logged — otherwise a
 // project population growing past the cap silently stops being pulled with no alert.
 func TestSessionDiscoveryTruncationCounted_M1(t *testing.T) {
 	var hits int32

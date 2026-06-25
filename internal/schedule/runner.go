@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/checkpoint"
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
-	"github.com/grafana-ps/aip-oi/internal/emit"
-	"github.com/grafana-ps/aip-oi/internal/logging"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/emit"
+	"github.com/rknightion/genai-otel-bridge/internal/logging"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // [CP-C9] consecutive checkpoint-save failures before the loop enters degraded mode.

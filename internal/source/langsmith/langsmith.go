@@ -15,10 +15,10 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/httpx"
-	"github.com/grafana-ps/aip-oi/internal/model"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 const (
@@ -122,7 +122,7 @@ func New(sc config.SourceConfig, deps source.Deps) (source.Source, error) {
 func newClient(sc config.SourceConfig, deps source.Deps) *httpx.Client {
 	ua := sc.HTTP.UserAgent
 	if ua == "" {
-		ua = "aip-oi/0.1"
+		ua = "decant/0.1"
 	}
 	return httpx.New(httpx.Config{
 		UserAgent: ua, Timeout: httpTimeout,
@@ -137,7 +137,7 @@ func newClient(sc config.SourceConfig, deps source.Deps) *httpx.Client {
 func newSource(cfg Config, deps source.Deps) (source.Source, error) {
 	ua := cfg.UserAgent
 	if ua == "" {
-		ua = "aip-oi/0.1"
+		ua = "decant/0.1"
 	}
 	hc := httpx.New(httpx.Config{
 		UserAgent: ua, Timeout: httpTimeout,

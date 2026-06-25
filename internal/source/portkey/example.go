@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
 )
 
 // humanDur formats a duration as a compact human string ("24h", "5m", "1h30m") for chart examples.
@@ -99,6 +99,7 @@ func ExampleSource() config.SourceConfig {
 					"extra_indexed_fields":    "",
 					"metadata_record_fields":  "",
 					"metadata_trace_id_field": "",
+					"trace_id_field":          "",
 					"workspace_id":            "<your-workspace-id>",
 					"signed_url_allow_hosts":  "ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com",
 				},
@@ -133,6 +134,7 @@ func ExampleSettingsComments() map[string]string {
 		"extra_indexed_fields":    "logs_export: promote content-free fields to the INDEXED (Loki stream-label) tier (csv, default empty); auto-allow-listed in the guard; creates Loki streams (keep LOW cardinality — the per-metric budget is the backstop); needs GS1 stack-side promotion to be queryable as {label=…}; bodies hard-denied",
 		"metadata_record_fields":  "logs_export: lift named sub-keys OUT of the (otherwise hard-denied) Portkey metadata blob into the structured-metadata tier (csv, default empty) — e.g. correlation_id. Only operator-named content-free sub-keys are extracted; the rest of metadata (PII) stays dropped. Bodies hard-denied.",
 		"metadata_trace_id_field": "logs_export: name ONE metadata sub-key whose UUID value is also mapped to the OTLP log trace_id (logs↔traces correlation), e.g. correlation_id (default empty). Auto-lifted into the record tier too. Bodies hard-denied.",
+		"trace_id_field":          "logs_export: name ONE TOP-LEVEL export field (e.g. Portkey's native trace_id) whose UUID value is mapped to the OTLP log trace_id (logs↔traces correlation), default empty. The alternative to metadata_trace_id_field for deployments that stamp the trace id as a first-class field; the two are mutually exclusive. Auto-added to the record tier + requested_data. A non-UUID value leaves trace_id unset (counted via trace_id_unparsed) but still ships as a record attr.",
 		"workspace_id":            "logs_export: REQUIRED — Portkey workspace id",
 		"signed_url_allow_hosts":  "logs_export: REQUIRED — allow-list of S3 hosts for the signed download URL (SSRF guard)",
 		// shared keys (both loops)

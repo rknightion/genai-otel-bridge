@@ -126,6 +126,40 @@ func TestDownloadChunkCountsUnparsedTraceID(t *testing.T) {
 	}
 }
 
+// TestDownloadChunkCountsUnparsedTopLevelTraceID mirrors the metadata-path counter test for the
+// Portkey-native trace_id path (settings.trace_id_field): a present-but-non-UUID top-level value fires the
+// alertable trace_id_unparsed self-metric while the raw value still ships as a record attr; a valid UUID
+// and an absent value are NOT counted.
+func TestDownloadChunkCountsUnparsedTopLevelTraceID(t *testing.T) {
+	body := `{"id":"r0","trace_id":"00112233-4455-6677-8899-aabbccddeeff"}` + "\n" +
+		`{"id":"r1","trace_id":"not-a-uuid"}` + "\n" +
+		`{"id":"r2"}` + "\n"
+	srv := bodyServer(t, body)
+	l := dlLoop(t, srv)
+	l.policy = defaultLogFieldPolicy().withTraceIDField("trace_id")
+	var skipped []string
+	l.onGraphSkipped = func(loop, graph string) { skipped = append(skipped, loop+"/"+graph) }
+	recs, _, _, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 10, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 3 {
+		t.Fatalf("recs=%d want 3", len(recs))
+	}
+	if len(recs[0].TraceID) != 16 {
+		t.Fatalf("r0 valid UUID should yield a 16-byte TraceID, got %x", recs[0].TraceID)
+	}
+	if recs[1].TraceID != nil {
+		t.Fatalf("r1 non-UUID TraceID must be unset, got %x", recs[1].TraceID)
+	}
+	if recs[1].RecordAttributes["trace_id"] != "not-a-uuid" {
+		t.Fatal("r1 raw value should still ship as a record attr")
+	}
+	if len(skipped) != 1 || skipped[0] != "logs_export/trace_id_unparsed" {
+		t.Fatalf("want exactly one logs_export/trace_id_unparsed count, got %v", skipped)
+	}
+}
+
 func TestDownloadChunkNon200Errors(t *testing.T) {
 	srv := bodyServer(t, "")
 	l := dlLoop(t, srv)

@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/grafana-ps/aip-oi/internal/config/gen/helmgen"
-	"github.com/grafana-ps/aip-oi/internal/source/langsmith"
-	"github.com/grafana-ps/aip-oi/internal/source/portkey"
+	"github.com/rknightion/genai-otel-bridge/internal/config/gen/helmgen"
+	"github.com/rknightion/genai-otel-bridge/internal/source/langsmith"
+	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 )
 
 // TestHelmGeneratedExamplesUpToDate is the drift gate for the source-examples region of values.yaml

@@ -12,7 +12,7 @@ type Metrics interface {
 	SamplesSkipped(loop, reason string, n int)
 	EmitError(loop, kind string) // kind: bad_encoding | retryable_exhausted
 	GuardDropped(loop string, n int)
-	BucketRevisedAfterSettle(loop string)
+	BucketRevisedAfterSettle(loop string, age time.Duration) // age = how late (now − bucketEnd); records count + age histogram
 	QueueDepth(loop string, depth int)
 	LastSuccess(loop string, t time.Time)
 	WindowLag(loop string, lag time.Duration)
@@ -25,16 +25,16 @@ type Metrics interface {
 // NoopMetrics is the default (tests, dev).
 type NoopMetrics struct{}
 
-func (NoopMetrics) EmittedSamples(string, int)            {}
-func (NoopMetrics) EmittedLogs(string, int)               {}
-func (NoopMetrics) SamplesSkipped(string, string, int)    {}
-func (NoopMetrics) EmitError(string, string)              {}
-func (NoopMetrics) GuardDropped(string, int)              {}
-func (NoopMetrics) BucketRevisedAfterSettle(string)       {}
-func (NoopMetrics) QueueDepth(string, int)                {}
-func (NoopMetrics) LastSuccess(string, time.Time)         {}
-func (NoopMetrics) WindowLag(string, time.Duration)       {}
-func (NoopMetrics) NewLabelValue(string)                  {}
-func (NoopMetrics) SamplesCapped(string, int)             {}
-func (NoopMetrics) SourceGraphUnavailable(string, string) {}
-func (NoopMetrics) AuthError(string, string)              {}
+func (NoopMetrics) EmittedSamples(string, int)                     {}
+func (NoopMetrics) EmittedLogs(string, int)                        {}
+func (NoopMetrics) SamplesSkipped(string, string, int)             {}
+func (NoopMetrics) EmitError(string, string)                       {}
+func (NoopMetrics) GuardDropped(string, int)                       {}
+func (NoopMetrics) BucketRevisedAfterSettle(string, time.Duration) {}
+func (NoopMetrics) QueueDepth(string, int)                         {}
+func (NoopMetrics) LastSuccess(string, time.Time)                  {}
+func (NoopMetrics) WindowLag(string, time.Duration)                {}
+func (NoopMetrics) NewLabelValue(string)                           {}
+func (NoopMetrics) SamplesCapped(string, int)                      {}
+func (NoopMetrics) SourceGraphUnavailable(string, string)          {}
+func (NoopMetrics) AuthError(string, string)                       {}

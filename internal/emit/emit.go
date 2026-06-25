@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // Emitter ships a Batch to a backend. v1: hand-encoded OTLP/HTTP. FROZEN.

@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // ErrStaleWrite means the incoming watermark does not strictly advance the stored one, or

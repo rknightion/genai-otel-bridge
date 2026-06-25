@@ -1,0 +1,58 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: decant-no-standby
+  annotations:
+    grafana.app/folder: decant
+  labels:
+    grafana.app/folder: decant
+spec:
+  title: DecantNoStandby
+  # Fewer than 2 replicas are self-reporting decant_window_lag_seconds — no standby is present, so
+  # there is no failover headroom. Both the active (leader) and standby replicas self-emit this metric,
+  # so healthy HA shows >=2 distinct service_instance_id values. A single pod restart would cause an
+  # emit gap until the new replica wins the lease. This alert is expected to fire on intentionally
+  # single-replica deployments (e.g. some dev stacks).
+  execErrState: Ok
+  noDataState: Ok
+  for: 15m
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "decant has no standby replica (fewer than 2 replicas self-reporting)"
+    description: "count(group by (service_instance_id) (decant_window_lag_seconds)) < 2 for 15m — fewer than 2 replicas are self-reporting, so there is no standby and no failover headroom. A single pod restart will cause an emit gap until a replacement wins the lease. Check the Deployment replica count (expected >=2 for HA), pod health/scheduling, and whether the standby is crashing before it starts emitting metrics. Expected on intentionally single-replica dev stacks. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 16m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'count(group by (service_instance_id) (decant_window_lag_seconds)) < 2'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

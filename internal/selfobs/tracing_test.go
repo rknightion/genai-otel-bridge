@@ -14,7 +14,7 @@ import (
 func TestNewTracerProviderBuilds(t *testing.T) {
 	tp, shutdown, err := NewTracerProvider(context.Background(), TracingConfig{
 		Endpoint: "https://otlp-gateway.example/otlp", InstanceID: "id", Token: "tok",
-		ServiceNamespace: "aip-oi-meta", Environment: "dev", Instance: "pod-1",
+		ServiceNamespace: "decant-meta", Environment: "dev", Instance: "pod-1",
 	})
 	if err != nil {
 		t.Fatalf("NewTracerProvider: %v", err)
@@ -39,7 +39,7 @@ func TestNewTracerProviderTokenlessNoAuth(t *testing.T) {
 	}
 	tp, shutdown, err := NewTracerProvider(context.Background(), TracingConfig{
 		Endpoint:         "http://alloy-receiver.obs.svc.cluster.local:4318", // cleartext in-cluster
-		ServiceNamespace: "aip-oi-meta", Environment: "dev", Instance: "pod-1",
+		ServiceNamespace: "decant-meta", Environment: "dev", Instance: "pod-1",
 	})
 	if err != nil {
 		t.Fatalf("NewTracerProvider (tokenless): %v", err)

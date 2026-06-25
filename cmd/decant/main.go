@@ -18,20 +18,20 @@ import (
 	corev1client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/grafana-ps/aip-oi/internal/app"
-	"github.com/grafana-ps/aip-oi/internal/checkpoint"
-	cpcm "github.com/grafana-ps/aip-oi/internal/checkpoint/configmap"
-	cpfile "github.com/grafana-ps/aip-oi/internal/checkpoint/file"
-	"github.com/grafana-ps/aip-oi/internal/cleanup"
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/coordinate"
-	leasecoord "github.com/grafana-ps/aip-oi/internal/coordinate/lease"
-	"github.com/grafana-ps/aip-oi/internal/emit/otlp"
-	"github.com/grafana-ps/aip-oi/internal/httpx"
-	"github.com/grafana-ps/aip-oi/internal/logging"
-	"github.com/grafana-ps/aip-oi/internal/schedule"
-	"github.com/grafana-ps/aip-oi/internal/selfobs"
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/app"
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
+	cpcm "github.com/rknightion/genai-otel-bridge/internal/checkpoint/configmap"
+	cpfile "github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
+	"github.com/rknightion/genai-otel-bridge/internal/cleanup"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	leasecoord "github.com/rknightion/genai-otel-bridge/internal/coordinate/lease"
+	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/logging"
+	"github.com/rknightion/genai-otel-bridge/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/selfobs"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // App-created HA state objects. These names are fixed (single-instance chart, see
@@ -39,17 +39,17 @@ import (
 // the single source of truth shared by buildHA (which creates them) and the -cleanup path (which
 // deletes them on uninstall).
 const (
-	leaseName        = "aip-oi-leader"
-	checkpointCMName = "aip-oi-checkpoints"
+	leaseName        = "decant-leader"
+	checkpointCMName = "decant-checkpoints"
 )
 
 func main() {
-	cfgPath := flag.String("config", "/etc/aip-oi/config.yaml", "config file")
+	cfgPath := flag.String("config", "/etc/decant/config.yaml", "config file")
 	healthAddr := flag.String("health-addr", ":8080", "health endpoint addr")
 	ns := flag.String("namespace", os.Getenv("POD_NAMESPACE"), "k8s namespace for lease/configmap")
 	identity := flag.String("identity", os.Getenv("POD_NAME"), "leader-election identity")
 	memLimit := flag.Int64("container-mem-bytes", 0, "container memory limit for GOMEMLIMIT")
-	cpFile := flag.String("checkpoint-file", "/var/lib/aip-oi/checkpoints.yaml", "path for the file checkpoint store (only used when ha.checkpoint=file)")
+	cpFile := flag.String("checkpoint-file", "/var/lib/decant/checkpoints.yaml", "path for the file checkpoint store (only used when ha.checkpoint=file)")
 	cleanupMode := flag.Bool("cleanup", false, "delete the app-created lease + checkpoint ConfigMap, then exit (the chart's post-delete uninstall hook)")
 	cleanupRetainCheckpoint := flag.Bool("cleanup-retain-checkpoint", false, "with -cleanup: keep the checkpoint ConfigMap (only remove the lease) so a reinstall resumes the watermark")
 	flag.Parse()
@@ -73,9 +73,9 @@ func main() {
 	// [final-review] All-leader double-emit guard (defence-in-depth with the chart-render guard):
 	// ha.coordinator=none disables leader election, so with >1 replica EVERY pod polls + emits the same
 	// series (3× source load, duplicate-timestamp churn). The replica count isn't config — the chart
-	// injects it via AIP_OI_REPLICAS. Unset/unparseable ⇒ skip (a raw run without the env can't know it).
+	// injects it via DECANT_REPLICAS. Unset/unparseable ⇒ skip (a raw run without the env can't know it).
 	if cfg.HA.Coordinator == "none" {
-		if n, perr := strconv.Atoi(os.Getenv("AIP_OI_REPLICAS")); perr == nil && n > 1 {
+		if n, perr := strconv.Atoi(os.Getenv("DECANT_REPLICAS")); perr == nil && n > 1 {
 			fatal("config", fmt.Errorf("ha.coordinator=none with replicas=%d: all replicas would be leaders and double-emit — use ha.coordinator=lease for multi-replica HA, or replicas: 1", n))
 		}
 	}
@@ -223,7 +223,7 @@ func main() {
 	if err := a.Run(ctx, health.Handler(), *healthAddr, health.MarkReady, health.Beat, health.SetLeader); err != nil && ctx.Err() == nil {
 		fatal("run", err)
 	}
-	slog.Info("aip-oi stopped")
+	slog.Info("decant stopped")
 }
 
 func buildHA(cfg *config.Config, ns, identity, cpFile string) (checkpoint.Checkpointer, coordinate.Coordinator) {

@@ -1,0 +1,58 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: decant-data-loss
+  annotations:
+    grafana.app/folder: decant
+  labels:
+    grafana.app/folder: decant
+spec:
+  title: DecantDataLoss
+  # Records were skipped with a COUNTED GAP for a real-loss reason — data that existed in the source
+  # was not emitted and cannot be recovered. The loop always progresses (no silent stall) but the
+  # skipped window is gone. Benign reasons (quota_exceeded, backfill_unstorable, dpm capping) are
+  # deliberately excluded — only genuine data-loss reasons fire this alert.
+  # for: 0s — fire immediately on first occurrence; no pending period.
+  execErrState: Ok
+  noDataState: Ok
+  for: 0s
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "decant {{ $labels.loop }} loop: data loss ({{ $labels.reason }})"
+    description: "decant_samples_skipped_total for the {{ $labels.loop }} loop has recorded skips with reason={{ $labels.reason }} (too_old / payload_too_large / duplicate_timestamp) in the last 10m. These are genuine data-loss events — the records existed in the source but were not emitted and cannot be recovered. Check: too_old → widen max_backfill or raise the backend accept window (GS2); payload_too_large → reduce batch size; duplicate_timestamp → review the loop's window/step alignment. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 11m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum by (loop, reason) (increase(decant_samples_skipped_total{reason=~"too_old|payload_too_large|duplicate_timestamp"}[10m])) > 0'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

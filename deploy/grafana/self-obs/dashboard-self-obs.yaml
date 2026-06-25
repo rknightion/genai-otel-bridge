@@ -1,16 +1,16 @@
 apiVersion: dashboard.grafana.app/v2
 kind: Dashboard
 metadata:
-  name: aip-oi-self-obs
+  name: decant-self-obs
   annotations:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
   labels:
-    grafana.app/folder: aip-oi
+    grafana.app/folder: decant
 spec:
-  title: "aip-oi \u2014 self-observability"
-  description: 'Operational health of the aip-oi integrator itself (the aip_oi_* self-metrics; resource service.namespace=<product>-meta). Top-down triage: liveness -> emit pipeline -> upstream source health -> cardinality & governance. Stack-agnostic: pick the Prometheus datasource via the variable. NOTE: emitted/last_success/window_lag are recorded only on a SUCCESSFUL emit (the watermark must leave zero), so those panels are empty until a loop has committed once.'
+  title: "decant \u2014 self-observability"
+  description: "Operational health of the decant integrator itself (the decant_* self-metrics, the poller's own stdout logs, and its runtime profiles). Tabbed top-down triage. Staleness is shown self-relative (decant:freshness_ratio: >1 = staler than the loop's own 6h baseline) so one scale serves loops of any cadence. Stack-agnostic: pick the Prometheus/Loki/Pyroscope datasources via the variables. NOTE: emitted/last_success/window_lag are recorded only on a SUCCESSFUL emit (the watermark must leave zero) \u2014 empty there is a real signal that emit is failing, not a broken panel. The freshness/upstream-ratio panels need the self-obs recording rules pushed."
   tags:
-  - aip-oi
+  - decant
   - self-obs
   - gcx
   editable: true
@@ -69,11 +69,43 @@ spec:
       refresh: onDashboardLoad
       skipUrlSync: false
       allowCustomValue: true
+  - kind: DatasourceVariable
+    spec:
+      name: loki
+      label: Loki
+      pluginId: loki
+      current:
+        text: grafanacloud-logs
+        value: grafanacloud-logs
+      hide: dontHide
+      includeAll: false
+      multi: false
+      options: []
+      regex: ''
+      refresh: onDashboardLoad
+      skipUrlSync: false
+      allowCustomValue: true
+  - kind: DatasourceVariable
+    spec:
+      name: pyroscope
+      label: Pyroscope
+      pluginId: grafana-pyroscope-datasource
+      current:
+        text: grafanacloud-profiles
+        value: grafanacloud-profiles
+      hide: dontHide
+      includeAll: false
+      multi: false
+      options: []
+      regex: ''
+      refresh: onDashboardLoad
+      skipUrlSync: false
+      allowCustomValue: true
   - kind: QueryVariable
     spec:
       name: loop
       label: Loop
-      definition: label_values(aip_oi_emit_errors_total,loop)
+      definition: label_values(decant_window_lag_seconds,loop)
       current:
         text:
         - All
@@ -96,15 +128,15 @@ spec:
         datasource:
           name: ${datasource}
         spec:
-          query: label_values(aip_oi_emit_errors_total,loop)
+          query: label_values(decant_window_lag_seconds,loop)
           refId: PrometheusVariableQueryEditor-VariableQuery
   elements:
-    panel-10:
+    panel-100:
       kind: Panel
       spec:
-        id: 10
-        title: Scrape healthy
-        description: "1 (HEALTHY) when every selected loop emitted successfully in the last 15m, 0 (STALE) if any is older. Computed inline from aip_oi_last_success_timestamp_seconds \u2014 no recording rule required. No data => no loop has ever emitted (see Leader present)."
+        id: 100
+        title: Loops healthy
+        description: "HEALTHY when no selected loop is staler than 2x its OWN 6h baseline (max freshness_ratio < 2). Self-relative \u2014 won't read STALE just because a slow log-export loop is legitimately tens of minutes behind. Needs the recording rules pushed."
         links: []
         data:
           kind: QueryGroup
@@ -122,7 +154,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: min((time() - aip_oi_last_success_timestamp_seconds{loop=~"$loop"}) < bool 900)
+                    expr: max(decant:freshness_ratio{loop=~"$loop"}) < bool 2
                     legendFormat: ''
                     range: false
                     instant: true
@@ -170,12 +202,12 @@ spec:
                       color: red
                       index: 0
               overrides: []
-    panel-11:
+    panel-101:
       kind: Panel
       spec:
-        id: 11
+        id: 101
         title: Leader present
-        description: "1 (PRESENT) if aip_oi_last_success_timestamp_seconds was exported by any selected loop in the last 15m. ABSENT => leader gone / never emitted (distinct from stale). Computed inline \u2014 no recording rule required."
+        description: "1 (PRESENT) if any selected loop exported a timestamp in the last 15m. ABSENT => leader gone / never emitted (distinct from stale). Inline \u2014 no recording rule required."
         links: []
         data:
           kind: QueryGroup
@@ -193,7 +225,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(present_over_time(aip_oi_last_success_timestamp_seconds{loop=~"$loop"}[15m]))
+                    expr: max(present_over_time(decant_last_success_timestamp_seconds{loop=~"$loop"}[15m]))
                     legendFormat: ''
                     range: false
                     instant: true
@@ -244,12 +276,12 @@ spec:
                       color: red
                       index: 1
               overrides: []
-    panel-12:
+    panel-102:
       kind: Panel
       spec:
-        id: 12
+        id: 102
         title: Replicas emitting
-        description: Distinct service_instance_id seen. Small is healthy; >2 sustained may indicate leader overlap (standby self-emits too, so 2 during failover is normal).
+        description: Distinct service_instance_id self-reporting. <2 => no standby (DecantNoStandby). Both active+standby self-emit, so 2 is the healthy HA steady state.
         links: []
         data:
           kind: QueryGroup
@@ -267,7 +299,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: count(group by (service_instance_id) (aip_oi_queue_depth_ratio))
+                    expr: count(group by (service_instance_id) (decant_window_lag_seconds))
                     legendFormat: ''
                     range: false
                     instant: true
@@ -299,17 +331,17 @@ spec:
                 thresholds:
                   mode: absolute
                   steps:
-                  - color: green
+                  - color: red
                     value: null
-                  - color: yellow
-                    value: 3
+                  - color: green
+                    value: 2
               overrides: []
-    panel-13:
+    panel-103:
       kind: Panel
       spec:
-        id: 13
-        title: Max window lag
-        description: now - watermark frontier, worst loop. Floors at ~bucket_settle+cadence; a sustained rise means a loop is falling behind.
+        id: 103
+        title: Worst freshness ratio
+        description: 'max(decant:freshness_ratio): each loop''s staleness over its OWN trailing-6h p90 baseline. <1.5 normal, >2 = much staler than this loop''s normal. Uniform scale across loops of any cadence. Needs the recording rules pushed.'
         links: []
         data:
           kind: QueryGroup
@@ -327,7 +359,69 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(aip_oi_window_lag_seconds{loop=~"$loop"})
+                    expr: max(decant:freshness_ratio{loop=~"$loop"})
+                    legendFormat: ''
+                    range: false
+                    instant: true
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: stat
+          spec:
+            options:
+              colorMode: background
+              graphMode: area
+              justifyMode: auto
+              textMode: auto
+              reduceOptions:
+                calcs:
+                - lastNotNull
+                fields: ''
+                values: false
+              wideLayout: true
+              showPercentChange: false
+            fieldConfig:
+              defaults:
+                unit: none
+                color:
+                  mode: thresholds
+                thresholds:
+                  mode: absolute
+                  steps: &id001
+                  - color: green
+                    value: null
+                  - color: yellow
+                    value: 1.5
+                  - color: red
+                    value: 2
+              overrides: []
+    panel-104:
+      kind: Panel
+      spec:
+        id: 104
+        title: Max window lag
+        description: now - watermark frontier, worst loop. Floors at ~bucket_settle+cadence by design; a sustained rise = a loop falling behind.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: max(decant_window_lag_seconds{loop=~"$loop"})
                     legendFormat: ''
                     range: false
                     instant: true
@@ -362,78 +456,16 @@ spec:
                   - color: green
                     value: null
                   - color: yellow
-                    value: 600
-                  - color: red
                     value: 1800
-              overrides: []
-    panel-14:
-      kind: Panel
-      spec:
-        id: 14
-        title: Last emit age (worst)
-        description: time() - aip_oi_last_success_timestamp_seconds, worst loop. Time since a loop last committed + emitted.
-        links: []
-        data:
-          kind: QueryGroup
-          spec:
-            queries:
-            - kind: PanelQuery
-              spec:
-                hidden: false
-                refId: A
-                query:
-                  kind: DataQuery
-                  group: prometheus
-                  version: v0
-                  datasource:
-                    name: ${datasource}
-                  spec:
-                    editorMode: code
-                    expr: max(time() - aip_oi_last_success_timestamp_seconds{loop=~"$loop"})
-                    legendFormat: ''
-                    range: false
-                    instant: true
-                    exemplar: false
-                    format: time_series
-            queryOptions: {}
-            transformations: []
-        vizConfig:
-          kind: VizConfig
-          group: stat
-          spec:
-            options:
-              colorMode: value
-              graphMode: none
-              justifyMode: auto
-              textMode: auto
-              reduceOptions:
-                calcs:
-                - lastNotNull
-                fields: ''
-                values: false
-              wideLayout: true
-              showPercentChange: false
-            fieldConfig:
-              defaults:
-                unit: s
-                color:
-                  mode: thresholds
-                thresholds:
-                  mode: absolute
-                  steps:
-                  - color: green
-                    value: null
-                  - color: yellow
-                    value: 900
                   - color: red
                     value: 3600
               overrides: []
-    panel-15:
+    panel-105:
       kind: Panel
       spec:
-        id: 15
-        title: Emit errors (1h)
-        description: sum(increase(aip_oi_emit_errors_total[1h])) across selected loops (all kinds). >0 => failed emits / checkpoint issues.
+        id: 105
+        title: Fatal emit errors (1h)
+        description: "sum(increase(decant_emit_errors_total{kind!='collect'}[1h])) \u2014 fatal kinds only (retryable_exhausted / checkpoint_* / bad_encoding); the benign upstream-fetch 'collect' retries are excluded. >0 => emit/commit is failing."
         links: []
         data:
           kind: QueryGroup
@@ -451,7 +483,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum(increase(aip_oi_emit_errors_total{loop=~"$loop"}[1h]))
+                    expr: (sum(increase(decant_emit_errors_total{loop=~"$loop",kind!="collect"}[1h])) or vector(0))
                     legendFormat: ''
                     range: false
                     instant: true
@@ -485,17 +517,162 @@ spec:
                   steps:
                   - color: green
                     value: null
-                  - color: yellow
+                  - color: red
+                    value: 1
+              overrides: []
+    panel-110:
+      kind: Panel
+      spec:
+        id: 110
+        title: Freshness ratio by loop (self-relative staleness)
+        description: "decant:freshness_ratio per loop. 1.0 = exactly the loop's own 6h-p90 staleness; the lines mark 1 (baseline) and 2 (alert). This is the decoupled, per-loop staleness view \u2014 a flat 15m threshold can't serve loops whose normal ranges from ~2m (sessions) to tens of minutes (runs)."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: decant:freshness_ratio{loop=~"$loop"}
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: none
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+                  thresholdsStyle:
+                    mode: line
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: green
+                    value: null
+                  - color: blue
                     value: 1
                   - color: red
-                    value: 10
+                    value: 2
+                color:
+                  mode: thresholds
               overrides: []
-    panel-16:
+    panel-111:
       kind: Panel
       spec:
-        id: 16
+        id: 111
+        title: Emitted throughput by loop
+        description: rate of metric samples (decant_emitted_total) and log records (decant_emitted_logs_total) successfully emitted, per loop. Zero across all while data exists upstream => emit broken.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop) (rate(decant_emitted_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}} samples'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: B
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop) (rate(decant_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}} logs'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-120:
+      kind: Panel
+      spec:
+        id: 120
         title: Window lag by loop
-        description: aip_oi_window_lag_seconds per loop. Flat-low is healthy; a sustained climb means the loop is not advancing its watermark.
+        description: decant_window_lag_seconds per loop (now - watermark frontier). Flat-low is healthy; a sustained climb means the loop is not advancing its watermark.
         links: []
         data:
           kind: QueryGroup
@@ -513,7 +690,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: aip_oi_window_lag_seconds{loop=~"$loop"}
+                    expr: decant_window_lag_seconds{loop=~"$loop"}
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -548,12 +725,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-17:
+    panel-121:
       kind: Panel
       spec:
-        id: 17
-        title: Time since last successful emit, by loop
-        description: time() - aip_oi_last_success_timestamp_seconds per loop. Sawtooth that resets each commit is healthy; a monotonic climb means emits are failing.
+        id: 121
+        title: Last-success age vs each loop's baseline
+        description: Solid = time() - last_success (age). Dashed = decant:last_success_age:baseline6h (the loop's own 6h-p90 normal). Age sawtoothing under its baseline is healthy; age pulling away above the baseline is the staleness signal DecantPollerStale fires on.
         links: []
         data:
           kind: QueryGroup
@@ -571,8 +748,26 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: time() - aip_oi_last_success_timestamp_seconds{loop=~"$loop"}
-                    legendFormat: '{{loop}}'
+                    expr: time() - max by (loop) (decant_last_success_timestamp_seconds{loop=~"$loop"})
+                    legendFormat: '{{loop}} age'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: B
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: decant:last_success_age:baseline6h{loop=~"$loop"}
+                    legendFormat: '{{loop}} baseline'
                     range: true
                     instant: false
                     exemplar: false
@@ -606,12 +801,122 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-20:
+    panel-122:
       kind: Panel
       spec:
-        id: 20
+        id: 122
+        title: Replicas self-reporting over time
+        description: Distinct service_instance_id. 2 = healthy active/passive HA; a drop to 1 = no standby (failover gap risk); a spike >2 sustained = leader overlap.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: count(group by (service_instance_id) (decant_window_lag_seconds))
+                    legendFormat: replicas
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - min
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: short
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-123:
+      kind: Panel
+      spec:
+        id: 123
+        title: Freshness ratio
+        description: Per-loop staleness vs the loop's own 6h baseline (repeats once per selected loop). Green <1.5, red >2.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: decant:freshness_ratio{loop="$loop"}
+                    legendFormat: ''
+                    range: false
+                    instant: true
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: gauge
+          spec:
+            options:
+              reduceOptions:
+                calcs:
+                - lastNotNull
+                fields: ''
+                values: false
+              showThresholdLabels: false
+              showThresholdMarkers: true
+            fieldConfig:
+              defaults:
+                unit: none
+                color:
+                  mode: thresholds
+                thresholds:
+                  mode: absolute
+                  steps: *id001
+              overrides: []
+    panel-130:
+      kind: Panel
+      spec:
+        id: 130
         title: Emitted samples /s by loop
-        description: rate(aip_oi_emitted_total). Metric data points successfully emitted. Zero across all loops while data exists upstream => emit is broken.
+        description: rate(decant_emitted_total). Metric data points successfully emitted.
         links: []
         data:
           kind: QueryGroup
@@ -629,7 +934,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(aip_oi_emitted_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(decant_emitted_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -664,12 +969,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-21:
+    panel-131:
       kind: Panel
       spec:
-        id: 21
+        id: 131
         title: Emitted logs /s by loop
-        description: 'rate(aip_oi_emitted_logs_total). Log records emitted (logs loops: logs_export, runs).'
+        description: 'rate(decant_emitted_logs_total). Log records emitted (logs loops: logs_export, runs).'
         links: []
         data:
           kind: QueryGroup
@@ -687,7 +992,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(aip_oi_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(decant_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -722,12 +1027,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-22:
+    panel-132:
       kind: Panel
       spec:
-        id: 22
+        id: 132
         title: Emit errors /s by loop & kind
-        description: rate(aip_oi_emit_errors_total) by kind (retryable_exhausted, collect, checkpoint_load, checkpoint_fenced, granularity_unexpected, bad_encoding, ...).
+        description: rate(decant_emit_errors_total) by kind. 'collect' = benign upstream-fetch retry; retryable_exhausted / checkpoint_* / bad_encoding are fatal (DecantEmitFailing).
         links: []
         data:
           kind: QueryGroup
@@ -745,7 +1050,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, kind) (rate(aip_oi_emit_errors_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, kind) (rate(decant_emit_errors_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{kind}}'
                     range: true
                     instant: false
@@ -780,12 +1085,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-23:
+    panel-133:
       kind: Panel
       spec:
-        id: 23
+        id: 133
         title: Queue depth by loop
-        description: aip_oi_queue_depth_ratio (OTLP unit-1 gauge; the '_ratio' suffix is the OTLP->Prom convention). Sustained non-zero => emit can't keep up with collect (backpressure).
+        description: "decant_queue_depth_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). Sustained non-zero => emit can't keep up with collect (backpressure \u2192 DecantQueueBackpressure)."
         links: []
         data:
           kind: QueryGroup
@@ -803,7 +1108,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max by (loop) (aip_oi_queue_depth_ratio{loop=~"$loop"})
+                    expr: max by (loop) (decant_queue_depth_ratio{loop=~"$loop"})
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -838,12 +1143,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-24:
+    panel-134:
       kind: Panel
       spec:
-        id: 24
+        id: 134
         title: Samples skipped /s (counted gaps) by reason
-        description: "rate(aip_oi_samples_skipped_total) by reason (backfill_unstorable, quota_exceeded, out_of_order, duplicate_timestamp, ...). The loop advances past the bad bucket with a counted gap \u2014 never silent."
+        description: "rate(decant_samples_skipped_total) by reason. too_old / payload_too_large / duplicate_timestamp = real loss (DecantDataLoss); quota_exceeded / backfill_unstorable are benign. The loop advances past the bad bucket with a counted gap \u2014 never silent."
         links: []
         data:
           kind: QueryGroup
@@ -861,7 +1166,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, reason) (rate(aip_oi_samples_skipped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, reason) (rate(decant_samples_skipped_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{reason}}'
                     range: true
                     instant: false
@@ -896,12 +1201,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-25:
+    panel-135:
       kind: Panel
       spec:
-        id: 25
+        id: 135
         title: Samples capped /s (DPM)
-        description: rate(aip_oi_samples_capped_total{reason=dpm}). Samples coalesced (last-write-wins per series-minute) to honour max_dpm. Expected non-zero when source resolution > cap.
+        description: "rate(decant_samples_capped_total{reason=dpm}). Coalesced last-write-wins per series-minute to honour max_dpm. Expected non-zero when source resolution > cap \u2014 NOT data loss."
         links: []
         data:
           kind: QueryGroup
@@ -919,7 +1224,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(aip_oi_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(decant_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -954,12 +1259,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-26:
+    panel-136:
       kind: Panel
       spec:
-        id: 26
+        id: 136
         title: Guard dropped /s by loop (governance)
-        description: rate(aip_oi_guard_dropped_total). Data points / logs dropped by the cardinality/content governance Guard (default-deny label allow-list, field denylist).
+        description: rate(decant_guard_dropped_total). Data points / logs dropped by the cardinality/content governance Guard (default-deny label allow-list, field denylist). Expected non-zero if a denylist is configured.
         links: []
         data:
           kind: QueryGroup
@@ -977,7 +1282,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(aip_oi_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(decant_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1012,12 +1317,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-27:
+    panel-137:
       kind: Panel
       spec:
-        id: 27
+        id: 137
         title: Buckets revised after settle /s
-        description: rate(aip_oi_bucket_revised_after_settle_total). A bucket changed value after the settle window (late arrivals beyond bucket_settle). Persistent non-zero => widen bucket_settle.
+        description: rate(decant_bucket_revised_after_settle_total). A settled bucket changed value after bucket_settle (late arrivals). Persistent non-zero => widen the loop's bucket_settle (DecantBucketRevisedAfterSettle).
         links: []
         data:
           kind: QueryGroup
@@ -1035,7 +1340,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(aip_oi_bucket_revised_after_settle_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(decant_bucket_revised_after_settle_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1070,12 +1375,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-30:
+    panel-138:
       kind: Panel
       spec:
-        id: 30
-        title: Upstream request rate by target & status
-        description: rate(aip_oi_upstream_request_duration_seconds_count) by target (source API host) and status_class. The poller's own pull traffic to vendor APIs.
+        id: 138
+        title: Bucket revision lateness (age p50/p95)
+        description: "histogram_quantile over decant_bucket_revised_after_settle_age_seconds \u2014 HOW LATE post-settle revisions are (now - bucketEnd), vs panel 137's how-often. Tune bucket_settle toward p95 to capture them (metrics can't be backfilled \u2014 Mimir rejects a changed value at an already-emitted timestamp). Floors at bucket_settle by construction."
         links: []
         data:
           kind: QueryGroup
@@ -1093,7 +1398,83 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (target, status_class) (rate(aip_oi_upstream_request_duration_seconds_count[$__rate_interval]))
+                    expr: histogram_quantile(0.50, sum by (le, loop) (rate(decant_bucket_revised_after_settle_age_seconds_bucket{loop=~"$loop"}[$__rate_interval])))
+                    legendFormat: p50 {{loop}}
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: B
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: histogram_quantile(0.95, sum by (le, loop) (rate(decant_bucket_revised_after_settle_age_seconds_bucket{loop=~"$loop"}[$__rate_interval])))
+                    legendFormat: p95 {{loop}}
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: s
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 0
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-140:
+      kind: Panel
+      spec:
+        id: 140
+        title: Upstream request rate by target & status
+        description: rate(decant_upstream_request_duration_seconds_count) by target (source API host) & status_class. The poller's own pull traffic to vendor APIs.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (target, status_class) (rate(decant_upstream_request_duration_seconds_count[$__rate_interval]))
                     legendFormat: '{{target}} {{status_class}}'
                     range: true
                     instant: false
@@ -1127,12 +1508,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-31:
+    panel-141:
       kind: Panel
       spec:
-        id: 31
+        id: 141
         title: Upstream latency p50/p95/p99 by target
-        description: "histogram_quantile over aip_oi_upstream_request_duration_seconds_bucket (cumulative histogram \u2014 rate() is correct here). Time-to-response-headers, excludes limiter wait."
+        description: "histogram_quantile over decant_upstream_request_duration_seconds_bucket (cumulative histogram \u2014 rate() correct). Time-to-response-headers, excludes limiter wait."
         links: []
         data:
           kind: QueryGroup
@@ -1150,7 +1531,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.50, sum by (le, target) (rate(aip_oi_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    expr: histogram_quantile(0.50, sum by (le, target) (rate(decant_upstream_request_duration_seconds_bucket[$__rate_interval])))
                     legendFormat: p50 {{target}}
                     range: true
                     instant: false
@@ -1168,7 +1549,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.95, sum by (le, target) (rate(aip_oi_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    expr: histogram_quantile(0.95, sum by (le, target) (rate(decant_upstream_request_duration_seconds_bucket[$__rate_interval])))
                     legendFormat: p95 {{target}}
                     range: true
                     instant: false
@@ -1186,7 +1567,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.99, sum by (le, target) (rate(aip_oi_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    expr: histogram_quantile(0.99, sum by (le, target) (rate(decant_upstream_request_duration_seconds_bucket[$__rate_interval])))
                     legendFormat: p99 {{target}}
                     range: true
                     instant: false
@@ -1221,12 +1602,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-32:
+    panel-142:
       kind: Panel
       spec:
-        id: 32
+        id: 142
         title: Upstream error ratio by target
-        description: Fraction of upstream requests with status_class 4xx/5xx/error. Rising => the source API is erroring or rejecting the poller.
+        description: "decant:upstream_error_ratio:5m \u2014 fraction of requests to each target with status_class 4xx/5xx/error (incl. timeouts). >0.2 sustained => DecantUpstreamErrorBudget. Needs the recording rules pushed."
         links: []
         data:
           kind: QueryGroup
@@ -1244,7 +1625,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: (sum by (target) (rate(aip_oi_upstream_request_duration_seconds_count{status_class=~"4xx|5xx|error"}[$__rate_interval])) or (sum by (target) (rate(aip_oi_upstream_request_duration_seconds_count[$__rate_interval])) * 0)) / clamp_min(sum by (target) (rate(aip_oi_upstream_request_duration_seconds_count[$__rate_interval])), 1e-9)
+                    expr: decant:upstream_error_ratio:5m
                     legendFormat: '{{target}}'
                     range: true
                     instant: false
@@ -1278,13 +1659,24 @@ spec:
                   showPoints: never
                   spanNulls: false
                   axisPlacement: auto
+                  thresholdsStyle:
+                    mode: line
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: green
+                    value: null
+                  - color: red
+                    value: 0.2
+                color:
+                  mode: thresholds
               overrides: []
-    panel-33:
+    panel-143:
       kind: Panel
       spec:
-        id: 33
+        id: 143
         title: Auth errors /s (401/403)
-        description: "rate(aip_oi_auth_errors_total) by loop & source. Credential failure (wrong/expired key, missing scope) \u2014 distinct from slow/erroring endpoints. Alert on > 0."
+        description: "rate(decant_auth_errors_total) by loop & source. Credential failure (wrong/expired key, missing scope) \u2014 distinct from slow/erroring endpoints. DecantAuthErrors fires on > 0."
         links: []
         data:
           kind: QueryGroup
@@ -1302,7 +1694,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, source) (rate(aip_oi_auth_errors_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, source) (rate(decant_auth_errors_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{source}}'
                     range: true
                     instant: false
@@ -1337,12 +1729,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-34:
+    panel-144:
       kind: Panel
       spec:
-        id: 34
+        id: 144
         title: Source graph unavailable /s (404 / window truncated)
-        description: rate(aip_oi_source_graph_unavailable_total) by graph. Steady increments on a real graph => API permanently absent (permission/capability). graph=window_truncated => records dropped at the page cap.
+        description: rate(decant_source_graph_unavailable_total) by graph. Steady increments on a real graph => API permanently absent (permission/capability) or timing out. graph=window_truncated => records dropped at the page cap (DecantWindowTruncatedDroppingRecords).
         links: []
         data:
           kind: QueryGroup
@@ -1360,7 +1752,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, graph) (rate(aip_oi_source_graph_unavailable_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, graph) (rate(decant_source_graph_unavailable_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{graph}}'
                     range: true
                     instant: false
@@ -1395,12 +1787,12 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
-    panel-40:
+    panel-150:
       kind: Panel
       spec:
-        id: 40
+        id: 150
         title: New label-value combinations /s by series (top 15)
-        description: "rate(aip_oi_new_label_values_total) by series. Each is a never-before-seen label combo for that metric series \u2014 a cardinality early-warning. A sustained climb on one series means its labels are unbounded."
+        description: "rate(decant_new_label_values_total) by series. Each is a never-before-seen label combo \u2014 a cardinality early-warning. A sustained climb on one series = unbounded labels (DecantCardinalitySpike)."
         links: []
         data:
           kind: QueryGroup
@@ -1418,7 +1810,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: topk(15, sum by (series) (rate(aip_oi_new_label_values_total[$__rate_interval])))
+                    expr: topk(15, sum by (series) (rate(decant_new_label_values_total[$__rate_interval])))
                     legendFormat: '{{series}}'
                     range: true
                     instant: false
@@ -1453,241 +1845,731 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
+    panel-151:
+      kind: Panel
+      spec:
+        id: 151
+        title: Guard dropped /s by loop
+        description: rate(decant_guard_dropped_total). Governance Guard drops (default-deny label allow-list / field denylist). The content-minimisation enforcement point.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop) (rate(decant_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-152:
+      kind: Panel
+      spec:
+        id: 152
+        title: Samples capped /s (DPM)
+        description: "rate(decant_samples_capped_total). DPM cap coalescing \u2014 the cardinality/cost guard on the metrics plane."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (loop) (rate(decant_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
+                    legendFormat: '{{loop}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-160:
+      kind: Panel
+      spec:
+        id: 160
+        title: Log rate by level
+        description: "count_over_time of the poller's OWN stdout (namespace=grafana-poller, service_name=decant), by detected level. A warn/error climb corroborates the metric-side signals (e.g. Portkey fetch timeouts). Uses Loki's $__auto range (NOT $__rate_interval \u2014 that is Prometheus-only)."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: loki
+                  version: v0
+                  datasource:
+                    name: ${loki}
+                  spec:
+                    editorMode: code
+                    expr: sum by (detected_level) (count_over_time({namespace="grafana-poller", service_name="decant", container="decant"} [$__auto]))
+                    queryType: range
+                    maxLines: 1000
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: cps
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 30
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-162:
+      kind: Panel
+      spec:
+        id: 162
+        title: Warn+error logs (15m)
+        description: "Count of the poller's own warn/error stdout lines in the last 15m. Inline LogQL \u2014 independent of the metric pipeline, so it still reports if emit is down."
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: '0'
+                    legendFormat: ''
+                    range: false
+                    instant: true
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: stat
+          spec:
+            options:
+              colorMode: value
+              graphMode: none
+              justifyMode: auto
+              textMode: auto
+              reduceOptions:
+                calcs:
+                - lastNotNull
+                fields: ''
+                values: false
+              wideLayout: true
+              showPercentChange: false
+            fieldConfig:
+              defaults:
+                unit: short
+                color:
+                  mode: thresholds
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: text
+                    value: null
+              overrides: []
+    panel-161:
+      kind: Panel
+      spec:
+        id: 161
+        title: Poller logs (warn+error)
+        description: The integrator's own warn/error stdout. NOT the republished product logs (those are service_namespace=decant, high volume). Drill here when a metric signal fires.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: loki
+                  version: v0
+                  datasource:
+                    name: ${loki}
+                  spec:
+                    editorMode: code
+                    expr: '{namespace="grafana-poller", service_name="decant", container="decant"} | detected_level=~"warn|error"'
+                    queryType: range
+                    maxLines: 1000
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: logs
+          spec:
+            options:
+              showTime: true
+              showLabels: false
+              wrapLogMessage: true
+              prettifyLogMessage: false
+              enableLogDetails: true
+              dedupStrategy: none
+              sortOrder: Descending
+            fieldConfig:
+              defaults: {}
+              overrides: []
+    panel-170:
+      kind: Panel
+      spec:
+        id: 170
+        title: CPU usage (process_cpu)
+        description: Continuous CPU profile of the integrator process (Pyroscope push). decant is near-idle between ticks; spikes align with poll/emit cycles.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: grafana-pyroscope-datasource
+                  version: v0
+                  datasource:
+                    name: ${pyroscope}
+                  spec:
+                    profileTypeId: process_cpu:cpu:nanoseconds:cpu:nanoseconds
+                    labelSelector: '{service_name="decant"}'
+                    groupBy: []
+                    queryType: metrics
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: list
+                placement: bottom
+                showLegend: true
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: short
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 20
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-171:
+      kind: Panel
+      spec:
+        id: 171
+        title: Heap in-use
+        description: Live heap (memory:inuse_space). Watch for a sustained climb (leak) vs the sawtooth of normal GC.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: grafana-pyroscope-datasource
+                  version: v0
+                  datasource:
+                    name: ${pyroscope}
+                  spec:
+                    profileTypeId: memory:inuse_space:bytes:space:bytes
+                    labelSelector: '{service_name="decant"}'
+                    groupBy: []
+                    queryType: metrics
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: list
+                placement: bottom
+                showLegend: true
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: bytes
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 20
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-172:
+      kind: Panel
+      spec:
+        id: 172
+        title: Goroutines
+        description: Goroutine count. A monotonic climb = a goroutine leak (e.g. a stuck HTTP call to a wedged upstream).
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: grafana-pyroscope-datasource
+                  version: v0
+                  datasource:
+                    name: ${pyroscope}
+                  spec:
+                    profileTypeId: goroutines:goroutine:count:goroutine:count
+                    labelSelector: '{service_name="decant"}'
+                    groupBy: []
+                    queryType: metrics
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: list
+                placement: bottom
+                showLegend: true
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: short
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 20
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
+    panel-173:
+      kind: Panel
+      spec:
+        id: 173
+        title: CPU flame graph
+        description: Where the integrator spends CPU. Use to confirm time is in poll/encode/emit and not somewhere unexpected.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: grafana-pyroscope-datasource
+                  version: v0
+                  datasource:
+                    name: ${pyroscope}
+                  spec:
+                    profileTypeId: process_cpu:cpu:nanoseconds:cpu:nanoseconds
+                    labelSelector: '{service_name="decant"}'
+                    groupBy: []
+                    queryType: profile
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: flamegraph
+          spec:
+            options: {}
+            fieldConfig:
+              defaults: {}
+              overrides: []
   layout:
-    kind: RowsLayout
+    kind: TabsLayout
     spec:
-      rows:
-      - kind: RowsLayoutRow
+      tabs:
+      - kind: TabsLayoutTab
         spec:
-          title: Poller health & liveness
-          collapse: false
-          hideHeader: false
+          title: Overview / SLO
           layout:
-            kind: GridLayout
+            kind: AutoGridLayout
             spec:
+              maxColumnCount: 6
+              columnWidthMode: standard
+              rowHeightMode: short
+              fillScreen: false
               items:
-              - kind: GridLayoutItem
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-10
-                  x: 0
-                  y: 0
-                  width: 4
-                  height: 4
-              - kind: GridLayoutItem
+                    name: panel-100
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-11
-                  x: 4
-                  y: 0
-                  width: 4
-                  height: 4
-              - kind: GridLayoutItem
+                    name: panel-101
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-12
-                  x: 8
-                  y: 0
-                  width: 4
-                  height: 4
-              - kind: GridLayoutItem
+                    name: panel-102
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-13
-                  x: 12
-                  y: 0
-                  width: 4
-                  height: 4
-              - kind: GridLayoutItem
+                    name: panel-103
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-14
-                  x: 16
-                  y: 0
-                  width: 4
-                  height: 4
-              - kind: GridLayoutItem
+                    name: panel-104
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-15
-                  x: 20
-                  y: 0
-                  width: 4
-                  height: 4
-              - kind: GridLayoutItem
+                    name: panel-105
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-16
-                  x: 0
-                  y: 4
-                  width: 12
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-110
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-17
-                  x: 12
-                  y: 4
-                  width: 12
-                  height: 8
-      - kind: RowsLayoutRow
+                    name: panel-111
+      - kind: TabsLayoutTab
+        spec:
+          title: Liveness & leadership
+          layout:
+            kind: AutoGridLayout
+            spec:
+              maxColumnCount: 2
+              columnWidthMode: standard
+              rowHeightMode: standard
+              fillScreen: false
+              items:
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-120
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-121
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-122
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-123
+                  repeat:
+                    mode: variable
+                    value: loop
+      - kind: TabsLayoutTab
         spec:
           title: Emit pipeline
-          collapse: false
-          hideHeader: false
           layout:
-            kind: GridLayout
+            kind: AutoGridLayout
             spec:
+              maxColumnCount: 3
+              columnWidthMode: standard
+              rowHeightMode: standard
+              fillScreen: false
               items:
-              - kind: GridLayoutItem
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-20
-                  x: 0
-                  y: 0
-                  width: 8
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-130
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-21
-                  x: 8
-                  y: 0
-                  width: 8
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-131
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-22
-                  x: 16
-                  y: 0
-                  width: 8
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-132
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-23
-                  x: 0
-                  y: 8
-                  width: 8
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-133
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-24
-                  x: 8
-                  y: 8
-                  width: 8
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-134
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-25
-                  x: 16
-                  y: 8
-                  width: 8
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-135
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-26
-                  x: 0
-                  y: 16
-                  width: 12
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-136
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-27
-                  x: 12
-                  y: 16
-                  width: 12
-                  height: 8
-      - kind: RowsLayoutRow
+                    name: panel-137
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-138
+      - kind: TabsLayoutTab
         spec:
           title: Upstream source health
-          collapse: false
-          hideHeader: false
           layout:
-            kind: GridLayout
+            kind: AutoGridLayout
             spec:
+              maxColumnCount: 2
+              columnWidthMode: standard
+              rowHeightMode: standard
+              fillScreen: false
               items:
-              - kind: GridLayoutItem
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-30
-                  x: 0
-                  y: 0
-                  width: 12
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-140
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-31
-                  x: 12
-                  y: 0
-                  width: 12
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-141
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-32
-                  x: 0
-                  y: 8
-                  width: 8
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-142
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-33
-                  x: 8
-                  y: 8
-                  width: 8
-                  height: 8
-              - kind: GridLayoutItem
+                    name: panel-143
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-34
-                  x: 16
-                  y: 8
-                  width: 8
-                  height: 8
-      - kind: RowsLayoutRow
+                    name: panel-144
+      - kind: TabsLayoutTab
         spec:
           title: Cardinality & governance
-          collapse: true
-          hideHeader: false
           layout:
-            kind: GridLayout
+            kind: AutoGridLayout
             spec:
+              maxColumnCount: 2
+              columnWidthMode: standard
+              rowHeightMode: standard
+              fillScreen: false
               items:
-              - kind: GridLayoutItem
+              - kind: AutoGridLayoutItem
                 spec:
                   element:
                     kind: ElementReference
-                    name: panel-40
-                  x: 0
-                  y: 0
-                  width: 24
-                  height: 8
+                    name: panel-150
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-151
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-152
+      - kind: TabsLayoutTab
+        spec:
+          title: Logs
+          layout:
+            kind: AutoGridLayout
+            spec:
+              maxColumnCount: 2
+              columnWidthMode: standard
+              rowHeightMode: standard
+              fillScreen: false
+              items:
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-160
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-162
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-161
+      - kind: TabsLayoutTab
+        spec:
+          title: Profiling
+          layout:
+            kind: AutoGridLayout
+            spec:
+              maxColumnCount: 2
+              columnWidthMode: standard
+              rowHeightMode: standard
+              fillScreen: false
+              items:
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-170
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-171
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-172
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-173

@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: aip-oi
+  name: decant
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "aip-oi.labels" . | nindent 4 }}
+    {{- include "decant.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   selector:
-    {{- include "aip-oi.selectorLabels" . | nindent 4 }}
+    {{- include "decant.selectorLabels" . | nindent 4 }}
   ports:
     - name: health
       port: 8080

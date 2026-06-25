@@ -5,8 +5,8 @@ package portkey
 import (
 	"testing"
 
-	"github.com/grafana-ps/aip-oi/internal/config"
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 func TestSlugifyUseCase(t *testing.T) {

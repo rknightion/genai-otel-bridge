@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // baseLogsSettings is a VALID minimal settings map (the two safety-required keys + workspace_id set).
@@ -50,6 +50,46 @@ func TestLogsSettingsMetadataFields(t *testing.T) {
 	bad2["metadata_trace_id_field"] = "messages"
 	if err := applyLogsSettings(&ls, bad2); err == nil {
 		t.Fatal("expected metadata_trace_id_field=messages (hard-denied) to be rejected")
+	}
+}
+
+// TestLogsSettingsTraceIDField: the top-level trace_id_field knob (Portkey-native trace_id path) parses,
+// rejects csv (single key only), rejects a hard-denied content field, and is mutually exclusive with
+// metadata_trace_id_field (both map to the OTLP trace_id — set exactly one).
+func TestLogsSettingsTraceIDField(t *testing.T) {
+	ls := defaultLogsSettings()
+	s := baseLogsSettings()
+	s["trace_id_field"] = "trace_id"
+	if err := applyLogsSettings(&ls, s); err != nil {
+		t.Fatalf("valid trace_id_field rejected: %v", err)
+	}
+	if ls.traceIDField != "trace_id" {
+		t.Fatalf("trace_id_field=%q", ls.traceIDField)
+	}
+
+	// csv rejected — it names a SINGLE field (use metadata_record_fields for multiple lifts).
+	ls = defaultLogsSettings()
+	bad := baseLogsSettings()
+	bad["trace_id_field"] = "trace_id,correlation_id"
+	if err := applyLogsSettings(&ls, bad); err == nil {
+		t.Fatal("expected csv trace_id_field to be rejected")
+	}
+
+	// hard-denied content field rejected.
+	ls = defaultLogsSettings()
+	bad2 := baseLogsSettings()
+	bad2["trace_id_field"] = "messages"
+	if err := applyLogsSettings(&ls, bad2); err == nil {
+		t.Fatal("expected hard-denied trace_id_field to be rejected")
+	}
+
+	// mutually exclusive with metadata_trace_id_field (one OTLP trace_id, one source).
+	ls = defaultLogsSettings()
+	bad3 := baseLogsSettings()
+	bad3["trace_id_field"] = "trace_id"
+	bad3["metadata_trace_id_field"] = "correlation_id"
+	if err := applyLogsSettings(&ls, bad3); err == nil {
+		t.Fatal("expected trace_id_field + metadata_trace_id_field (both set) to be rejected")
 	}
 }
 

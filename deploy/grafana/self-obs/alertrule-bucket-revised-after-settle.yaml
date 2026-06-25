@@ -1,0 +1,57 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: decant-bucket-revised-after-settle
+  annotations:
+    grafana.app/folder: decant
+  labels:
+    grafana.app/folder: decant
+spec:
+  title: DecantBucketRevisedAfterSettle
+  # Already-emitted (settled) buckets are still changing value after the loop's bucket_settle window.
+  # This means late-arriving source data is landing beyond the settle deadline — previously-emitted
+  # metrics will be revised (upserted) by Mimir. Sustained at >30 revisions/h means the settle window
+  # is too short for how long the source API back-fills its own aggregates.
+  execErrState: Ok
+  noDataState: Ok
+  for: 15m
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "decant {{ $labels.loop }} loop: settled buckets are still being revised (late source data)"
+    description: "decant_bucket_revised_after_settle_total for the {{ $labels.loop }} loop is increasing at >30/h — late-arriving source data is landing after the bucket_settle window, so already-emitted metrics are being revised. The source API is back-filling its own aggregates later than expected. Remedy: widen the loop's settings.bucket_settle. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 1h5s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum by (loop) (increase(decant_bucket_revised_after_settle_total[1h])) > 30'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

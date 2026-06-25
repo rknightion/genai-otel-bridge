@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
 // runTimeLayouts: LangSmith 0.13.5 stamps NAIVE timestamps (no tz) with or without fractional seconds

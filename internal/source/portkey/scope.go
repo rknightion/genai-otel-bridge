@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
 )
 
 // scopeProbeWindow is the lookback for the workspace-scope assertion. Wide (7d) so a correctly-scoped but

@@ -4,7 +4,7 @@
 
 // Package e2e is the k3d 3-node failover suite. It deploys the real Helm chart (lease+ConfigMap HA,
 // mock-Portkey source, loopback OTLP sink sidecar) via scripts/k3d-e2e.sh, then proves the three HA
-// invariants by observing the Lease `aip-oi-leader` and the checkpoint ConfigMap `aip-oi-checkpoints`
+// invariants by observing the Lease `decant-leader` and the checkpoint ConfigMap `decant-checkpoints`
 // (both via client-go). Timing budgets respect ReleaseOnCancel=false (followup.md §8): failover is
 // gated by LeaseDuration(15s)+RetryPeriod(2s), so budgets are >= 30s — never sub-LeaseDuration.
 package e2e
@@ -25,15 +25,15 @@ import (
 )
 
 const (
-	leaseName = "aip-oi-leader"
-	cpName    = "aip-oi-checkpoints"
+	leaseName = "decant-leader"
+	cpName    = "decant-checkpoints"
 )
 
 func ns() string {
 	if v := os.Getenv("E2E_NAMESPACE"); v != "" {
 		return v
 	}
-	return "aip-oi-e2e"
+	return "decant-e2e"
 }
 
 func kubectlBin() string {
@@ -107,7 +107,7 @@ func latestWatermark(t *testing.T, cs *kubernetes.Clientset) (time.Time, bool) {
 
 func runningPods(t *testing.T, cs *kubernetes.Clientset) []corev1.Pod {
 	t.Helper()
-	l, err := cs.CoreV1().Pods(ns()).List(context.Background(), metav1.ListOptions{LabelSelector: "app=aip-oi"})
+	l, err := cs.CoreV1().Pods(ns()).List(context.Background(), metav1.ListOptions{LabelSelector: "app=decant"})
 	if err != nil {
 		t.Fatalf("list pods: %v", err)
 	}
@@ -138,7 +138,7 @@ func freezeLeader(t *testing.T, name string) {
 	t.Helper()
 	cmd := exec.Command(kubectlBin(), "debug", "-n", ns(), "pod/"+name,
 		"--image=busybox:1.36", "--attach=false", "--",
-		"sh", "-c", "kill -STOP $(pidof aip-oi); sleep 600")
+		"sh", "-c", "kill -STOP $(pidof decant); sleep 600")
 	cmd.Env = os.Environ()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("kubectl debug freeze failed: %v\n%s", err, out)

@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/grafana-ps/aip-oi/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
 )
 
 // resolveSessions returns the project-UUID scope for runs/query. Static settings.session_ids wins; else

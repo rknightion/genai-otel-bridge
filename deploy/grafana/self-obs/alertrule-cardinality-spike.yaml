@@ -1,0 +1,58 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: decant-cardinality-spike
+  annotations:
+    grafana.app/folder: decant
+  labels:
+    grafana.app/folder: decant
+spec:
+  title: DecantCardinalitySpike
+  # Sustained creation of never-before-seen label-value combinations on a series — a cardinality
+  # early-warning. In steady state, no new label values are expected (all dimensions are bounded).
+  # A sustained rate >0.05/s means ~180 new combinations/hour on that series, which will eventually
+  # OOM Prometheus/Mimir or cause scrape timeouts. Likely an unbounded label (e.g. a request ID
+  # or freeform metadata field) leaking through the Guard allow-list.
+  execErrState: Ok
+  noDataState: Ok
+  for: 15m
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "decant cardinality spike on series {{ $labels.series }}"
+    description: "decant_new_label_values_total for series {{ $labels.series }} is increasing at >0.05/s sustained for 15m — a cardinality early-warning. New never-before-seen label-value combinations are being created. Likely cause: an unbounded label dimension (e.g. a request ID or freeform metadata field) is leaking through the Guard allow-list into emitted metrics. Check the Guard allow-list config (governance.allow_label_keys) and the source dimension feeding {{ $labels.series }}. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 1h5s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum by (series) (rate(decant_new_label_values_total[1h])) > 0.05'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

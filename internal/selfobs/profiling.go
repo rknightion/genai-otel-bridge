@@ -80,7 +80,7 @@ func servePprof(ln net.Listener) func(context.Context) error {
 // distinct self identity (H4) travels in Tags (the -meta namespace + env + per-replica instance).
 func buildPyroscopeConfig(cfg ProfilingConfig) pyroscope.Config {
 	return pyroscope.Config{
-		ApplicationName:   "aip-oi",
+		ApplicationName:   "decant",
 		ServerAddress:     cfg.PushEndpoint,
 		BasicAuthUser:     cfg.PushInstanceID,
 		BasicAuthPassword: cfg.PushToken,

@@ -1,4 +1,4 @@
-module github.com/grafana-ps/aip-oi
+module github.com/rknightion/genai-otel-bridge
 
 go 1.26.4
 

@@ -239,6 +239,35 @@ func TestStripMetadataAbsent(t *testing.T) {
 	}
 }
 
+// TestStripTopLevelTraceIDField: a TOP-LEVEL export field designated as the trace-id source (the
+// Portkey-native trace_id path, complementing the metadata-sub-key path) has its UUID value parsed into
+// the OTLP LogRecord.TraceID (16 bytes) AND still ships as a content-free record attr. A NON-default
+// field name proves withTraceIDField auto-unions it into the record allow-list (else it would be dropped).
+func TestStripTopLevelTraceIDField(t *testing.T) {
+	p := defaultLogFieldPolicy().withTraceIDField("request_id")
+	lr := p.strip(rawRecord(t, `{"request_id":"00112233-4455-6677-8899-aabbccddeeff","ai_model":"m"}`), time.Unix(0, 0).UTC())
+	want := []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+	if !slices.Equal(lr.TraceID, want) {
+		t.Fatalf("TraceID=%x want %x", lr.TraceID, want)
+	}
+	if lr.RecordAttributes["request_id"] != "00112233-4455-6677-8899-aabbccddeeff" {
+		t.Fatalf("trace-id source field should also be a record attr, got %v", lr.RecordAttributes)
+	}
+}
+
+// TestStripTopLevelTraceIDFieldUnparseable: a non-UUID top-level trace-id value leaves TraceID unset but
+// the raw value still ships as a record attr (best-effort enrichment — never lose the data).
+func TestStripTopLevelTraceIDFieldUnparseable(t *testing.T) {
+	p := defaultLogFieldPolicy().withTraceIDField("trace_id")
+	lr := p.strip(rawRecord(t, `{"trace_id":"not-a-uuid"}`), time.Unix(0, 0).UTC())
+	if lr.TraceID != nil {
+		t.Fatalf("TraceID should be unset for a non-UUID value, got %x", lr.TraceID)
+	}
+	if lr.RecordAttributes["trace_id"] != "not-a-uuid" {
+		t.Fatalf("value should still be preserved as a record attr, got %v", lr.RecordAttributes)
+	}
+}
+
 // TestStripTimestampFromCreatedAt: created_at parses to the record Timestamp; an unparseable value
 // falls back to the supplied time (a valid timestamp is always produced).
 func TestStripTimestampFromCreatedAt(t *testing.T) {

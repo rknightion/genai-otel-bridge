@@ -7,5 +7,5 @@ kubeVersion: ">=1.21.0-0"
 # version (chart) and appVersion both track the release version. release-please bumps the two annotated
 # lines below on each release (see release-please-config.json extra-files); scripts/publish.sh also derives
 # both from the git tag at publish time, so the registry and the source never drift.
-version: 0.5.0 # x-release-please-version
-appVersion: "3.0.0" # x-release-please-version
+version: 3.0.1 # x-release-please-version
+appVersion: "3.0.1" # x-release-please-version

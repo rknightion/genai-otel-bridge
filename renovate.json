@@ -13,9 +13,9 @@
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
   "labels": ["dependencies"],
-  "description": "chore(deps) keeps dep bumps out of the git-cliff CHANGELOG (chore is excluded); see CLAUDE.md release ritual. No schedule — PRs open as soon as a release clears minimumReleaseAge; non-major bumps automerge once CI is green. The repo is public, so GitHub-native auto-merge (platformAutomerge) gates on the `ci-success` required status check set by main's branch protection (enforce_admins=false, so admin direct-to-main pushes bypass it; the Renovate bot does not); majors still open a PR for manual merge.",
+  "description": "chore(deps) keeps dep bumps out of the git-cliff CHANGELOG (chore is excluded); see CLAUDE.md release ritual. No schedule — PRs open as soon as a release clears minimumReleaseAge; non-major bumps automerge once CI is green. platformAutomerge is false because this private repo's plan has no branch protection, so Renovate itself merges the PR after waiting for every CI check (gate matrix + e2e + secret-scan + ci-success) to pass. When the repo goes public (pending: purge the dangling pre-public commit b320392 first — see migration notes), flip platformAutomerge to true and require the ci-success check via branch protection.",
   "automerge": true,
-  "platformAutomerge": true,
+  "platformAutomerge": false,
   "automergeStrategy": "squash",
   "postUpdateOptions": [
     "gomodTidy",

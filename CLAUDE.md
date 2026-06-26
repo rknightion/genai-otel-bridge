@@ -30,9 +30,8 @@ go test -tags acceptance ./internal/app/   # §9 acceptance gates (failover, out
 
 Go 1.26. Module path: `github.com/rknightion/genai-otel-bridge`. GitHub (`rknightion/genai-otel-bridge`)
 is the canonical remote — commit to `main`, tag `vX.Y.Z` to release (the tag drives the GHCR publish job).
-The repo is public; a self-hosted Forgejo mirror is kept as a cold archive only. `main` is branch-
-protected to require the `ci-success` check (with `enforce_admins=false`, so admin direct-to-main
-pushes bypass it — the gate exists to hold Renovate's automerge until CI is green).
+The repo is currently private (go-public is gated on purging a dangling pre-public commit — see the
+migration notes); a self-hosted Forgejo mirror is kept as a cold archive only.
 
 ## Architecture (the seams)
 

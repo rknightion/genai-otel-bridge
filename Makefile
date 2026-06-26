@@ -39,10 +39,11 @@ gate: vet test lint forbidden-words spdx-check
 # TestHelmGeneratedConfigUpToDate (in the gate's `test`) fails if this output is not committed.
 generate:
 	$(GO) run ./internal/config/gen
-# generate-check verifies the committed values.yaml is up to date without modifying the tree (CI use).
+	$(GO) run ./internal/docs/gen
+# generate-check verifies BOTH generated artifacts are up to date without modifying the tree (CI use).
 generate-check: generate
-	@git diff --exit-code -- deploy/helm/values.yaml || \
-	  (echo "deploy/helm/values.yaml is stale — run 'make generate' and commit" && exit 1)
+	@git diff --exit-code -- deploy/helm/values.yaml docs/telemetry.md || \
+	  (echo "generated files are stale — run 'make generate' and commit" && exit 1)
 # Regenerate the self-observability dashboard manifest (deploy/grafana/self-obs/dashboard-self-obs.yaml)
 # from its Python generator. Run after editing gen_dashboard.py; commit the emitted YAML. Needs PyYAML.
 gen-dashboard:

@@ -29,7 +29,7 @@ go test -tags acceptance ./internal/app/   # §9 acceptance gates (failover, out
 ```
 
 Go 1.26. Module path: `github.com/rknightion/genai-otel-bridge`. GitHub (`rknightion/genai-otel-bridge`)
-is the canonical remote — commit to `main`, tag `vX.Y.Z` to release (the tag drives the GHCR publish job).
+is the canonical remote — commit to `main`; releases are cut by merging release-please's PR (see Release).
 The repo is public; a self-hosted Forgejo mirror is kept as a cold archive only. `main` is branch-
 protected to require the `ci-success` check (with `enforce_admins=false`, so admin direct-to-main
 pushes bypass it — the gate exists to hold Renovate's automerge until CI is green).
@@ -84,7 +84,8 @@ F1–F47 failure handling, review dispositions). Read these before changing a se
   (build-vet / lint / test / race / acceptance / envtest / hygiene) plus `e2e` and `secret-scan`;
   the `ci-success` aggregator job is the single check that gates Renovate automerge and `publish`.
 - **Conventional Commits** (`feat:`/`fix:`/`chore:`/`docs:`/`refactor:`/…) — subjects drive the
-  generated `CHANGELOG.md` (`make changelog`); `chore`/`style`/release commits are excluded from it.
+  release-please-generated `CHANGELOG.md`; only `feat`/`fix`/breaking bump the version, `chore`/`style`/
+  `test` are hidden from the changelog. See the Release section below.
 - **Gate extras:** `make gate` runs `forbidden-words` (a content/decoupling guard — self-skips where its
   script isn't present) and `spdx-check` (every `.go` carries the AGPL-3.0-only SPDX header).
 - **Strict TDD.** Failing test → minimal code → green. Table-driven where it fits; `httptest.Server`
@@ -98,7 +99,20 @@ F1–F47 failure handling, review dispositions). Read these before changing a se
 
 ## Release
 
-Conventional Commits drive the generated `CHANGELOG.md` (`make changelog VERSION=vX.Y.Z`). Tagging a
-`vX.Y.Z` triggers CI to build and publish the multi-arch container image + Helm chart to the registry.
-A `forbidden-words` gate (`scripts/forbidden-words.sh`, self-skips when absent) guards against
-deployment-specific identifiers leaking into the tracked tree. See `CONTRIBUTING.md` for the workflow.
+Releases are automated by **release-please** (`.github/workflows/release-please.yml`). On every push to
+`main` it maintains a "release PR" that, from the Conventional Commits since the last release, computes
+the next semver and updates `CHANGELOG.md` + `deploy/helm/Chart.yaml` (`version` + `appVersion`, the two
+`# x-release-please-version`-annotated lines). **Merging that release PR** tags `vX.Y.Z`, creates the
+GitHub Release (notes = that version's changelog section), and triggers `publish.yml` to push the
+multi-arch image + Helm chart to GHCR. There is no manual `make changelog` / `git tag` step.
+
+- **Version is single-source:** image tag = chart `version` = `appVersion` = release version (also
+  enforced by `scripts/publish.sh`, which derives all three from the tag at publish time).
+- **Merging the release PR:** release-please opens it with `GITHUB_TOKEN`, so CI does not auto-run on it
+  (GitHub's recursion guard) — merge it as a repo admin (branch protection `enforce_admins=false` lets
+  admins bypass); its content was already validated when the underlying commits landed. To make release
+  PRs run CI like any other (and drop the bypass), give the action a fine-grained PAT via a `token:` input.
+- `config-file` = `release-please-config.json`, `manifest-file` = `.release-please-manifest.json`
+  (tracks the last released version). `publish.yml` is also `workflow_dispatch`-able for a manual re-publish.
+- A `forbidden-words` gate (`scripts/forbidden-words.sh`) guards against deployment-specific identifiers
+  leaking into the tracked tree. See `CONTRIBUTING.md` for the contributor workflow.

@@ -51,6 +51,13 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) â
 drives the generated changelog. Use `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`, etc. Mark
 breaking changes with a `!` (e.g. `feat!:`) and a `BREAKING CHANGE:` footer.
 
+## Releases
+
+Releases are automated with [release-please](https://github.com/googleapis/release-please): once
+changes land on `main`, it opens a release PR that bumps the version + `CHANGELOG.md` from the
+Conventional Commits. Merging that PR publishes the GitHub Release and the image/chart. Maintainers
+cut releases â€” contributors only need correct commit subjects (`feat`/`fix`/breaking drive the version).
+
 ## Frozen interfaces
 
 Some types and interfaces are marked **FROZEN** in `ARCHITECTURE.md` (the `model.*` types and the

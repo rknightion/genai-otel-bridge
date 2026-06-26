@@ -4,7 +4,8 @@ description: AI Platform Observability Integrator — polls AI platform APIs (Po
 type: application
 # PodDisruptionBudget policy/v1 is the floor (stable since 1.21). Validated with Helm 4.x.
 kubeVersion: ">=1.21.0-0"
-version: 0.5.0
-# appVersion tracks the released app version (surfaces as app.kubernetes.io/version). Auto-stamped by
-# `make changelog VERSION=vX.Y.Z` so it never drifts; bump by hand only if releasing without that step.
-appVersion: "3.0.0"
+# version (chart) and appVersion both track the release version. release-please bumps the two annotated
+# lines below on each release (see release-please-config.json extra-files); scripts/publish.sh also derives
+# both from the git tag at publish time, so the registry and the source never drift.
+version: 0.5.0 # x-release-please-version
+appVersion: "3.0.0" # x-release-please-version

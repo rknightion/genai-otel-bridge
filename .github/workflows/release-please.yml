@@ -1,0 +1,46 @@
+# Release automation. On every push to main, release-please maintains a "release PR" that accrues
+# changes and, from the Conventional Commits since the last release, computes the next semver and
+# updates CHANGELOG.md + deploy/helm/Chart.yaml (version + appVersion). Merging that PR tags vX.Y.Z,
+# creates the GitHub Release (notes = that version's changelog section), and triggers the publish below.
+#
+# NB: publish runs HERE, gated on release_created — NOT via the v* tag-push event — because a tag created
+# with GITHUB_TOKEN does not trigger other workflows. Likewise the release PR is opened with GITHUB_TOKEN,
+# so CI does not auto-run on it; merge it as a repo admin (branch protection's enforce_admins=false lets
+# admins bypass) — its content (changelog + version bump) was already validated when the underlying
+# commits landed.
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # create the release commit, tag, and GitHub Release
+      pull-requests: write      # open/update the release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Build + push the image and chart for the freshly-created tag. Same run as the merge that created it.
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/publish.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      release_tag: ${{ needs.release-please.outputs.tag_name }}

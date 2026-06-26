@@ -1,0 +1,58 @@
+# Reusable publish: build the multi-arch image + Helm chart for a given release tag and push to GHCR.
+#   image: ghcr.io/<owner>/genai-otel-bridge:<vX.Y.Z> + :latest
+#   chart: oci://ghcr.io/<owner>/charts/genai-otel-bridge  (version X.Y.Z)
+# Called by release-please.yml when a release is created (the tag-push event can't drive this — tags
+# created with GITHUB_TOKEN do not trigger workflows). Also dispatchable by hand for a re-publish.
+# Auth uses the workflow's GITHUB_TOKEN (packages: write). Packages inherit the repo's visibility.
+name: publish
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Release tag to publish, e.g. v1.2.3"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to publish, e.g. v1.2.3"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.release_tag }}   # build exactly the tagged commit
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+      - name: Publish image + chart
+        run: HELM=helm bash scripts/publish.sh
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          IMAGE_REPO: genai-otel-bridge
+          CHART_REPO: charts
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GIT_SHA: ${{ github.sha }}
+          SETUP_BUILDX: "0"   # buildx already configured by docker/setup-buildx-action

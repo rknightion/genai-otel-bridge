@@ -8,20 +8,16 @@ ENVTEST_K8S_VERSION   ?= 1.35.0
 HELM_VERSION          ?= v3.18.3
 K3D_VERSION           ?= v5.9.0
 K3S_IMAGE             ?= rancher/k3s:v1.35.1-k3s1
-GIT_CLIFF_VERSION     ?= v2.13.1
 IMAGE                 ?= genai-otel-bridge:dev
 E2E_HELPER_IMAGE      ?= genai-otel-bridge-e2e-helper:dev
 
 TOOLS_DIR := $(CURDIR)/.tools
 export PATH := $(TOOLS_DIR):$(PATH)
 
-# git-cliff: prefer one already on PATH (e.g. `brew install git-cliff`), else the pinned .tools binary.
-GIT_CLIFF := $(shell command -v git-cliff 2>/dev/null || echo $(TOOLS_DIR)/git-cliff)
-
 .PHONY: build test vet lint gate generate generate-check \
         tools tools-e2e \
         ci ci-build ci-vet ci-lint ci-lint-acceptance ci-test ci-race ci-acceptance ci-envtest \
-        forbidden-words spdx-check helm-lint changelog install-hooks gen-dashboard \
+        forbidden-words spdx-check helm-lint install-hooks gen-dashboard \
         ci-e2e image image-local helm-package k3d-up k3d-down k3d-e2e \
         publish
 
@@ -133,31 +129,9 @@ publish: tools-e2e
 	HELM=$(TOOLS_DIR)/helm bash scripts/publish.sh
 
 # ── release tooling ───────────────────────────────────────────────────────────
-# git-cliff: install a pinned binary into .tools/ unless one is already on PATH.
-tools-changelog:
-	@command -v git-cliff >/dev/null 2>&1 && exit 0; \
-	 test -x $(TOOLS_DIR)/git-cliff && exit 0; \
-	 mkdir -p $(TOOLS_DIR); \
-	 os=$$($(GO) env GOOS); arch=$$($(GO) env GOARCH); \
-	 case "$$os/$$arch" in \
-	   darwin/arm64) t=aarch64-apple-darwin ;; darwin/amd64) t=x86_64-apple-darwin ;; \
-	   linux/amd64)  t=x86_64-unknown-linux-gnu ;; linux/arm64) t=aarch64-unknown-linux-gnu ;; \
-	   *) echo "no git-cliff prebuilt for $$os/$$arch — install manually (brew/cargo)" >&2; exit 1 ;; \
-	 esac; \
-	 v=$(GIT_CLIFF_VERSION); b=$${v#v}; tmp=$$(mktemp -d); \
-	 curl -sSfL "https://github.com/orhun/git-cliff/releases/download/$$v/git-cliff-$$b-$$t.tar.gz" | tar -xz -C $$tmp; \
-	 install -m0755 "$$(find $$tmp -name git-cliff -type f | head -1)" $(TOOLS_DIR)/git-cliff; rm -rf $$tmp
-
-# Prepend the next release's section to CHANGELOG.md from UNRELEASED conventional commits (post the
-# latest vX.Y.Z tag — so only clean, post-1.0.0 history is ever included). Usage: make changelog VERSION=v1.1.0
-changelog: tools-changelog
-	@test -n "$(VERSION)" || { echo "usage: make changelog VERSION=vX.Y.Z" >&2; exit 1; }
-	$(GIT_CLIFF) --unreleased --tag $(VERSION) --prepend CHANGELOG.md
-	@echo "CHANGELOG.md: prepended $(VERSION)"
-	@v="$(VERSION)"; v="$${v#v}"; \
-	  sed -e "s/^appVersion:.*/appVersion: \"$$v\"/" deploy/helm/Chart.yaml > deploy/helm/Chart.yaml.tmp \
-	  && mv deploy/helm/Chart.yaml.tmp deploy/helm/Chart.yaml; \
-	  echo "Chart.yaml: appVersion -> $$v (app.kubernetes.io/version label)"
+# Releases are automated by release-please (.github/workflows/release-please.yml): it maintains a
+# release PR from Conventional Commits, and on merge bumps CHANGELOG.md + deploy/helm/Chart.yaml,
+# tags vX.Y.Z, creates the GitHub Release, and triggers publish.yml. No local changelog target.
 
 # Symlink the repo git hooks into .git/hooks (pre-commit runs the forbidden-words gate on staged files).
 install-hooks:

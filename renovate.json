@@ -13,7 +13,7 @@
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
   "labels": ["dependencies"],
-  "description": "chore(deps) keeps dep bumps out of the git-cliff CHANGELOG (chore is excluded); see CLAUDE.md release ritual. No schedule — PRs open as soon as a release clears minimumReleaseAge; non-major bumps automerge once CI is green. The repo is public, so GitHub-native auto-merge (platformAutomerge) gates on the `ci-success` required status check set by main's branch protection (enforce_admins=false, so admin direct-to-main pushes bypass it; the Renovate bot does not); majors still open a PR for manual merge.",
+  "description": "chore(deps) keeps dep bumps out of the release CHANGELOG (release-please hides chore); see CLAUDE.md release ritual. No schedule — PRs open as soon as a release clears minimumReleaseAge; non-major bumps automerge once CI is green. The repo is public, so GitHub-native auto-merge (platformAutomerge) gates on the `ci-success` required status check set by main's branch protection (enforce_admins=false, so admin direct-to-main pushes bypass it; the Renovate bot does not); majors still open a PR for manual merge.",
   "automerge": true,
   "platformAutomerge": true,
   "automergeStrategy": "squash",

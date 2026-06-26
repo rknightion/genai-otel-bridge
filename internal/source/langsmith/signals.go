@@ -12,7 +12,7 @@ import "github.com/rknightion/genai-otel-bridge/internal/docs/signal"
 // (settings.go: session_label_key is deliberately NOT settable) — render the literal, not a template.
 func Signals() []signal.Signal {
 	const px = "{loops.sessions.metric_prefix}" // configurable, default "langsmith"
-	const sess = "session"                       // FIXED, not configurable
+	const sess = "session"                      // FIXED, not configurable
 	const dep = "loops.sessions.enabled=true"
 	m := func(suffix, unit, desc string, attrs ...string) signal.Signal {
 		return signal.Signal{

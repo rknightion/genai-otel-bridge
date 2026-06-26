@@ -1,0 +1,10 @@
+# gitleaks config — extend the upstream default ruleset, allowlist intentional placeholders.
+# Used by the secret-scan CI job (scripts run `gitleaks detect`).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "intentional placeholder/example values, not real secrets"
+paths = [
+  '''scripts/forbidden-words\.local\.example''',
+]

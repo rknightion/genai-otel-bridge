@@ -9,6 +9,9 @@
 # Format: one regex fragment per line; blank lines and #-comments are ignored; matched case-insensitively.
 # Use \b...\b for whole-word matches and escape literal dots (\.) so e.g. an internal hostname matches.
 #
+# Only deployment-specific IDENTIFIERS go here. Generic credential shapes (private keys, PAT/token
+# prefixes, AWS key ids) are already BUILT IN to forbidden-words.sh — no need to list them.
+#
 # Examples (replace with your own — these are illustrative only):
 your-customer-name
 your-internal-host\.example\.net

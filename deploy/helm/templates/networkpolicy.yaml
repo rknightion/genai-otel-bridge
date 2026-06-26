@@ -24,7 +24,7 @@
 #          egress:
 #            - toFQDNs:
 #                - matchName: "api.portkey.ai"
-#                - matchName: "otlp-gateway-prod-us-east-0.grafana.net"
+#                - matchName: "otlp-gateway-<region>.grafana.net"   # your Grafana Cloud OTLP host
 #              toPorts:
 #                - ports:
 #                    - port: "443"

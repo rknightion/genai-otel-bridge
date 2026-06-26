@@ -48,9 +48,10 @@ officially representing the community in public spaces.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community
-leaders responsible for enforcement at **rob.knight@grafana.com**. All complaints will be reviewed
-and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported privately to the
+project maintainers by opening a [private security advisory](https://github.com/rknightion/genai-otel-bridge/security/advisories/new)
+on this repository (the maintainers' private channel). All complaints will be reviewed and investigated
+promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any
 incident.

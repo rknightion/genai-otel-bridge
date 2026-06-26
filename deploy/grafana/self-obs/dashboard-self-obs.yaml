@@ -130,6 +130,35 @@ spec:
         spec:
           query: label_values(decant_window_lag_seconds,loop)
           refId: PrometheusVariableQueryEditor-VariableQuery
+  - kind: QueryVariable
+    spec:
+      name: namespace
+      label: Namespace
+      definition: label_values({service_name="decant"}, namespace)
+      current:
+        text:
+        - All
+        value:
+        - $__all
+      hide: dontHide
+      includeAll: true
+      allValue: .+
+      multi: true
+      options: []
+      regex: ''
+      sort: alphabeticalAsc
+      refresh: onDashboardLoad
+      skipUrlSync: false
+      allowCustomValue: true
+      query:
+        kind: DataQuery
+        group: loki
+        version: v0
+        datasource:
+          name: ${loki}
+        spec:
+          query: label_values({service_name="decant"}, namespace)
+          refId: LokiVariableQueryEditor-VariableQuery
   elements:
     panel-100:
       kind: Panel
@@ -1966,7 +1995,7 @@ spec:
       spec:
         id: 160
         title: Log rate by level
-        description: "count_over_time of the poller's OWN stdout (namespace=grafana-poller, service_name=decant), by detected level. A warn/error climb corroborates the metric-side signals (e.g. Portkey fetch timeouts). Uses Loki's $__auto range (NOT $__rate_interval \u2014 that is Prometheus-only)."
+        description: "count_over_time of the poller's OWN stdout (namespace=$namespace, service_name=decant), by detected level. A warn/error climb corroborates the metric-side signals (e.g. Portkey fetch timeouts). Uses Loki's $__auto range (NOT $__rate_interval \u2014 that is Prometheus-only)."
         links: []
         data:
           kind: QueryGroup
@@ -1984,7 +2013,7 @@ spec:
                     name: ${loki}
                   spec:
                     editorMode: code
-                    expr: sum by (detected_level) (count_over_time({namespace="grafana-poller", service_name="decant", container="decant"} [$__auto]))
+                    expr: sum by (detected_level) (count_over_time({namespace=~"$namespace", service_name="decant", container="decant"} [$__auto]))
                     queryType: range
                     maxLines: 1000
             queryOptions: {}
@@ -2097,7 +2126,7 @@ spec:
                     name: ${loki}
                   spec:
                     editorMode: code
-                    expr: '{namespace="grafana-poller", service_name="decant", container="decant"} | detected_level=~"warn|error"'
+                    expr: '{namespace=~"$namespace", service_name="decant", container="decant"} | detected_level=~"warn|error"'
                     queryType: range
                     maxLines: 1000
             queryOptions: {}

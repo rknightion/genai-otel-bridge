@@ -14,11 +14,9 @@ released `2.x` minor and shipped in a new patch release. Older majors are not ma
 
 Please **do not open a public issue** for security vulnerabilities.
 
-Report privately via one of:
-
-- GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
-  on this repository (Security → Report a vulnerability), or
-- email **rob.knight@grafana.com** with the details and, if possible, a minimal reproduction.
+Report privately via GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
+on this repository (**Security → Report a vulnerability**), including the details and, if possible, a
+minimal reproduction.
 
 You can expect an acknowledgement within a few business days. We will keep you informed of
 progress, agree a disclosure timeline with you, and credit you in the release notes unless you

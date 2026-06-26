@@ -17,7 +17,7 @@ import (
 func baseLogsSettings() map[string]string {
 	return map[string]string{
 		"workspace_id":           "ws-test",
-		"signed_url_allow_hosts": "ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com",
+		"signed_url_allow_hosts": "signed-url-host.example.com",
 	}
 }
 

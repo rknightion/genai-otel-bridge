@@ -544,9 +544,9 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   export per `current_page`. (c) **No DELETE** — exports are permanent server-side records; "cleanup"
   = `cancel` on queued/in_progress only; terminal jobs persist. (d) **Signed URL re-call mints a fresh
   URL** — expiry recovery and idempotent resume are the same cheap operation. (e) **Control-plane vs
-  in-VPC:** lifecycle API on `api.portkey.ai`; download on
-  `ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com` (us-west-2); a self-hosted Portkey
-  changes both hosts — `signed_url_allow_hosts` allow-list required before fetch (DESIGN §4.7:271).
+  in-VPC:** lifecycle API on `api.portkey.ai`; download on Portkey's signed-URL host (e.g.
+  `signed-url-host.example.com`); a self-hosted Portkey changes both hosts —
+  `signed_url_allow_hosts` allow-list required before fetch (DESIGN §4.7:271).
   The Loop/Collect variant encodes the job state machine in `Watermark.Cursor` (JSON: `phase`,
   `job_id`, `win_min/max`, `page`, `pages`, `total_records`) — one non-blocking step per tick, empty
   batch while mid-flight; `Watermark.Time` advances only when all pages of a window are emitted. No

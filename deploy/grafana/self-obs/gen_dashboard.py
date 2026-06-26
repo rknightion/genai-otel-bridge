@@ -22,7 +22,7 @@ LOOP = '{loop=~"$loop"}'
 RI = "$__rate_interval"
 # The poller's OWN operational logs (Go slog -> stdout -> Alloy -> Loki). This is the
 # integrator process, NOT the high-volume republished product logs (service_namespace=decant).
-SELF_LOGS = '{namespace="grafana-poller", service_name="decant", container="decant"}'
+SELF_LOGS = '{namespace=~"$namespace", service_name="decant", container="decant"}'
 
 
 # --------------------------------------------------------------------------- queries
@@ -212,7 +212,7 @@ add(ts(152, "Samples capped /s (DPM)", "rate(decant_samples_capped_total). DPM c
        "cps", [(f'sum by (loop) (rate(decant_samples_capped_total{LOOP}[{RI}]))', "{{loop}}")]))
 
 # === Tab: Logs (the poller's own stdout) =====================================
-add(loki_ts(160, "Log rate by level", "count_over_time of the poller's OWN stdout (namespace=grafana-poller, service_name=decant), by detected level. A warn/error climb corroborates the metric-side signals (e.g. Portkey fetch timeouts). Uses Loki's $__auto range (NOT $__rate_interval — that is Prometheus-only).",
+add(loki_ts(160, "Log rate by level", "count_over_time of the poller's OWN stdout (namespace=$namespace, service_name=decant), by detected level. A warn/error climb corroborates the metric-side signals (e.g. Portkey fetch timeouts). Uses Loki's $__auto range (NOT $__rate_interval — that is Prometheus-only).",
             "cps", [(f'sum by (detected_level) (count_over_time({SELF_LOGS} [$__auto]))', "{{detected_level}}")]))
 add(stat(162, "Warn+error logs (15m)", "Count of the poller's own warn/error stdout lines in the last 15m. Inline LogQL — independent of the metric pipeline, so it still reports if emit is down.", "0", unit="short"))
 add(logs_panel(161, "Poller logs (warn+error)", "The integrator's own warn/error stdout. NOT the republished product logs (those are service_namespace=decant, high volume). Drill here when a metric signal fires.",
@@ -296,6 +296,14 @@ variables = [
         "refresh": "onDashboardLoad", "skipUrlSync": False, "allowCustomValue": True,
         "query": {"kind": "DataQuery", "group": "prometheus", "version": "v0", "datasource": {"name": PROM},
                   "spec": {"query": "label_values(decant_window_lag_seconds,loop)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}}}},
+    {"kind": "QueryVariable", "spec": {
+        "name": "namespace", "label": "Namespace",
+        "definition": "label_values({service_name=\"decant\"}, namespace)",
+        "current": {"text": ["All"], "value": ["$__all"]}, "hide": "dontHide", "includeAll": True,
+        "allValue": ".+", "multi": True, "options": [], "regex": "", "sort": "alphabeticalAsc",
+        "refresh": "onDashboardLoad", "skipUrlSync": False, "allowCustomValue": True,
+        "query": {"kind": "DataQuery", "group": "loki", "version": "v0", "datasource": {"name": LOKI},
+                  "spec": {"query": "label_values({service_name=\"decant\"}, namespace)", "refId": "LokiVariableQueryEditor-VariableQuery"}}}},
 ]
 
 spec = {

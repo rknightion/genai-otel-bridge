@@ -101,7 +101,7 @@ func ExampleSource() config.SourceConfig {
 					"metadata_trace_id_field": "",
 					"trace_id_field":          "",
 					"workspace_id":            "<your-workspace-id>",
-					"signed_url_allow_hosts":  "ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com",
+					"signed_url_allow_hosts":  "signed-url-host.example.com",
 				},
 			},
 		},

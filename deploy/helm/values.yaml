@@ -327,7 +327,7 @@ config:
 #           # exclude the still-mutating recent tail from the query upper bound
 #           settle: 10m
 #           # logs_export: REQUIRED — allow-list of S3 hosts for the signed download URL (SSRF guard)
-#           signed_url_allow_hosts: ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com
+#           signed_url_allow_hosts: signed-url-host.example.com
 #           # logs_export: name ONE TOP-LEVEL export field (e.g. Portkey's native trace_id) whose UUID value is mapped to the OTLP log trace_id (logs↔traces correlation), default empty. The alternative to metadata_trace_id_field for deployments that stamp the trace id as a first-class field; the two are mutually exclusive. Auto-added to the record tier + requested_data. A non-UUID value leaves trace_id unset (counted via trace_id_unparsed) but still ships as a record attr.
 #           trace_id_field: ""
 #           # logs_export: per-export query span; the scheduler is snapshot-gated (LoopConfig.Window==0)

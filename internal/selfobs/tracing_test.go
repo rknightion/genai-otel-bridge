@@ -38,7 +38,7 @@ func TestNewTracerProviderTokenlessNoAuth(t *testing.T) {
 		t.Fatalf("token-less endpoint must carry no auth headers, got %v", h)
 	}
 	tp, shutdown, err := NewTracerProvider(context.Background(), TracingConfig{
-		Endpoint:         "http://alloy-receiver.obs.svc.cluster.local:4318", // cleartext in-cluster
+		Endpoint:         "http://alloy.monitoring.svc.cluster.local:4318", // cleartext in-cluster
 		ServiceNamespace: "decant-meta", Environment: "dev", Instance: "pod-1",
 	})
 	if err != nil {

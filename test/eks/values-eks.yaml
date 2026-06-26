@@ -162,7 +162,7 @@ configOverride: |
           cadence: 60s
           settings:
             workspace_id: ${PORTKEY_WORKSPACE_ID}
-            signed_url_allow_hosts: ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com
+            signed_url_allow_hosts: signed-url-host.example.com
             requested_data: ai_model,ai_org,cost,created_at,id,prompt_id,prompt_slug,prompt_version_id,req_units,res_units,response_status_code,response_time,total_units,trace_id
             extra_record_fields: cache_status
             # Map the source's native top-level trace_id field → OTLP log trace_id (native logs↔traces

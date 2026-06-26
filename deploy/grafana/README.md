@@ -50,7 +50,7 @@ threshold alerts/panels rely on the recording rules being present). Re-pull to r
 | Emit pipeline | emitted samples/logs, emit errors by kind, queue depth, samples skipped/capped, guard dropped, buckets revised after settle |
 | Upstream source health | request rate/latency/error-ratio per target, auth errors, source-graph-unavailable |
 | Cardinality & governance | new-label-value growth, guard drops, DPM capping |
-| Logs | the poller's OWN stdout (`{namespace="grafana-poller", service_name="decant"}`) — log rate by level + a warn/error stream. NOT the high-volume republished product logs (`service_namespace=decant`) |
+| Logs | the poller's OWN stdout (`{namespace="$namespace", service_name="decant"}`, via the dashboard's namespace variable) — log rate by level + a warn/error stream. NOT the high-volume republished product logs (`service_namespace=decant`) |
 | Profiling | the poller's OWN Pyroscope profiles (`service_name=decant`): CPU, heap in-use, goroutines, CPU flame graph |
 
 Three datasource variables — `${datasource}` (Prometheus, `grafanacloud-prom`), `${loki}`

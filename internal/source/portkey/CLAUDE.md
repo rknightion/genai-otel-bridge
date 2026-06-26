@@ -199,7 +199,7 @@ allow-list), `logs_settings.go` (decoupled knobs + `newLogsExportLoop`).
   counter via `policy.traceIDAttrKey()`. Live-probe note: this workspace's native `trace_id` is ~55% real
   UUIDs / ~45% free-text caller labels, so the unparsed counter tracks the un-mappable fraction)
   `signed_url_allow_hosts`(req'd) `workspace_id`(req'd). Example config block:
-  `loops.logs_export: {enabled: true, cadence: 60s, settings: {workspace_id: ws-…, signed_url_allow_hosts: "ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com", window: 1h, settle: 10m}}`.
+  `loops.logs_export: {enabled: true, cadence: 60s, settings: {workspace_id: ws-…, signed_url_allow_hosts: "signed-url-host.example.com", window: 1h, settle: 10m}}`.
 - **GS1 is a SHIP prerequisite, not a code blocker:** the indexed attrs need stack-side Loki stream-label
   promotion (`ai_org`/`ai_model`/`response_status_code`) to be queryable as `{label=…}`; until then
   they land as structured metadata. Grafana-staff stack-side action.

@@ -169,14 +169,14 @@ func TestDownloadChunkNon200Errors(t *testing.T) {
 }
 
 func TestValidateSignedURLHost(t *testing.T) {
-	l := &logsExportLoop{signedURLAllowHosts: []string{"ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com"}}
-	if err := l.validateSignedURLHost("https://ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com/x.jsonl?sig=1"); err != nil {
+	l := &logsExportLoop{signedURLAllowHosts: []string{"signed-url-host.example.com"}}
+	if err := l.validateSignedURLHost("https://signed-url-host.example.com/x.jsonl?sig=1"); err != nil {
 		t.Fatalf("allow-listed host rejected: %v", err)
 	}
 	for _, bad := range []string{
 		"https://evil.example.com/x.jsonl",
 		"https://169.254.169.254/latest/meta-data/",
-		"http://ai-gateway-dataservice-us-prod.s3.us-west-2.amazonaws.com.evil.com/x",
+		"http://signed-url-host.example.com.evil.com/x",
 	} {
 		if err := l.validateSignedURLHost(bad); err == nil {
 			t.Fatalf("host %q must be rejected (not in allow-list)", bad)

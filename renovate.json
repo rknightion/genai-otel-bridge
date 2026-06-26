@@ -17,6 +17,7 @@
   "automerge": true,
   "platformAutomerge": true,
   "automergeStrategy": "squash",
+  "internalChecksAsSuccess": true,
   "postUpdateOptions": [
     "gomodTidy",
     "gomodUpdateImportPaths",

@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [3.0.0] - 2026-06-26
+
+### Build & CI
+- Harden GitHub Actions workflow (zizmor)
+- Enforce the forbidden-words guard in CI via FORBIDDEN_WORDS_PATTERN
+- Strengthen leak detection — credential shapes, gitleaks, fix silent grep bug
+
+### Refactor
+- Unify project naming as genai-otel-bridge (retire "decant")
 ## [2.1.1] - 2026-06-25
 
 ### Bug Fixes

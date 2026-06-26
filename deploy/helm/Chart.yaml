@@ -7,4 +7,4 @@ kubeVersion: ">=1.21.0-0"
 version: 0.5.0
 # appVersion tracks the released app version (surfaces as app.kubernetes.io/version). Auto-stamped by
 # `make changelog VERSION=vX.Y.Z` so it never drifts; bump by hand only if releasing without that step.
-appVersion: "2.1.1"
+appVersion: "3.0.0"

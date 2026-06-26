@@ -18,7 +18,7 @@ Each loop is independently enabled via its own `loops.<name>` config block.
 
 ## Sessions loop
 
-The sessions loop polls `GET /api/v1/sessions?include_stats=true` and emits per-session
+The sessions loop polls `GET /sessions?include_stats=true` (relative to `base_url`) and emits per-session
 aggregate gauges. Unlike the Portkey analytics loop this is **not time-bucketed**: stats are
 a rolling snapshot over the configured `stats_window`, and every sample is stamped at
 `now.Truncate(1m)` so two polls in the same wall-clock minute share a timestamp (1 data
@@ -60,10 +60,11 @@ unbounded cardinality growth.
 
 ```yaml
 sources:
-  - id: langsmith-main
-    type: langsmith
-    api_key: ${LANGSMITH_API_KEY}
+  - type: langsmith
+    enabled: true
     base_url: https://api.smith.langchain.com
+    source_instance: langsmith-${ENV}
+    auth: { header: x-api-key, value: ${LANGSMITH_API_KEY} }
     loops:
       sessions:
         enabled: true
@@ -80,7 +81,7 @@ sources:
 
 ## Runs loop
 
-The runs loop queries `POST /api/v1/runs/query` and emits one content-free OTLP log record
+The runs loop queries `POST /runs/query` (relative to `base_url`) and emits one content-free OTLP log record
 per run. Records carry operational fields (run type, status, latency, token counts, cost,
 IDs) as structured metadata; inputs, outputs, and messages are never included.
 

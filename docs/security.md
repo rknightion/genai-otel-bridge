@@ -68,8 +68,10 @@ origin. The redirect check also re-runs the host allow-list and IP guard on ever
 Credentials are never stored in git. The config file supports two secret reference forms:
 
 ```yaml
-api_key: ${PORTKEY_API_KEY}      # resolved from the environment
-api_key: file:/run/secrets/key   # resolved from a file path at load time
+auth:
+  header: x-portkey-api-key
+  value: ${PORTKEY_API_KEY}       # resolved from the environment
+  # value: file:/run/secrets/key  # ...or resolved from a file path at load time
 ```
 
 Plaintext credentials in the config file are accepted for dev use but should be avoided in

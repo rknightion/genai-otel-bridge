@@ -110,8 +110,8 @@ provisioning.
 | Rule | What it computes |
 |------|-----------------|
 | `genai-otel-bridge:last_success_age:seconds` | `time() − max by (loop)(last_success_timestamp_seconds)` — staleness in seconds per loop |
-| `genai-otel-bridge:baseline6h` | Trailing 6h p90 of `last_success_age:seconds` per loop — the self-relative staleness baseline |
-| `genai-otel-bridge:freshness_ratio` | `last_success_age / baseline6h` — the ratio the dashboard colours on |
+| `genai-otel-bridge:last_success_age:baseline6h` | Trailing 6h p90 of `last_success_age:seconds` per loop — the self-relative staleness baseline |
+| `genai-otel-bridge:freshness_ratio` | `last_success_age:seconds / last_success_age:baseline6h` — the ratio the dashboard colours on |
 | `genai-otel-bridge:upstream_error_ratio:5m` | Error ratio per upstream `target` — drives the upstream-health panel and `GenaiOtelBridgeUpstreamErrorBudget` alert |
 | `genai-otel-bridge:window_truncated:rate5m` | Rate of window-truncation events per loop — drives `GenaiOtelBridgeWindowTruncatedDroppingRecords` |
 | `genai-otel-bridge:scrape_healthy` | 1 when the leader's last successful collect+emit is recent |

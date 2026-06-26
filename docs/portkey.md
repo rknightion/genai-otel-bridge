@@ -36,7 +36,8 @@ With the default `metric_prefix: portkey_api`, the analytics loop emits:
 | `portkey_api_errors` | — | Error count per bucket |
 | `portkey_api_users` | — | Distinct user count per bucket |
 
-Which metrics are collected is controlled by the `graphs` setting (default: all six).
+Which metrics are collected is controlled by the `graphs` setting. The default set is five —
+`requests`, `cost`, `tokens`, `latency`, `errors`; `users` is opt-in (add it explicitly).
 
 !!! warning "Use `sum_over_time`, not `rate` or `increase`"
     These are gauges, not counters. To aggregate over a time range use
@@ -68,9 +69,11 @@ the p95 of observed revision ages rather than guessing.
 
 ```yaml
 sources:
-  - id: portkey-main
-    type: portkey
-    api_key: ${PORTKEY_API_KEY}
+  - type: portkey
+    enabled: true
+    base_url: https://api.portkey.ai/v1
+    source_instance: portkey-${ENV}
+    auth: { header: x-portkey-api-key, value: ${PORTKEY_API_KEY} }
     loops:
       analytics:
         enabled: true
@@ -79,13 +82,13 @@ sources:
         bucket_settle: 3m
         max_backfill: 90m
         metric_prefix: portkey_api
-        graphs:
+        graphs:            # default: requests, cost, tokens, latency, errors
           - requests
           - cost
           - tokens
           - latency
           - errors
-          - users
+          - users          # opt-in: distinct-user count (not in the default set)
 ```
 
 ---

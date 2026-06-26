@@ -182,7 +182,7 @@ Mimir's accept window), `payload_too_large` (413 on a minimal chunk), or
    loop's `max_backfill` exceeds the Mimir window, or the stack's OOO window is too small
    for the intended max downtime. Request Grafana Support to raise it (GS2).
 2. **`payload_too_large`:** the minimum emit chunk exceeds the gateway's payload limit.
-   Reduce `max_records_per_chunk` on the relevant loop.
+   Reduce `chunk_max_records` on the relevant logs loop.
 3. **`duplicate_timestamp`:** two sources are writing to the same `(series, timestamp)`.
    Check for overlapping series names across sources — this is caught at startup but can
    appear after config changes.

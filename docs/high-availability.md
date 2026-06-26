@@ -78,7 +78,7 @@ for stability.
 ```yaml
 ha:
   coordinator: lease
-  checkpoint_store: configmap
+  checkpoint: configmap
 ```
 
 **File backend (dev/test only)** — a local YAML file. Uses atomic temp-then-rename writes.
@@ -87,9 +87,8 @@ validation rejects `file` + `coordinator: lease` in combination.
 
 ```yaml
 ha:
-  coordinator: noop
-  checkpoint_store: file
-  checkpoint_path: /tmp/checkpoints.yaml
+  coordinator: none
+  checkpoint: file
 ```
 
 ### Checkpoint key
@@ -143,8 +142,8 @@ ServiceAccount.
 
 ## Noop mode (single replica / dev)
 
-Set `coordinator: noop` for a single-replica or dev deployment. The noop coordinator always
-leads with epoch 1 and never contacts the Kubernetes API. Pair with `checkpoint_store: file`
+Set `coordinator: none` for a single-replica or dev deployment. The no-op coordinator always
+leads with epoch 1 and never contacts the Kubernetes API. Pair with `checkpoint: file`
 for fully local operation.
 
 ---

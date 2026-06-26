@@ -201,9 +201,9 @@ corrupt file. Do not use the file backend in production HA mode.
 
 **Symptom:** `genai_otel_bridge_*` metrics are absent from the self-obs stack.
 
-Confirm that `emit.self_obs` is configured and points to the correct OTLP endpoint. The
-self-obs resource identity uses a distinct `service.namespace` from the product telemetry
-(`emit.telemetry`), so they can be routed to different stacks. If only the self-obs endpoint
+Confirm `emit.self` (optional — when unset it falls back to `emit.telemetry`) points to the
+correct OTLP endpoint. The self-obs resource identity uses a distinct `service.namespace` from
+the product telemetry, so they can be routed to different stacks. If only the self-obs endpoint
 is missing data, check its OTLP endpoint, port, and credentials separately from the product
 endpoint.
 

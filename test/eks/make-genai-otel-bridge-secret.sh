@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Create/update the `decant-secrets` Secret that test/eks/values-eks.yaml's ${ENV} refs resolve from.
+# Create/update the `genai-otel-bridge-secrets` Secret that test/eks/values-eks.yaml's ${ENV} refs resolve from.
 #
 # This script contains NO secrets — it reads them from the environment (or an optional dotenv you point
-# DECANT_SECRET_ENV at) and writes the env-var keys the values file expects. Provide:
+# GENAI_OTEL_BRIDGE_SECRET_ENV at) and writes the env-var keys the values file expects. Provide:
 #   GC_OTLP_ENDPOINT, GC_INSTANCE_ID, GC_OTLP_TOKEN              product-plane Grafana Cloud OTLP creds
 #   GC_SELF_OTLP_ENDPOINT, GC_SELF_OTLP_INSTANCE_ID, GC_SELF_OTLP_TOKEN   self-obs OTLP creds
 #   GC_PYROSCOPE_URL, GC_PYROSCOPE_USER, GC_PYROSCOPE_PASSWORD  self-profiling push (Pyroscope)
@@ -11,17 +11,17 @@
 #   PORTKEY_WORKSPACE_ID                                        Portkey workspace UUID (logs_export)
 #   LANGSMITH_API_KEY, LANGSMITH_BASE_URL                       LangSmith source key + API base (must include /api/v1)
 #
-# Usage:  ./test/eks/make-decant-secret.sh [namespace]   (default namespace: default)
-#         DECANT_SECRET_ENV=./my.env ./test/eks/make-decant-secret.sh   (load vars from a dotenv first)
+# Usage:  ./test/eks/make-genai-otel-bridge-secret.sh [namespace]   (default namespace: default)
+#         GENAI_OTEL_BRIDGE_SECRET_ENV=./my.env ./test/eks/make-genai-otel-bridge-secret.sh   (load vars from a dotenv first)
 set -euo pipefail
 
 NS="${1:-default}"
 
-if [ -n "${DECANT_SECRET_ENV:-}" ]; then
-  [ -f "$DECANT_SECRET_ENV" ] || { echo "DECANT_SECRET_ENV=$DECANT_SECRET_ENV not found" >&2; exit 1; }
+if [ -n "${GENAI_OTEL_BRIDGE_SECRET_ENV:-}" ]; then
+  [ -f "$GENAI_OTEL_BRIDGE_SECRET_ENV" ] || { echo "GENAI_OTEL_BRIDGE_SECRET_ENV=$GENAI_OTEL_BRIDGE_SECRET_ENV not found" >&2; exit 1; }
   set -a
   # shellcheck disable=SC1090
-  . "$DECANT_SECRET_ENV"
+  . "$GENAI_OTEL_BRIDGE_SECRET_ENV"
   set +a
 fi
 
@@ -35,7 +35,7 @@ fi
 : "${LANGSMITH_API_KEY:?}"
 : "${LANGSMITH_BASE_URL:?the LangSmith API base, must include /api/v1}"
 
-kubectl create secret generic decant-secrets -n "$NS" \
+kubectl create secret generic genai-otel-bridge-secrets -n "$NS" \
   --from-literal=GC_OTLP_ENDPOINT="$GC_OTLP_ENDPOINT" \
   --from-literal=GC_INSTANCE_ID="$GC_INSTANCE_ID" \
   --from-literal=GC_OTLP_TOKEN="$GC_OTLP_TOKEN" \
@@ -52,4 +52,4 @@ kubectl create secret generic decant-secrets -n "$NS" \
   --from-literal=LANGSMITH_BASE_URL="$LANGSMITH_BASE_URL" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-echo "decant-secrets applied to namespace '$NS' (14 keys)"
+echo "genai-otel-bridge-secrets applied to namespace '$NS' (14 keys)"

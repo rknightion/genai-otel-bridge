@@ -1,11 +1,11 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: RecordingRule
 metadata:
-  name: decant-portkey-requests-sum5m
+  name: genai-otel-bridge-portkey-requests-sum5m
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
   title: portkey:requests:sum_5m
   metric: portkey:requests:sum_5m

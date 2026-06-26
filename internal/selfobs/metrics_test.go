@@ -55,9 +55,9 @@ func TestObserveUpstreamRequestRecordsHistogram(t *testing.T) {
 	if err := r.Collect(context.Background(), &rm); err != nil {
 		t.Fatal(err)
 	}
-	hist, ok := findHistogram(&rm, "decant_upstream_request_duration_seconds")
+	hist, ok := findHistogram(&rm, "genai_otel_bridge_upstream_request_duration_seconds")
 	if !ok {
-		t.Fatal("decant_upstream_request_duration_seconds histogram not recorded")
+		t.Fatal("genai_otel_bridge_upstream_request_duration_seconds histogram not recorded")
 	}
 	if len(hist.DataPoints) == 0 {
 		t.Fatal("histogram has no data points")
@@ -108,13 +108,13 @@ func TestSamplesCappedCounter(t *testing.T) {
 	found := false
 	for _, sm := range rm.ScopeMetrics {
 		for _, md := range sm.Metrics {
-			if md.Name == "decant_samples_capped_total" {
+			if md.Name == "genai_otel_bridge_samples_capped_total" {
 				found = true
 			}
 		}
 	}
 	if !found {
-		t.Fatal("decant_samples_capped_total not exported")
+		t.Fatal("genai_otel_bridge_samples_capped_total not exported")
 	}
 }
 
@@ -135,7 +135,7 @@ func TestAuthErrorCounter(t *testing.T) {
 	found := false
 	for _, sm := range rm.ScopeMetrics {
 		for _, md := range sm.Metrics {
-			if md.Name != "decant_auth_errors_total" {
+			if md.Name != "genai_otel_bridge_auth_errors_total" {
 				continue
 			}
 			sum, ok := md.Data.(metricdata.Sum[int64])
@@ -147,7 +147,7 @@ func TestAuthErrorCounter(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("decant_auth_errors_total not exported")
+		t.Fatal("genai_otel_bridge_auth_errors_total not exported")
 	}
 	if dp.Value != 1 {
 		t.Fatalf("auth_errors_total value=%d want 1", dp.Value)

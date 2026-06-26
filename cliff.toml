@@ -4,7 +4,7 @@
 header = """
 # Changelog
 
-All notable changes to decant. Generated from Conventional Commits.
+All notable changes to genai-otel-bridge. Generated from Conventional Commits.
 """
 body = """
 {% if version %}\

@@ -1,13 +1,13 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: decant-upstream-error-budget
+  name: genai-otel-bridge-upstream-error-budget
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: DecantUpstreamErrorBudget
+  title: GenaiOtelBridgeUpstreamErrorBudget
   # >20% of the poller's requests to the upstream source API are failing (4xx/5xx/error incl.
   # timeouts) over a 10m window. This is the vendor API health signal — a high error ratio means the
   # source is rejecting, rate-limiting, or timing out the poller. Collect retries will eventually
@@ -20,8 +20,8 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "decant upstream {{ $labels.target }} error ratio >20%"
-    description: "More than 20% of decant's requests to upstream source API {{ $labels.target }} are returning 4xx/5xx/error (including timeouts) over a 10m window. The vendor API is erroring, rejecting, or timing out the poller. If the ratio is sustained, collect retries will exhaust and loops will stall. Check the vendor API status page, decant_upstream_request_duration_seconds labels for error detail, and the pod logs for context-deadline/timeout messages. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge upstream {{ $labels.target }} error ratio >20%"
+    description: "More than 20% of genai-otel-bridge's requests to upstream source API {{ $labels.target }} are returning 4xx/5xx/error (including timeouts) over a 10m window. The vendor API is erroring, rejecting, or timing out the poller. If the ratio is sustained, collect retries will exhaust and loops will stall. Check the vendor API status page, genai_otel_bridge_upstream_request_duration_seconds labels for error detail, and the pod logs for context-deadline/timeout messages. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -29,7 +29,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: '(sum by (target) (rate(decant_upstream_request_duration_seconds_count{status_class=~"4xx|5xx|error"}[10m])) / clamp_min(sum by (target) (rate(decant_upstream_request_duration_seconds_count[10m])), 1e-9)) > 0.2'
+        expr: '(sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds_count{status_class=~"4xx|5xx|error"}[10m])) / clamp_min(sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds_count[10m])), 1e-9)) > 0.2'
         instant: true
         range: false
         intervalMs: 1000

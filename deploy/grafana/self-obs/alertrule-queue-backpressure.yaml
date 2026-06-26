@@ -1,13 +1,13 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: decant-queue-backpressure
+  name: genai-otel-bridge-queue-backpressure
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: DecantQueueBackpressure
+  title: GenaiOtelBridgeQueueBackpressure
   # The per-loop bounded emit queue is reporting a non-zero depth ratio for a sustained 15m — emit
   # cannot keep up with collect and batches are waiting in the queue (backpressure). In normal
   # operation the queue is empty (ratio=0) because emit completes well within the tick interval.
@@ -20,8 +20,8 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "decant {{ $labels.loop }} loop emit queue is backing up"
-    description: "decant_queue_depth_ratio for the {{ $labels.loop }} loop has been >0 for 15m — the emit queue is not draining fast enough (backpressure). Healthy operation is depth=0. Check emit latency / OTLP backend availability / decant_emit_errors_total. A non-draining queue will eventually cause windows to be skipped. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge {{ $labels.loop }} loop emit queue is backing up"
+    description: "genai_otel_bridge_queue_depth_ratio for the {{ $labels.loop }} loop has been >0 for 15m — the emit queue is not draining fast enough (backpressure). Healthy operation is depth=0. Check emit latency / OTLP backend availability / genai_otel_bridge_emit_errors_total. A non-draining queue will eventually cause windows to be skipped. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -29,7 +29,7 @@ spec:
       relativeTimeRange: {from: 16m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'max by (loop) (decant_queue_depth_ratio) > 0'
+        expr: 'max by (loop) (genai_otel_bridge_queue_depth_ratio) > 0'
         instant: true
         range: false
         intervalMs: 1000

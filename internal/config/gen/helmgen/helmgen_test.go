@@ -55,7 +55,7 @@ type sample struct {
 	// Endpoint is an env-ref field.
 	Endpoint string `yaml:"endpoint" helm:"env=GC_OTLP_ENDPOINT"`
 	// Name has a literal default.
-	Name string `yaml:"name" helm:"default=decant"`
+	Name string `yaml:"name" helm:"default=genai-otel-bridge"`
 	// Skipped is intentionally omitted.
 	Skipped string          `yaml:"skipped" helm:"omit"`
 	Nested  nested          `yaml:"nested"`
@@ -88,7 +88,7 @@ func TestRenderTagGrammar(t *testing.T) {
 	s := string(out)
 	checks := []string{
 		"endpoint: ${GC_OTLP_ENDPOINT}",
-		"name: decant",
+		"name: genai-otel-bridge",
 		"count: 7",
 		"kind: portkey",
 		"enabled: true",

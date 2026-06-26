@@ -47,7 +47,7 @@ type SeriesDeclarer interface {
 // IndexedKeyDeclarer is an OPTIONAL capability (not part of the frozen Loop): a LOGS loop that promotes
 // record fields to LogRecord.IndexedAttributes (OTLP resource attrs → Loki stream labels via GS1)
 // declares the FULL set it may emit (its base content-free allow-list ∪ settings.extra_indexed_fields).
-// The composition root sums these with decant's product identity resource attrs and rejects a config
+// The composition root sums these with genai-otel-bridge's product identity resource attrs and rejects a config
 // that would exceed the Loki max_label_names_per_series budget (governance.max_stream_label_keys) — a
 // stream over that limit is REJECTED (silently dropped) by Loki. Mirrors SeriesDeclarer.
 type IndexedKeyDeclarer interface {

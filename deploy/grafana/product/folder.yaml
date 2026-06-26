@@ -1,6 +1,6 @@
 apiVersion: folder.grafana.app/v1beta1
 kind: Folder
 metadata:
-  name: decant
+  name: genai-otel-bridge
 spec:
-  title: decant
+  title: genai-otel-bridge

@@ -18,7 +18,7 @@ import (
 
 type ProviderConfig struct {
 	Endpoint, InstanceID, Token string
-	ServiceNamespace            string // DISTINCT from product (H4), e.g. "decant-meta"
+	ServiceNamespace            string // DISTINCT from product (H4), e.g. "genai-otel-bridge-meta"
 	Environment                 string
 	Instance                    string // [CP-H8] per-replica id (POD_NAME) — diagnose leader overlap/disappearance
 	Interval                    time.Duration
@@ -45,7 +45,7 @@ func NewProvider(ctx context.Context, cfg ProviderConfig) (*metric.MeterProvider
 	// strings). This is the minimal distinct self identity we want (H4).
 	res := resource.NewSchemaless(
 		attribute.String("service.namespace", cfg.ServiceNamespace),
-		attribute.String("service.name", "decant"),
+		attribute.String("service.name", "genai-otel-bridge"),
 		attribute.String("deployment.environment.name", cfg.Environment),
 		attribute.String("service.instance.id", cfg.Instance), // [CP-H8] per-replica identity
 	)

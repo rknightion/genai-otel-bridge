@@ -1,4 +1,4 @@
-# Design spec — `decant` v1 (tracked design-of-record)
+# Design spec — `genai-otel-bridge` v1 (tracked design-of-record)
 
 **Tracked** (promoted from gitignored scratch on 2026-06-18 so the load-bearing invariants and the
 §12 review-disposition matrix are durable and reviewable from a clone). `ARCHITECTURE.md` is the
@@ -74,7 +74,7 @@ emitter; on-disk durable queue; data-sensitivity governance beyond data-minimisa
   (late/async-logged requests); late-arrival semantics are **undocumented**. **OP5d (§15) measured
   (2026-06-19):** max post-close late-arrival lag ~185s on a live traffic-bearing workspace → default
   `bucket_settle = 10m` (headroom); settle-exceedance now actively detected via
-  `decant_bucket_revised_after_settle_total` (followup.md §8).
+  `genai_otel_bridge_bucket_revised_after_settle_total` (followup.md §8).
 - No rate-limit headers; `is_quota_exceeded` boolean present. **On `is_quota_exceeded:true`, discard
   the whole batch** (derive nothing, advance nothing) + back off — never emit a quota-truncated body.
 - Client timeout 10s (per the originating analysis); configurable.
@@ -249,7 +249,7 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
 ### 4.6 Self-observability (`internal/selfobs`)
 - OTel-Go SDK meter+logger → OTLP (telemetry endpoint, or `emit.self` if set).
 - **Distinct resource identity (H4):** self-telemetry uses its own `service.namespace`
-  (e.g. `decant-meta`), never the product identity — otherwise the gateway synthesises the same `job`
+  (e.g. `genai-otel-bridge-meta`), never the product identity — otherwise the gateway synthesises the same `job`
   and a single shared `target_info` series, and the two producers collide (duplicate-timestamp) or
   flap. Self and product must never share a resource identity on one Mimir tenant.
 - **Self-metrics carry a per-replica `instance` (M4).** Staleness alerts are written as
@@ -804,7 +804,7 @@ Portkey source encodes; they **supersede** the corresponding assumptions in §3.
   is distinguishable from "poller down" from the data alone.
 - **OP5d — `bucket_settle` measured on a live workspace (2026-06-19).** Max post-close late-arrival
   lag observed: **~185s**. Default raised to **10m** for headroom. Settle-exceedance is now **actively
-  detected**: `decant_bucket_revised_after_settle_total{loop}` fires when a settled bucket changes —
+  detected**: `genai_otel_bridge_bucket_revised_after_settle_total{loop}` fires when a settled bucket changes —
   alert on `rate(...) > 0` to signal that `bucket_settle` should be bumped if load grows (followup.md §8).
   The **Mimir accept window** (caps `max_backfill`) is a stack-config lookup → GS2 deploy prereq, not a
   Portkey probe.

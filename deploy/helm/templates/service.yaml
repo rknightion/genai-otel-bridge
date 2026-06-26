@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: decant
+  name: genai-otel-bridge
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "decant.labels" . | nindent 4 }}
+    {{- include "genai-otel-bridge.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   selector:
-    {{- include "decant.selectorLabels" . | nindent 4 }}
+    {{- include "genai-otel-bridge.selectorLabels" . | nindent 4 }}
   ports:
     - name: health
       port: 8080

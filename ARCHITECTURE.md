@@ -1,4 +1,4 @@
-# Architecture — `genai-otel-bridge` (`decant`)
+# Architecture — `genai-otel-bridge` (`genai-otel-bridge`)
 
 **Status:** design (v1 in planning). **Audience:** maintainers and contributors.
 **Scope of this document:** the durable design — what the tool is, the components and the
@@ -12,14 +12,14 @@ tracked **`docs/DESIGN.md`**; only the step-by-step **implementation plans** liv
 
 ## 1. Purpose & scope
 
-`decant` is a **generic, vendor-neutral integrator** that pulls **operational telemetry** from
+`genai-otel-bridge` is a **generic, vendor-neutral integrator** that pulls **operational telemetry** from
 AI-platform APIs and emits it to Grafana Cloud (or any OTLP endpoint) as **metrics and logs**.
 
 It exists because the most operationally important signals for an LLM application platform —
 gateway cost/tokens/latency/errors/cache, and evaluation scores — are produced *inside*
 managed products (LLM gateways, eval platforms) and are reachable **only by their APIs**, not
 by scraping or OTLP push. Those APIs are pull-only, rate-limited, paginated, and return
-content you must be careful not to ingest. `decant` is the component that does that pulling
+content you must be careful not to ingest. `genai-otel-bridge` is the component that does that pulling
 well, once, and turns it into clean Grafana-native telemetry.
 
 **In scope**
@@ -68,7 +68,7 @@ well, once, and turns it into clean Grafana-native telemetry.
 ## 3. Architecture at a glance
 
 ```
-                          ┌──────────────────────── decant (Deployment, N replicas) ────────────────────────┐
+                          ┌──────────────────────── genai-otel-bridge (Deployment, N replicas) ────────────────────────┐
                           │                                                                                  │
                           │   Coordinator (k8s Lease)  ──elected──►  only the leader runs the Scheduler      │
                           │                                                                                  │
@@ -232,7 +232,7 @@ type Coordinator interface {
 ```
 
 The **registry** maps a config `type` string to a `Source` constructor. The **composition root**
-(`cmd/decant/main.go`) wires config → registry → enabled Sources → Scheduler → Emitter +
+(`cmd/genai-otel-bridge/main.go`) wires config → registry → enabled Sources → Scheduler → Emitter +
 Checkpointer + Coordinator. Wiring only; no logic.
 
 A thin, generic **governance guard** sits between derive and emit (analogous to an Alloy relabel
@@ -288,7 +288,7 @@ reflects a contiguous prefix of emitted data.
 
 ## 8. High availability — leader election & single-emit
 
-- `decant` runs as a **long-running Deployment with N replicas** (3 = active/passive/passive is a
+- `genai-otel-bridge` runs as a **long-running Deployment with N replicas** (3 = active/passive/passive is a
   sensible default; HA is opt-in via config, not mandatory).
 - The `Coordinator` is implemented with a **Kubernetes Lease** (`coordination.k8s.io/v1`, via
   client-go `leaderelection`). Exactly one replica holds the lease and runs the Scheduler;
@@ -353,9 +353,9 @@ default checkpointer, `configmaps` (get/create/update) in the tool's own namespa
 
 **Durability under a downstream (Grafana Cloud) outage — three tiers.** (1) *Default:* the in-memory
 queue + replay-from-watermark already covers crashes, failover, and transient outages (the source is
-the replayable buffer). (2) *Recommended for production:* front `decant` with a **persistent-queue
+the replayable buffer). (2) *Recommended for production:* front `genai-otel-bridge` with a **persistent-queue
 Alloy** (`otelcol.storage.file` on a PVC; `block_on_overflow=true`; `num_consumers=1` for metrics) —
-no `decant` code, and it owns buffering/retry to Grafana Cloud; the OTLP exporter's durability is an
+no `genai-otel-bridge` code, and it owns buffering/retry to Grafana Cloud; the OTLP exporter's durability is an
 opt-in persistent sending queue, distinct from the always-on `remote_write` WAL.
 (3) *The real lever for long outages:* **for metrics, no local buffer beats the backend's
 out-of-order / too-old accept window** — surviving a multi-hour outage means widening that window
@@ -447,7 +447,7 @@ The tool is on the production critical path, so it observes itself as a first-cl
 - **Self-logs**: structured (logfmt) to **stdout**, scraped by the k8s-monitoring collector → Loki —
   NOT pushed via OTLP (a deliberate divergence from OTLP-everywhere, for logs only; self-metrics stay
   OTLP-push). Format is config-keyed (`log.format`, default `logfmt`) for cheap Loki parsing; built in
-  `internal/logging`, set as the slog default in `cmd/decant`. (For an HTTP poller the logs carry most
+  `internal/logging`, set as the slog default in `cmd/genai-otel-bridge`. (For an HTTP poller the logs carry most
   of the causal story; **opt-in, default-off self-APM tracing** adds per-tick spans when enabled —
   decision #14, `selfobs.tracing.enabled`, same self OTLP path into Tempo.)
 - **Separate destination**: self-telemetry can be pushed to a **different OTLP endpoint** than the
@@ -478,7 +478,7 @@ emit:
       endpoint: ${META_OTLP_ENDPOINT}
 
 identity:                                      # → OTLP resource attributes
-  service_namespace: decant
+  service_namespace: genai-otel-bridge
   deployment_environment: ${ENV}
 
 ha:
@@ -511,7 +511,7 @@ sources:
     enabled: false                             # phase 3
     base_url: ${LANGSMITH_BASE_URL}
     auth: { header: x-api-key, value: ${LANGSMITH_API_KEY} }
-    http: { user_agent: "decant/0.1" }         # required: default UA may be WAF-blocked (see §15)
+    http: { user_agent: "genai-otel-bridge/0.1" }         # required: default UA may be WAF-blocked (see §15)
     rate_limit: { rps: 1, burst: 2 }
     loops:
       sessions: { enabled: true, cadence: 5m, metric_prefix: langsmith_project }
@@ -527,7 +527,7 @@ unknown source types), and is otherwise immutable for the process lifetime.
 
 ```
 genai-otel-bridge/
-├── cmd/decant/main.go            # composition root — wiring only
+├── cmd/genai-otel-bridge/main.go            # composition root — wiring only
 ├── internal/
 │   ├── config/                   # schema, load, validate, env-ref resolution
 │   ├── model/                    # Sample, LogRecord, Batch, Watermark  ← the central seam
@@ -646,7 +646,7 @@ modules must encode, and they **correct several assumptions** in the originating
 | 10 | Data minimisation by construction | Never request bodies/content; regulated-content framing parked | Fetch-then-strip (leak surface; parked to followup.md) |
 | 11 | Log model fields named by **intent** (`IndexedAttributes`/`RecordAttributes`), not a backend's vocabulary | The model is an internal *domain* type, not a wire type. Intent names carry the cardinality-discipline signal (`IndexedAttributes` = the guard-policed, low-cardinality tier) and stay accurate even under OTLP-only: a per-record indexed attr becomes an OTLP *resource* attr only via emitter grouping (so Loki can promote it) — it is not a "resource attribute" in the producer sense. The guard/data-min layer keeps operating on plain maps. | Loki vocabulary (`StreamLabels`/`StructuredMetadata`) in the neutral seam (backend leak, even though OTLP is the only backend); OTLP proto types in the model (awful source-author API, spreads proto-version churn through the core, loses the determinism chokepoint, and OTLP has no Batch/Watermark/CheckpointKey) |
 | 12 | **Opt-in, default-off self-profiling** (continuous profiling of the integrator's OWN runtime). Two config-selectable modes: **pull** (expose `net/http/pprof` on a dedicated listener for an Alloy/k8s-monitoring scrape — zero new egress/dependency surface) and **push** (the `github.com/grafana/pyroscope-go` agent → Grafana Cloud Profiles). Runs on **leader and standby** (process-level, not emit-gated); start failure is **fatal** (operationally honest — an operator who enabled it must not run silently un-profiled). Amends **#9** (self-o11y signal set: now metrics + self-logs + optional profiles); orthogonal to **#4** (which governs *republished product* data, still metrics+logs-not-traces). **Content discipline holds by construction**: profiles are stack frames of our own binary — they never touch the data plane, so no denylist change. **H4 identity preserved**: push tags carry the `-meta` namespace + `deployment.environment` + per-replica `service_instance_id`. `pyroscope-go` is the first non-OTel push client — infra, not vendor/domain knowledge, so it does **not** violate the decoupling rule. | A second OTLP path for profiles (OTLP profiling signal still immature); always-on profiling (cost + against default-off posture); in-process push as the only mode (forces the dependency + egress on every deploy — pull avoids both) |
-| 13 | **Hard 1DPM cap, one knob `governance.max_dpm` (default 1), two implementations** | "1DPM emerges" was a footgun (sub-minute/grouped sources, future Sum, semantics change). Product: stateless per-(series,minute) LWW coalesce before splitByBucket (counted via `decant_samples_capped_total`). Self: clamp the PeriodicReader interval to 60s/max_dpm (SDK is structurally 1-point-per-interval). | A wall-clock token bucket (drops legit backfill); a cross-batch seen-set (mutable state on the gap-free path — unnecessary: settle+watermark + ValidateOwnership + Mimir dup-reject already cover cross-batch/cross-loop) |
+| 13 | **Hard 1DPM cap, one knob `governance.max_dpm` (default 1), two implementations** | "1DPM emerges" was a footgun (sub-minute/grouped sources, future Sum, semantics change). Product: stateless per-(series,minute) LWW coalesce before splitByBucket (counted via `genai_otel_bridge_samples_capped_total`). Self: clamp the PeriodicReader interval to 60s/max_dpm (SDK is structurally 1-point-per-interval). | A wall-clock token bucket (drops legit backfill); a cross-batch seen-set (mutable state on the gap-free path — unnecessary: settle+watermark + ValidateOwnership + Mimir dup-reject already cover cross-batch/cross-loop) |
 | 15 | **`LogRecord.TraceID` — correlation-id passthrough to OTLP `trace_id`** (opt-in via Portkey `logs_export` `settings.metadata_record_fields` + `metadata_trace_id_field`). A source may lift a content-free correlation id out of its payload (e.g. the Portkey request-metadata `correlation_id`, a UUID the backend apps stamp) into the OTLP log `trace_id`, so a backend (Grafana) can link these operational logs to the originating application's traces. **Does NOT violate #4** (metrics+logs-not-traces): we synthesise no spans and invent no trace from the gateway hop — we pass through an id the *application* already generated. Content discipline holds: the only metadata sub-keys that ever egress are operator-named, content-free, and validated against the hard-deny floor; the rest of `metadata` (PII) stays dropped. The value is also emitted as a content-free `RecordAttribute` (always queryable). FROZEN-seam change to `model.LogRecord` (additive `TraceID []byte`; LogRecord is transient in `Batch`, never persisted, so additive is safe). | A Loki derived-field linking on the `correlation_id` structured-metadata (works without the seam change but no native OTLP `trace_id`, and depends on per-datasource config); mapping it to an indexed/stream label (high-cardinality UUID — forbidden); synthesising spans from runs/the gateway hop (rejected by #4) |
 | 14 | **Opt-in, default-off self-APM tracing** (spans over the integrator's OWN tick→collect→enqueue pipeline, `selfobs.tracing.enabled`). Exported over OTLP to the SAME self endpoint/auth/`-meta` identity as self-metrics (`emit.self`, falling back to `emit.telemetry`) — traces ride the same Grafana Cloud gateway into Tempo, **no separate egress channel** (decision-ledger contrast with #12, which needed pyroscope's own push path). Emitted via the OTel **global** tracer: disabled ⇒ the global stays the no-op tracer and a tick allocates only a no-op span (negligible at cadence ≥ 10s); enabled ⇒ `main` installs an SDK `TracerProvider` (AlwaysSample — our pipeline is low-volume). Start failure is **fatal** (operationally honest — enabled-but-can't-start must not run silently un-traced). Amends **#9** (self-o11y signal set: now metrics + self-logs + optional profiles + optional self-traces); orthogonal to **#4** (republished *product* data stays metrics+logs-not-traces — we never synthesise spans from the gateway hop or run data). **Content discipline holds by construction**: spans describe our own poll/emit timing + counts, never data-plane payload. The async emit (runner worker, decoupled via the queue) is intentionally NOT in the tick span — covered by `emit_errors_total` + the upstream histogram; cross-queue span propagation is a documented future path (followup §4). | Always-on tracing (cost + against default-off posture); a bespoke Tempo channel (the self OTLP path already reaches Tempo); threading a tracer through every seam (the global tracer + one chokepoint span gives the value without the spread) |
 | 16 | **Portkey `api_key_use_cases`: per-api-key use-case label (metrics + logs).** Operators map Portkey api-key UUIDs to human use-case names; the integrator slugifies the name and stamps it as an `api_key_use_case` label (metrics) / record attribute (logs). **Metrics/logs architecture split driven by M7 (`ValidateOwnership`):** analytics and groups are `SeriesDeclarer`s — two distinct-keyed loop instances for the same metric name would fail `ValidateOwnership` (same series, different keys → duplicate-timestamp storm in Mimir). Therefore metrics use **one loop instance with N internal filtered passes** (one Key, one watermark, one ownership entry; settle-exceedance `revisionHistory` per slug). Logs are NOT a `SeriesDeclarer`, so fan-out to N `logsExportLoop` instances is ownership-safe and fits the per-job cursor model. `api_key_use_case` is a metrics data-point label (Prometheus-style; allow-listed in `AllowedLabelKeys()`) and a logs record attribute (record-tier; queryable as `| api_key_use_case="…"`, no GS1 dependency). Empty `api_key_use_cases` ⇒ byte-identical to pre-feature (metrics `Key()` unchanged ⇒ no watermark reset). Unlisted keys are intentionally out of scope. Detailed in `docs/DESIGN.md` §7 RP3. | Metrics fan-out (N analytics/groups instances) — rejects at startup via `ValidateOwnership`; pulling key names from Portkey admin API — would require org-admin scope (least-privilege violated); an "other" aggregate bucket — no exclude filter available, would double-count |

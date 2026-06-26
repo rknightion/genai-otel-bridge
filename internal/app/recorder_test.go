@@ -289,7 +289,7 @@ func buildCycleApp(t *testing.T, cpPath, pkURL, gwURL string, clock func() time.
 	}
 	em := otlp.New(otlp.Config{
 		Endpoint: gwURL, InstanceID: "1", Token: "t",
-		Identity: map[string]string{"service.namespace": "decant"}, MaxBytes: 1 << 20,
+		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20,
 		Retry: otlp.RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 1.5, MaxElapsed: 30 * time.Millisecond, Jitter: 0},
 	})
 	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, m, source.Deps{})

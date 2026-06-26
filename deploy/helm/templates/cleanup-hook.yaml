@@ -1,8 +1,8 @@
 {{- if .Values.cleanup.enabled }}
 {{- /*
-  Uninstall cleanup. The binary creates the leader-election Lease (decant-leader) and the watermark
-  checkpoint ConfigMap (decant-checkpoints) at RUNTIME, so `helm uninstall` never tracks them and
-  would orphan them. This post-delete hook runs `decant -cleanup` to delete them.
+  Uninstall cleanup. The binary creates the leader-election Lease (genai-otel-bridge-leader) and the watermark
+  checkpoint ConfigMap (genai-otel-bridge-checkpoints) at RUNTIME, so `helm uninstall` never tracks them and
+  would orphan them. This post-delete hook runs `genai-otel-bridge -cleanup` to delete them.
 
   Why post-delete (not pre-delete): pre-delete runs while the Deployment is still up, so the live
   leader would immediately re-create the lease/checkpoint after we delete them. post-delete runs
@@ -17,10 +17,10 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: decant-cleanup
+  name: genai-otel-bridge-cleanup
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "decant.labels" . | nindent 4 }}
+    {{- include "genai-otel-bridge.labels" . | nindent 4 }}
   annotations:
     helm.sh/hook: post-delete
     helm.sh/hook-weight: "-5"
@@ -29,10 +29,10 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: decant-cleanup
+  name: genai-otel-bridge-cleanup
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "decant.labels" . | nindent 4 }}
+    {{- include "genai-otel-bridge.labels" . | nindent 4 }}
   annotations:
     helm.sh/hook: post-delete
     helm.sh/hook-weight: "-5"
@@ -44,7 +44,7 @@ rules:
     resources:
       - leases
     resourceNames:
-      - decant-leader
+      - genai-otel-bridge-leader
     verbs:
       - delete
   {{- if not .Values.cleanup.retainCheckpoint }}
@@ -54,7 +54,7 @@ rules:
     resources:
       - configmaps
     resourceNames:
-      - decant-checkpoints
+      - genai-otel-bridge-checkpoints
     verbs:
       - delete
   {{- end }}
@@ -62,30 +62,30 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: decant-cleanup
+  name: genai-otel-bridge-cleanup
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "decant.labels" . | nindent 4 }}
+    {{- include "genai-otel-bridge.labels" . | nindent 4 }}
   annotations:
     helm.sh/hook: post-delete
     helm.sh/hook-weight: "-3"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 subjects:
   - kind: ServiceAccount
-    name: decant-cleanup
+    name: genai-otel-bridge-cleanup
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role
-  name: decant-cleanup
+  name: genai-otel-bridge-cleanup
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: decant-cleanup
+  name: genai-otel-bridge-cleanup
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "decant.labels" . | nindent 4 }}
+    {{- include "genai-otel-bridge.labels" . | nindent 4 }}
   annotations:
     helm.sh/hook: post-delete
     helm.sh/hook-weight: "0"
@@ -98,9 +98,9 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "decant.selectorLabels" . | nindent 8 }}
+        {{- include "genai-otel-bridge.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: decant-cleanup
+      serviceAccountName: genai-otel-bridge-cleanup
       restartPolicy: Never
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

@@ -39,17 +39,17 @@ import (
 // the single source of truth shared by buildHA (which creates them) and the -cleanup path (which
 // deletes them on uninstall).
 const (
-	leaseName        = "decant-leader"
-	checkpointCMName = "decant-checkpoints"
+	leaseName        = "genai-otel-bridge-leader"
+	checkpointCMName = "genai-otel-bridge-checkpoints"
 )
 
 func main() {
-	cfgPath := flag.String("config", "/etc/decant/config.yaml", "config file")
+	cfgPath := flag.String("config", "/etc/genai-otel-bridge/config.yaml", "config file")
 	healthAddr := flag.String("health-addr", ":8080", "health endpoint addr")
 	ns := flag.String("namespace", os.Getenv("POD_NAMESPACE"), "k8s namespace for lease/configmap")
 	identity := flag.String("identity", os.Getenv("POD_NAME"), "leader-election identity")
 	memLimit := flag.Int64("container-mem-bytes", 0, "container memory limit for GOMEMLIMIT")
-	cpFile := flag.String("checkpoint-file", "/var/lib/decant/checkpoints.yaml", "path for the file checkpoint store (only used when ha.checkpoint=file)")
+	cpFile := flag.String("checkpoint-file", "/var/lib/genai-otel-bridge/checkpoints.yaml", "path for the file checkpoint store (only used when ha.checkpoint=file)")
 	cleanupMode := flag.Bool("cleanup", false, "delete the app-created lease + checkpoint ConfigMap, then exit (the chart's post-delete uninstall hook)")
 	cleanupRetainCheckpoint := flag.Bool("cleanup-retain-checkpoint", false, "with -cleanup: keep the checkpoint ConfigMap (only remove the lease) so a reinstall resumes the watermark")
 	validateConfigMode := flag.Bool("validate-config", false, "load + validate the -config file (placeholdering unset ${ENV} refs so secrets aren't needed), print the result, and exit 0/1")
@@ -85,9 +85,9 @@ func main() {
 	// [final-review] All-leader double-emit guard (defence-in-depth with the chart-render guard):
 	// ha.coordinator=none disables leader election, so with >1 replica EVERY pod polls + emits the same
 	// series (3× source load, duplicate-timestamp churn). The replica count isn't config — the chart
-	// injects it via DECANT_REPLICAS. Unset/unparseable ⇒ skip (a raw run without the env can't know it).
+	// injects it via GENAI_OTEL_BRIDGE_REPLICAS. Unset/unparseable ⇒ skip (a raw run without the env can't know it).
 	if cfg.HA.Coordinator == "none" {
-		if n, perr := strconv.Atoi(os.Getenv("DECANT_REPLICAS")); perr == nil && n > 1 {
+		if n, perr := strconv.Atoi(os.Getenv("GENAI_OTEL_BRIDGE_REPLICAS")); perr == nil && n > 1 {
 			fatal("config", fmt.Errorf("ha.coordinator=none with replicas=%d: all replicas would be leaders and double-emit — use ha.coordinator=lease for multi-replica HA, or replicas: 1", n))
 		}
 	}
@@ -235,7 +235,7 @@ func main() {
 	if err := a.Run(ctx, health.Handler(), *healthAddr, health.MarkReady, health.Beat, health.SetLeader); err != nil && ctx.Err() == nil {
 		fatal("run", err)
 	}
-	slog.Info("decant stopped")
+	slog.Info("genai-otel-bridge stopped")
 }
 
 func buildHA(cfg *config.Config, ns, identity, cpFile string) (checkpoint.Checkpointer, coordinate.Coordinator) {

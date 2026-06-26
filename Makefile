@@ -9,8 +9,8 @@ HELM_VERSION          ?= v3.18.3
 K3D_VERSION           ?= v5.9.0
 K3S_IMAGE             ?= rancher/k3s:v1.35.1-k3s1
 GIT_CLIFF_VERSION     ?= v2.13.1
-IMAGE                 ?= decant:dev
-E2E_HELPER_IMAGE      ?= decant-e2e-helper:dev
+IMAGE                 ?= genai-otel-bridge:dev
+E2E_HELPER_IMAGE      ?= genai-otel-bridge-e2e-helper:dev
 
 TOOLS_DIR := $(CURDIR)/.tools
 export PATH := $(TOOLS_DIR):$(PATH)
@@ -27,7 +27,7 @@ GIT_CLIFF := $(shell command -v git-cliff 2>/dev/null || echo $(TOOLS_DIR)/git-c
 
 # ── legacy (kept for local muscle memory) ─────────────────────────────────────
 build:
-	$(GO) build -ldflags "$(LDFLAGS)" -o bin/decant ./cmd/decant
+	$(GO) build -ldflags "$(LDFLAGS)" -o bin/genai-otel-bridge ./cmd/genai-otel-bridge
 test:
 	$(GO) test ./...
 vet:
@@ -79,7 +79,7 @@ tools-e2e:
 # ── fast gate (no Docker) ─────────────────────────────────────────────────────
 ci-build:
 	$(GO) build ./...
-	$(GO) build -o /dev/null ./cmd/decant
+	$(GO) build -o /dev/null ./cmd/genai-otel-bridge
 ci-vet:
 	$(GO) vet ./...
 ci-lint: tools

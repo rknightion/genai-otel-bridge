@@ -153,7 +153,7 @@ func dataBytes(d map[string]string) int {
 // apiConflict returns a Conflict API error for use in tests that inject a conflict to
 // exercise the RMW retry loop.
 func apiConflict() error {
-	return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "decant-checkpoints", fmt.Errorf("resourceVersion mismatch"))
+	return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "genai-otel-bridge-checkpoints", fmt.Errorf("resourceVersion mismatch"))
 }
 
 var _ checkpoint.Checkpointer = (*Store)(nil)

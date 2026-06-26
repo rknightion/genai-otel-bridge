@@ -59,8 +59,8 @@ jobs:
           ./gitleaks detect --source . --redact --no-banner
 
   # Publish the container image + Helm chart to GHCR on a v* tag.
-  #   image: ghcr.io/<owner>/decant:<vX.Y.Z> + :latest
-  #   chart: oci://ghcr.io/<owner>/charts/decant  (version X.Y.Z)
+  #   image: ghcr.io/<owner>/genai-otel-bridge:<vX.Y.Z> + :latest
+  #   chart: oci://ghcr.io/<owner>/charts/genai-otel-bridge  (version X.Y.Z)
   # Auth uses the workflow's GITHUB_TOKEN (packages: write) — no extra secret needed. Packages inherit
   # the repo's visibility: private while the repo is private, public once it is.
   publish:
@@ -87,7 +87,7 @@ jobs:
         run: HELM=helm bash scripts/publish.sh
         env:
           REGISTRY: ghcr.io/${{ github.repository_owner }}
-          IMAGE_REPO: decant
+          IMAGE_REPO: genai-otel-bridge
           CHART_REPO: charts
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

@@ -14,7 +14,7 @@ import (
 
 func TestLeaseElectsAndCancelsOnStop(t *testing.T) {
 	cs := fake.NewSimpleClientset()
-	c := New(cs, "decant", "decant-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
+	c := New(cs, "genai-otel-bridge", "genai-otel-bridge-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	elected := make(chan int64, 1)
 	leaderCancelled := make(chan struct{}, 1)

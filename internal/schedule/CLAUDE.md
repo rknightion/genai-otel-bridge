@@ -23,7 +23,7 @@ emit worker, the in-memory frontier, and the epoch-fenced checkpoint commit. `me
 
 ## DPM cap
 
-`ProcessBatch` calls `emit.CoalesceDPM` to coalesce to ≤`max_dpm` samples per series-minute before `splitByBucket`; suppressions increment `decant_samples_capped_total{loop,reason="dpm"}`.
+`ProcessBatch` calls `emit.CoalesceDPM` to coalesce to ≤`max_dpm` samples per series-minute before `splitByBucket`; suppressions increment `genai_otel_bridge_samples_capped_total{loop,reason="dpm"}`.
 
 ## Behaviour
 

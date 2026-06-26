@@ -2,10 +2,10 @@
 # k3d 3-node failover e2e: create cluster, import images, helm-install the chart with the e2e overlay,
 # then run the Go failover suite (tag e2e). `all` brings it up, tests, and tears down.
 set -euo pipefail
-CLUSTER="${E2E_CLUSTER:-decant-e2e}"
-NS="${E2E_NAMESPACE:-decant-e2e}"
-IMAGE="${IMAGE:-decant:dev}"
-E2E_HELPER_IMAGE="${E2E_HELPER_IMAGE:-decant-e2e-helper:dev}"
+CLUSTER="${E2E_CLUSTER:-genai-otel-bridge-e2e}"
+NS="${E2E_NAMESPACE:-genai-otel-bridge-e2e}"
+IMAGE="${IMAGE:-genai-otel-bridge:dev}"
+E2E_HELPER_IMAGE="${E2E_HELPER_IMAGE:-genai-otel-bridge-e2e-helper:dev}"
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.35.1-k3s1}"
 BUSYBOX_IMAGE="${BUSYBOX_IMAGE:-busybox:1.36}"
 TOOLS_DIR="${TOOLS_DIR:-$PWD/.tools}"
@@ -49,8 +49,8 @@ EOF
   export KUBECONFIG; KUBECONFIG="$(k3d kubeconfig write "$CLUSTER")"
   kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
   kubectl apply -f test/e2e/manifests/
-  helm install decant deploy/helm -n "$NS" -f test/e2e/values-e2e.yaml --wait --timeout 180s
-  kubectl -n "$NS" rollout status deploy/decant --timeout 120s
+  helm install genai-otel-bridge deploy/helm -n "$NS" -f test/e2e/values-e2e.yaml --wait --timeout 180s
+  kubectl -n "$NS" rollout status deploy/genai-otel-bridge --timeout 120s
 }
 
 down() { k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true; }
@@ -68,18 +68,18 @@ run_tests() {
 # present by now; the checkpoint ConfigMap is present once the leader has emitted at least once.
 uninstall_verify() {
   export KUBECONFIG; KUBECONFIG="$(k3d kubeconfig write "$CLUSTER")"
-  kubectl -n "$NS" get lease decant-leader >/dev/null 2>&1 \
-    || { echo "PRE-FAIL: lease decant-leader absent before uninstall (cleanup test would be vacuous)" >&2; exit 1; }
-  local had_cp="no"; kubectl -n "$NS" get configmap decant-checkpoints >/dev/null 2>&1 && had_cp="yes"
+  kubectl -n "$NS" get lease genai-otel-bridge-leader >/dev/null 2>&1 \
+    || { echo "PRE-FAIL: lease genai-otel-bridge-leader absent before uninstall (cleanup test would be vacuous)" >&2; exit 1; }
+  local had_cp="no"; kubectl -n "$NS" get configmap genai-otel-bridge-checkpoints >/dev/null 2>&1 && had_cp="yes"
   echo "pre-uninstall: lease present, checkpoint present=${had_cp}"
-  # --wait blocks on the post-delete hook Job (decant -cleanup) completing.
-  helm uninstall decant -n "$NS" --wait --timeout 120s
+  # --wait blocks on the post-delete hook Job (genai-otel-bridge -cleanup) completing.
+  helm uninstall genai-otel-bridge -n "$NS" --wait --timeout 120s
   local fail=0
-  if kubectl -n "$NS" get lease decant-leader >/dev/null 2>&1; then
-    echo "FAIL: lease decant-leader orphaned after helm uninstall" >&2; fail=1
+  if kubectl -n "$NS" get lease genai-otel-bridge-leader >/dev/null 2>&1; then
+    echo "FAIL: lease genai-otel-bridge-leader orphaned after helm uninstall" >&2; fail=1
   fi
-  if kubectl -n "$NS" get configmap decant-checkpoints >/dev/null 2>&1; then
-    echo "FAIL: configmap decant-checkpoints orphaned after helm uninstall" >&2; fail=1
+  if kubectl -n "$NS" get configmap genai-otel-bridge-checkpoints >/dev/null 2>&1; then
+    echo "FAIL: configmap genai-otel-bridge-checkpoints orphaned after helm uninstall" >&2; fail=1
   fi
   [ "$fail" -eq 0 ] || exit 1
   echo "uninstall cleanup OK: post-delete hook removed the lease + checkpoint ConfigMap"

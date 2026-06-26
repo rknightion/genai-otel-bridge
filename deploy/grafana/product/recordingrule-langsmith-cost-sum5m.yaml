@@ -1,11 +1,11 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: RecordingRule
 metadata:
-  name: decant-langsmith-cost-sum5m
+  name: genai-otel-bridge-langsmith-cost-sum5m
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
   title: langsmith:cost_usd:sum_5m
   metric: langsmith:cost_usd:sum_5m

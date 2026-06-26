@@ -69,7 +69,7 @@ func (l *logsExportLoop) createExport(ctx context.Context, winMin, winMax time.T
 		"workspace_id":   l.workspaceID,
 		"filters":        filters,
 		"requested_data": l.requestedData,
-		"description": fmt.Sprintf("decant/%s/logs/%s..%s", l.sourceInstance,
+		"description": fmt.Sprintf("genai-otel-bridge/%s/logs/%s..%s", l.sourceInstance,
 			winMin.UTC().Format(time.RFC3339), winMax.UTC().Format(time.RFC3339)),
 	}
 	var out createExportResp

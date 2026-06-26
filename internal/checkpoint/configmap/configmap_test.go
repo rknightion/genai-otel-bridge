@@ -20,7 +20,7 @@ import (
 
 func TestConfigMapRoundTripAndFence(t *testing.T) {
 	cs := fake.NewSimpleClientset()
-	s := New(cs, "decant", "decant-checkpoints")
+	s := New(cs, "genai-otel-bridge", "genai-otel-bridge-checkpoints")
 	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
 	ctx := context.Background()
 
@@ -44,7 +44,7 @@ func TestConfigMapRoundTripAndFence(t *testing.T) {
 // rejected, and Time still cannot regress.
 func TestConfigMapCursorFence(t *testing.T) {
 	cs := fake.NewSimpleClientset()
-	s := New(cs, "decant", "decant-checkpoints")
+	s := New(cs, "genai-otel-bridge", "genai-otel-bridge-checkpoints")
 	key := model.CheckpointKey{SourceInstance: "pk", Loop: "logs_export", OutputFingerprint: "fp"}
 	ctx := context.Background()
 	t100 := time.Unix(100, 0).UTC()
@@ -66,7 +66,7 @@ func TestConfigMapCursorFence(t *testing.T) {
 }
 
 func TestConfigMapConflictRetry(t *testing.T) {
-	cs := fake.NewSimpleClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "decant-checkpoints", Namespace: "decant"}, Data: map[string]string{}})
+	cs := fake.NewSimpleClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "genai-otel-bridge-checkpoints", Namespace: "genai-otel-bridge"}, Data: map[string]string{}})
 	// Inject one Conflict on the first update, then let it succeed.
 	var n int
 	cs.PrependReactor("update", "configmaps", func(a k8stesting.Action) (bool, runtime.Object, error) {
@@ -76,7 +76,7 @@ func TestConfigMapConflictRetry(t *testing.T) {
 		}
 		return false, nil, nil // fall through to default tracker
 	})
-	s := New(cs, "decant", "decant-checkpoints")
+	s := New(cs, "genai-otel-bridge", "genai-otel-bridge-checkpoints")
 	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
 	if err := s.Save(context.Background(), key, model.Watermark{Time: time.Unix(100, 0).UTC(), Epoch: 1}); err != nil {
 		t.Fatalf("RMW should retry past one conflict: %v", err)

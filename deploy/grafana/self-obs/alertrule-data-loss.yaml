@@ -1,13 +1,13 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: decant-data-loss
+  name: genai-otel-bridge-data-loss
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: DecantDataLoss
+  title: GenaiOtelBridgeDataLoss
   # Records were skipped with a COUNTED GAP for a real-loss reason — data that existed in the source
   # was not emitted and cannot be recovered. The loop always progresses (no silent stall) but the
   # skipped window is gone. Benign reasons (quota_exceeded, backfill_unstorable, dpm capping) are
@@ -21,8 +21,8 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "decant {{ $labels.loop }} loop: data loss ({{ $labels.reason }})"
-    description: "decant_samples_skipped_total for the {{ $labels.loop }} loop has recorded skips with reason={{ $labels.reason }} (too_old / payload_too_large / duplicate_timestamp) in the last 10m. These are genuine data-loss events — the records existed in the source but were not emitted and cannot be recovered. Check: too_old → widen max_backfill or raise the backend accept window (GS2); payload_too_large → reduce batch size; duplicate_timestamp → review the loop's window/step alignment. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge {{ $labels.loop }} loop: data loss ({{ $labels.reason }})"
+    description: "genai_otel_bridge_samples_skipped_total for the {{ $labels.loop }} loop has recorded skips with reason={{ $labels.reason }} (too_old / payload_too_large / duplicate_timestamp) in the last 10m. These are genuine data-loss events — the records existed in the source but were not emitted and cannot be recovered. Check: too_old → widen max_backfill or raise the backend accept window (GS2); payload_too_large → reduce batch size; duplicate_timestamp → review the loop's window/step alignment. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -30,7 +30,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop, reason) (increase(decant_samples_skipped_total{reason=~"too_old|payload_too_large|duplicate_timestamp"}[10m])) > 0'
+        expr: 'sum by (loop, reason) (increase(genai_otel_bridge_samples_skipped_total{reason=~"too_old|payload_too_large|duplicate_timestamp"}[10m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

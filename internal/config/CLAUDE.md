@@ -32,7 +32,7 @@ this block for drift.
 
 ## Secret substitution (§4.1 — subtle, don't simplify)
 
-`${VAR}` / `file:/path` refs are replaced with **YAML-safe placeholders** (`decantXsecretX<N>Xdecant`)
+`${VAR}` / `file:/path` refs are replaced with **YAML-safe placeholders** (`genai-otel-bridgeXsecretX<N>Xgenai-otel-bridge`)
 *before* parsing, then the real secret is written into the `yaml.Node.Value` post-parse — so it is
 **never re-interpreted as YAML**. This prevents a secret containing YAML-special chars (e.g.
 `tok # x`) from being parsed as a comment, and unresolved refs from becoming invalid flow-map syntax.
@@ -83,7 +83,7 @@ Top-level governance/logging keys:
   (struct-built test configs bypass `Load`); negative rejected by `Validate`. Metrics plane is N/A (3
   resource attrs « Mimir 40). `IdentityConfig.ProductIdentity()` is the single source of truth for the
   identity keys (cmd builds the emitter map from it; app counts it). In-cluster-Alloy `k8s.*`/`cloud.*`
-  enrichment shares this budget (documented; not enforceable from decant).
+  enrichment shares this budget (documented; not enforceable from genai-otel-bridge).
 - `governance.allow_label_keys` ([]string, default empty) — EXTRA content-free indexed/label keys the
   operator opts into the guard allow-list, ON TOP OF each enabled source's declared keys
   (`portkey.AllowedLabelKeys()`/`langsmith.AllowedLabelKeys()` — vendor packages own the strings, not

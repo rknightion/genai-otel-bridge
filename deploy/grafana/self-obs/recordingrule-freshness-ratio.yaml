@@ -1,14 +1,14 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: RecordingRule
 metadata:
-  name: decant-freshness-ratio
+  name: genai-otel-bridge-freshness-ratio
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: decant:freshness_ratio
-  metric: decant:freshness_ratio
+  title: genai-otel-bridge:freshness_ratio
+  metric: genai-otel-bridge:freshness_ratio
   targetDatasourceUID: grafanacloud-prom
   trigger:
     interval: 1m
@@ -24,7 +24,7 @@ spec:
         # normally gets", regardless of whether normal is 2m (sessions) or 40m (runs). One uniform scale
         # the dashboard colours on (green <1.5, yellow 1.5-2, red >2) — no per-loop or per-deployment
         # constants anywhere. clamp_min(...,120) stops a fast/quiet loop dividing by ~0. Self-contained.
-        expr: '(time() - max by (loop) (decant_last_success_timestamp_seconds)) / clamp_min(quantile_over_time(0.9, (time() - max by (loop) (decant_last_success_timestamp_seconds))[6h:1m]), 120)'
+        expr: '(time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) / clamp_min(quantile_over_time(0.9, (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m]), 120)'
         instant: true
         range: false
         intervalMs: 1000

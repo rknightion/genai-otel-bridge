@@ -14,12 +14,12 @@
 #        apiVersion: cilium.io/v2
 #        kind: CiliumNetworkPolicy
 #        metadata:
-#          name: decant-egress
+#          name: genai-otel-bridge-egress
 #          namespace: <namespace>
 #        spec:
 #          endpointSelector:
 #            matchLabels:
-#              app: decant
+#              app: genai-otel-bridge
 #          egressDeny: []    # default-deny covered by CiliumClusterWideNetworkPolicy
 #          egress:
 #            - toFQDNs:
@@ -45,14 +45,14 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: decant
+  name: genai-otel-bridge
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "decant.labels" . | nindent 4 }}
+    {{- include "genai-otel-bridge.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "decant.selectorLabels" . | nindent 6 }}
+      {{- include "genai-otel-bridge.selectorLabels" . | nindent 6 }}
 
   policyTypes:
     - Ingress

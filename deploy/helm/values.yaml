@@ -1,4 +1,4 @@
-# decant Helm values — override per environment.
+# genai-otel-bridge Helm values — override per environment.
 #
 # Production: replicas: 2 (active/passive under Lease leader election) — only the Lease holder polls and
 # emits; the standby is healthy but idle, ready to take over (~LeaseDuration) on failure. 2 is the lean
@@ -8,8 +8,8 @@
 replicas: 2
 
 # Full image reference including tag. Override at deploy time to point at your registry:
-#   helm upgrade decant ./deploy/helm --set image=<registry>/decant:v0.1.0
-image: ghcr.io/rknightion/decant:latest
+#   helm upgrade genai-otel-bridge ./deploy/helm --set image=<registry>/genai-otel-bridge:v0.1.0
+image: ghcr.io/rknightion/genai-otel-bridge:latest
 
 # Image pull secrets for a private registry. Each entry is a {name: <secret>} referencing a
 # kubernetes.io/dockerconfigjson Secret that must already exist in the release namespace. Default
@@ -112,8 +112,8 @@ imagePullPolicy: IfNotPresent
 # constrain it. On EKS these let you pin to a Karpenter node pool / instance type, tolerate dedicated-node
 # taints, set anti-affinity beyond the built-in zone/host topology spread, or assign a PriorityClass —
 # without forking the chart.
-nodeSelector: {}     # e.g. { karpenter.sh/nodepool: decant }
-tolerations: []      # e.g. [{ key: dedicated, operator: Equal, value: decant, effect: NoSchedule }]
+nodeSelector: {}     # e.g. { karpenter.sh/nodepool: genai-otel-bridge }
+tolerations: []      # e.g. [{ key: dedicated, operator: Equal, value: genai-otel-bridge, effect: NoSchedule }]
 affinity: {}         # standard pod/node affinity; the chart already spreads by host+zone (topologySpreadConstraints)
 priorityClassName: "" # e.g. system-cluster-critical for a prod o11y workload that must not be preempted
 
@@ -126,7 +126,7 @@ configOverride: ""
 # The `config:` map below is GENERATED from the Go config schema (internal/config/config.go) by
 # `make generate`. Field comments are the Go doc-comments; values/env-refs come from the helm:"..."
 # struct tags. Do not hand-edit between the markers — the gate test (internal/config) fails on drift.
-# ${ENV} refs are injected from the decant-secrets Secret via envFrom at runtime.
+# ${ENV} refs are injected from the genai-otel-bridge-secrets Secret via envFrom at runtime.
 # >>> BEGIN generated config — do not edit by hand; run `make generate` <<<
 config:
   emit:
@@ -137,17 +137,17 @@ config:
         instance_id: ${GC_INSTANCE_ID}
         token: ${GC_OTLP_TOKEN}
         # AllowInsecure opts this endpoint out of the https-only gate for an IN-CLUSTER cleartext OTLP
-        # receiver — the regulated/EKS topology where decant emits to an in-cluster Alloy (which holds the
+        # receiver — the regulated/EKS topology where genai-otel-bridge emits to an in-cluster Alloy (which holds the
         # real Grafana Cloud credentials) over the pod network rather than straight to the public gateway.
         # [CP-M7] Default false (https or loopback required). When true, an http NON-loopback endpoint is
         # permitted ONLY IF (a) no credential is set — instance_id/token must be empty, so nothing rides the
-        # cleartext link (the collector authenticates to Grafana Cloud, not decant); and (b) the host is a
+        # cleartext link (the collector authenticates to Grafana Cloud, not genai-otel-bridge); and (b) the host is a
         # private target — an IP literal must be RFC-1918/loopback/link-local (a public IP is rejected), while
         # a DNS name (e.g. a Kubernetes Service) is permitted since it can't be resolved at config-load time.
         # https endpoints ignore this flag.
         allow_insecure: false
   identity:
-    service_namespace: decant
+    service_namespace: genai-otel-bridge
     # Deployment environment label (e.g. dev, staging, prod).
     deployment_environment: ${ENV}
   ha:
@@ -167,7 +167,7 @@ config:
     emit_workers: 1
   governance:
     # PerMetricCardinalityBudget caps the number of DISTINCT label-sets tracked per metric NAME — not
-    # a global cap. Over-budget series are dropped and counted (decant_guard_dropped_total). Unset (0)
+    # a global cap. Over-budget series are dropped and counted (genai_otel_bridge_guard_dropped_total). Unset (0)
     # defaults to defaultPerMetricCardinalityBudget. The real ceiling is the downstream Mimir/Adaptive
     # Metrics limit (DESIGN §7 GS2/GS3), not this guard.
     per_metric_cardinality_budget: 10000
@@ -184,7 +184,7 @@ config:
     # negative is rejected. (DESIGN §7a Cdx-C13/F44.)
     max_catchup_per_tick: 1
     # MaxStreamLabelKeys caps how many OTLP resource attributes a single LOGS loop may contribute to a
-    # Loki stream: decant's product identity resource attrs (service.name/service.namespace/
+    # Loki stream: genai-otel-bridge's product identity resource attrs (service.name/service.namespace/
     # deployment.environment.name) PLUS the loop's indexed attrs (its base content-free set ∪
     # settings.extra_indexed_fields). Loki's max_label_names_per_series (Grafana Cloud default 15) REJECTS
     # — silently drops — a stream over the limit, so the composition root fails fast at startup if a loop
@@ -425,7 +425,7 @@ profiling:
 
 # Uninstall cleanup. The binary creates the leader-election Lease and the watermark-checkpoint
 # ConfigMap at runtime, so `helm uninstall` does not track them and would orphan them. When enabled
-# (default), a post-delete hook Job runs `decant -cleanup` (under a dedicated, delete-only, ephemeral
+# (default), a post-delete hook Job runs `genai-otel-bridge -cleanup` (under a dedicated, delete-only, ephemeral
 # ServiceAccount/Role) to remove them, leaving the namespace clean.
 cleanup:
   enabled: true
@@ -437,7 +437,7 @@ cleanup:
 
 # ── AWS / External Secrets Operator (ESO) ──────────────────────────────────────
 # Optional. When externalSecrets.enabled is true, the chart renders a SecretStore + ExternalSecret
-# (templates/secretstore.yaml, templates/externalsecret.yaml) that build the decant-secrets Secret
+# (templates/secretstore.yaml, templates/externalsecret.yaml) that build the genai-otel-bridge-secrets Secret
 # from a cloud secrets manager instead of requiring it to be hand-created. Default OFF — the chart
 # renders exactly as before (the Secret must be created out-of-band and is read via envFrom).
 
@@ -445,7 +445,7 @@ cleanup:
 aws:
   region: ""
 
-# ServiceAccount references. The Deployment's own ServiceAccount (decant) is created by rbac.yaml.
+# ServiceAccount references. The Deployment's own ServiceAccount (genai-otel-bridge) is created by rbac.yaml.
 # esoName names a SEPARATE, IRSA/workload-identity-annotated SA used ONLY by the ESO SecretStore for
 # IAM-based secrets-manager access; it is provisioned out-of-band (e.g. by infra IaC), not by this
 # chart. Required when externalSecrets.enabled is true.
@@ -453,7 +453,7 @@ serviceAccount:
   esoName: ""
 
 # External Secrets Operator integration. Each *Secret value is the NAME of a secrets-manager secret
-# (not an ARN). The ExternalSecret maps these into the decant-secrets k8s Secret consumed via envFrom.
+# (not an ARN). The ExternalSecret maps these into the genai-otel-bridge-secrets k8s Secret consumed via envFrom.
 externalSecrets:
   # enabled: render the SecretStore + ExternalSecret. Default OFF (out-of-band Secret as before).
   enabled: false
@@ -477,7 +477,7 @@ externalSecrets:
 # ── Runtime env (non-secret, environment-specific) ─────────────────────────────
 # Literal values injected as plain container env vars (NOT via the secret) to satisfy the ${ENV} refs
 # in config.yaml. Each is rendered ONLY when non-empty — when empty (the default), nothing is emitted
-# and the corresponding var keeps coming from the decant-secrets Secret via envFrom (unchanged
+# and the corresponding var keeps coming from the genai-otel-bridge-secrets Secret via envFrom (unchanged
 # behaviour for the hand-created-secret path).
 runtimeEnv:
   # ENV — deployment environment label (identity.deployment_environment) and the source_instance

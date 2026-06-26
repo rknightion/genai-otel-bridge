@@ -93,7 +93,7 @@ type logsExportLoop struct {
 	useCase   string
 	apiKeyIDs string
 	// onGraphSkipped, if set, counts a failed/abandoned export job as an alertable self-metric
-	// (→ decant_source_graph_unavailable_total{loop="logs_export",graph=...}) so a flapping export is
+	// (→ genai_otel_bridge_source_graph_unavailable_total{loop="logs_export",graph=...}) so a flapping export is
 	// visible in metrics, not just logs — distinct from window_lag (the "stuck" symptom). nil ⇒ log only.
 	onGraphSkipped func(loop, graph string)
 	onAuthError    func(loop, source string) // followup §9: 401/403 on a lifecycle call → own alertable signal
@@ -109,7 +109,7 @@ func (l *logsExportLoop) jobFailed(reason string) {
 
 // traceIDUnparsed counts a record whose CONFIGURED trace-id metadata field was present but not a parseable
 // UUID, so the OTLP trace_id mapping was lost (the raw value still ships as a record attr). Reuses the
-// graph-skipped self-metric (→ decant_source_graph_unavailable_total{loop="logs_export",graph="trace_id_unparsed"})
+// graph-skipped self-metric (→ genai_otel_bridge_source_graph_unavailable_total{loop="logs_export",graph="trace_id_unparsed"})
 // so a fleet-wide broken mapping — operator configured logs↔traces correlation, upstream changed the format —
 // is alertable rather than silently 0% effective.
 func (l *logsExportLoop) traceIDUnparsed() {

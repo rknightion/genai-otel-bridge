@@ -1,4 +1,4 @@
-# decant — genai-otel-bridge
+# genai-otel-bridge — genai-otel-bridge
 
 Vendor-neutral Go service that polls AI-platform APIs (LLM gateways like Portkey, eval platforms
 like LangSmith) and emits **operational** telemetry to Grafana Cloud as OTLP metrics/logs. Sits on
@@ -22,7 +22,7 @@ to downstream slowness.
 
 ```bash
 make gate     # vet + test + lint + forbidden-words + spdx-check + build ./...  — the green bar before any commit
-make build    # -> bin/decant, version stamped via git describe ldflags
+make build    # -> bin/genai-otel-bridge, version stamped via git describe ldflags
 make test     # go test ./...
 make lint     # golangci-lint run  (config is .golangci.yml, v2 schema)
 go test -tags acceptance ./internal/app/   # §9 acceptance gates (failover, outage, soak)
@@ -48,7 +48,7 @@ bounded queue, epoch-fenced checkpoint) → `emit.Emitter` (deterministic OTLP e
 - `httpx/` — hardened outbound client (SSRF egress guard, cross-host redirect block).
 - `config/` — YAML config model, secret substitution, validation.
 - `selfobs/` — the integrator's own metrics + health endpoints (distinct resource identity).
-- `app/` — composition root (wiring only); `cmd/decant/` — the binary.
+- `app/` — composition root (wiring only); `cmd/genai-otel-bridge/` — the binary.
 
 Full design: `ARCHITECTURE.md` (durable seams, decision ledger §16), `docs/DESIGN.md` (build spec,
 F1–F47 failure handling, review dispositions). Read these before changing a seam.

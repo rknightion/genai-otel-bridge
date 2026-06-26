@@ -20,7 +20,7 @@ func testEmitter(t *testing.T, url string) *Emitter {
 	t.Helper()
 	return New(Config{
 		Endpoint: url, InstanceID: "123", Token: "secret-token",
-		Identity: map[string]string{"service.namespace": "decant"}, MaxBytes: 1 << 20,
+		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20,
 		Retry: RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 1.5, MaxElapsed: 30 * time.Millisecond, Jitter: 0},
 	})
 }
@@ -59,7 +59,7 @@ func TestEmitNoAuthHeaderWhenCredsEmpty(t *testing.T) {
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
-	em := New(Config{Endpoint: srv.URL, Identity: map[string]string{"service.namespace": "decant"}, MaxBytes: 1 << 20})
+	em := New(Config{Endpoint: srv.URL, Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
 	if err := em.Emit(context.Background(), oneBatch()); err != nil {
 		t.Fatal(err)
 	}

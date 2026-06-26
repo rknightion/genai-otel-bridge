@@ -29,7 +29,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: Output of `decant --version` (or the image tag / chart version).
+      description: Output of `genai-otel-bridge --version` (or the image tag / chart version).
     validations:
       required: true
   - type: textarea
@@ -43,7 +43,7 @@ body:
     id: logs
     attributes:
       label: Relevant logs / self-obs metrics
-      description: Redacted logs or `decant_*` self-observability metrics. No content/credentials.
+      description: Redacted logs or `genai_otel_bridge_*` self-observability metrics. No content/credentials.
       render: shell
     validations:
       required: false

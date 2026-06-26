@@ -24,9 +24,9 @@ Disabled ⇒ pure no-op (no listener, no agent, no global state). Start failure 
 
 ## Distinct self-identity (H4)
 
-Self-telemetry uses a **separate `ServiceNamespace`** (e.g. product `decant` → self `decant-meta`) so
+Self-telemetry uses a **separate `ServiceNamespace`** (e.g. product `genai-otel-bridge` → self `genai-otel-bridge-meta`) so
 it never mixes with republished product series. `service.instance.id = POD_NAME` (CP-H8) to diagnose
-leader overlap. Meter is `decant/selfobs`; metrics use the `decant_*` prefix.
+leader overlap. Meter is `genai-otel-bridge/selfobs`; metrics use the `genai_otel_bridge_*` prefix.
 
 ## 1DPM clamp (self plane)
 
@@ -53,10 +53,10 @@ machine is table-driven with an injectable clock.
 
 **Logs go to STDOUT, scraped by the k8s-monitoring helm chart → Loki — NOT pushed via OTLP.** Only
 metrics take the OTLP path to the `-meta` self endpoint. The log handler is built in `internal/logging`
-and set as the slog default in `cmd/decant` (logfmt by default; `log.format: json` to switch).
+and set as the slog default in `cmd/genai-otel-bridge` (logfmt by default; `log.format: json` to switch).
 
 DONE this pass:
-- **Upstream-API request histogram — BUILT.** `decant_upstream_request_duration_seconds{target,method,
+- **Upstream-API request histogram — BUILT.** `genai_otel_bridge_upstream_request_duration_seconds{target,method,
   status_class}` (Float64Histogram on the selfobs meter, second-shaped buckets). `_count` per
   status_class gives request totals + error ratio, so no separate counter. Instrumented at the
   **`httpx` chokepoint** via `httpx.Observer` → `Metrics.ObserveUpstreamRequest`, wired in `main.go`
@@ -71,7 +71,7 @@ Still open:
   README guidance into a jsonnet mixin (dashboards + alerts + rules), parameterizing the placeholder
   thresholds (CP-H12, `cadence + bucket_settle + failover_margin`). Self-health panels/alerts select
   the `-meta` identity; data-plane panels the product identity. Include an alert on guard-drop /
-  cardinality-overflow being present (today: `rate(decant_guard_dropped_total[…]) > 0`).
+  cardinality-overflow being present (today: `rate(genai_otel_bridge_guard_dropped_total[…]) > 0`).
 - **Tracing, opt-in / default-off (self-APM only).** Spans over the integrator's OWN loop
   (tick→collect→sanitize→encode→emit) to debug *our* latency — NOT the Portkey/LangSmith data.
   Default sampler = never; config/env flag flips it on. Caveats: (a) amends ARCHITECTURE decision #4

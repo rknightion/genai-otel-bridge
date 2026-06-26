@@ -21,8 +21,8 @@ func (c *Client) Do(req *http.Request) (*http.Response, error)
 `Config.Observer func(RequestInfo)`, if set, fires **once per request actually sent upstream** — after
 the egress guard + limiter pass, so guard-blocked / limiter-rejected requests are NOT observed (they
 aren't upstream latency). `RequestInfo` carries `{Target host, Method, StatusCode, Err, Duration}`;
-`Duration` is time-to-response-headers excluding the limiter wait. Wired (in `cmd/decant`) to the
-selfobs `decant_upstream_request_duration_seconds` histogram — httpx and selfobs stay decoupled.
+`Duration` is time-to-response-headers excluding the limiter wait. Wired (in `cmd/genai-otel-bridge`) to the
+selfobs `genai_otel_bridge_upstream_request_duration_seconds` histogram — httpx and selfobs stay decoupled.
 
 ## SSRF egress guard
 

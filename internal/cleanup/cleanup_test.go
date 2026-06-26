@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	testNS    = "decant"
-	testLease = "decant-leader"
-	testCM    = "decant-checkpoints"
+	testNS    = "genai-otel-bridge"
+	testLease = "genai-otel-bridge-leader"
+	testCM    = "genai-otel-bridge-checkpoints"
 )
 
 func newLease(ns, name string) *coordv1.Lease {

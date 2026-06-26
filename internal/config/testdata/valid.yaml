@@ -5,7 +5,7 @@ emit:
       instance_id: ${GC_INSTANCE_ID}
       token: ${GC_OTLP_TOKEN}
 identity:
-  service_namespace: decant
+  service_namespace: genai-otel-bridge
   deployment_environment: ${ENV}
 ha:
   coordinator: lease

@@ -20,25 +20,25 @@ type Metrics struct {
 }
 
 func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
-	me := mp.Meter("decant/selfobs")
+	me := mp.Meter("genai-otel-bridge/selfobs")
 	var err error
 	m := &Metrics{}
 	mk := func(n, desc string) metric.Int64Counter {
-		c, e := me.Int64Counter("decant_"+n, metric.WithDescription(desc))
+		c, e := me.Int64Counter("genai_otel_bridge_"+n, metric.WithDescription(desc))
 		if e != nil {
 			err = e
 		}
 		return c
 	}
 	mg := func(n, desc, unit string) metric.Float64Gauge {
-		g, e := me.Float64Gauge("decant_"+n, metric.WithDescription(desc), metric.WithUnit(unit))
+		g, e := me.Float64Gauge("genai_otel_bridge_"+n, metric.WithDescription(desc), metric.WithUnit(unit))
 		if e != nil {
 			err = e
 		}
 		return g
 	}
 	mh := func(n, desc, unit string, bounds []float64) metric.Float64Histogram {
-		h, e := me.Float64Histogram("decant_"+n, metric.WithDescription(desc), metric.WithUnit(unit), metric.WithExplicitBucketBoundaries(bounds...))
+		h, e := me.Float64Histogram("genai_otel_bridge_"+n, metric.WithDescription(desc), metric.WithUnit(unit), metric.WithExplicitBucketBoundaries(bounds...))
 		if e != nil {
 			err = e
 		}

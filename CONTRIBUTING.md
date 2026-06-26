@@ -26,7 +26,7 @@ make gate     # vet + test + lint + spdx-check + build
 Other useful targets:
 
 ```bash
-make build    # -> bin/decant (version stamped via git describe)
+make build    # -> bin/genai-otel-bridge (version stamped via git describe)
 make test     # go test ./...
 make lint     # golangci-lint run
 go test -tags acceptance ./internal/app/   # acceptance gates (failover / outage / soak)

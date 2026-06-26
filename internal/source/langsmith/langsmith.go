@@ -122,7 +122,7 @@ func New(sc config.SourceConfig, deps source.Deps) (source.Source, error) {
 func newClient(sc config.SourceConfig, deps source.Deps) *httpx.Client {
 	ua := sc.HTTP.UserAgent
 	if ua == "" {
-		ua = "decant/0.1"
+		ua = "genai-otel-bridge/0.1"
 	}
 	return httpx.New(httpx.Config{
 		UserAgent: ua, Timeout: httpTimeout,
@@ -137,7 +137,7 @@ func newClient(sc config.SourceConfig, deps source.Deps) *httpx.Client {
 func newSource(cfg Config, deps source.Deps) (source.Source, error) {
 	ua := cfg.UserAgent
 	if ua == "" {
-		ua = "decant/0.1"
+		ua = "genai-otel-bridge/0.1"
 	}
 	hc := httpx.New(httpx.Config{
 		UserAgent: ua, Timeout: httpTimeout,

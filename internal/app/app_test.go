@@ -79,7 +79,7 @@ func TestEffectiveContentDenylist(t *testing.T) {
 func minimalConfig(baseURL string) *config.Config {
 	return &config.Config{
 		Emit:     config.EmitConfig{Telemetry: config.OTLPTarget{OTLP: config.OTLPConn{Endpoint: "https://otlp.example", InstanceID: "1", Token: "t"}}},
-		Identity: config.IdentityConfig{ServiceNamespace: "decant", DeploymentEnvironment: "dev"},
+		Identity: config.IdentityConfig{ServiceNamespace: "genai-otel-bridge", DeploymentEnvironment: "dev"},
 		HA:       config.HAConfig{Coordinator: "none", Checkpoint: "file"},
 		Queue:    config.QueueConfig{MaxBatches: 4, MaxBatchBytes: 1 << 20, EmitWorkers: 1},
 		Sources: []config.SourceConfig{{
@@ -122,7 +122,7 @@ func TestBuildAndOneEmitCycle(t *testing.T) {
 
 	cfg := minimalConfig(pk.URL)
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t", Identity: map[string]string{"service.namespace": "decant"}, MaxBytes: 1 << 20})
+	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t", Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
 	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
 	if err != nil {
 		t.Fatal(err)

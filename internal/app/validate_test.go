@@ -17,7 +17,7 @@ emit:
       instance_id: ${TEST_ID}
       token: ${TEST_TOK}
 identity:
-  service_namespace: decant
+  service_namespace: genai-otel-bridge
   deployment_environment: test
 ha:
   coordinator: lease

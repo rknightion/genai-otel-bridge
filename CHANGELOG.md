@@ -1,11 +1,11 @@
 # Changelog
 
-All notable changes to decant. Generated from Conventional Commits.
+All notable changes to genai-otel-bridge. Generated from Conventional Commits.
 ## [2.1.1] - 2026-06-25
 
 ### Bug Fixes
 - Empty-array-safe PRIVATE_NAMES expansion (bash 3.2 + set -u)
-- Example image -> ghcr.io/rknightion/decant:latest (GHCR has no :main)
+- Example image -> ghcr.io/rknightion/genai-otel-bridge:latest (GHCR has no :main)
 - Log in to the registry host, not host/namespace (GHCR support)
 ## [2.1.0] - 2026-06-25
 
@@ -19,10 +19,10 @@ All notable changes to decant. Generated from Conventional Commits.
 - Sanitize root CLAUDE.md + put CLAUDE.md on the public surface
 
 ### Features
-- Add 'decant -validate-config' for secret-free config/overlay validation
+- Add 'genai-otel-bridge -validate-config' for secret-free config/overlay validation
 
 ### Refactor
-- Rename make-aip-oi-secret.sh -> make-decant-secret.sh
+- Rename make-aip-oi-secret.sh -> make-genai-otel-bridge-secret.sh
 - Genericize EKS example, move onto the public surface
 - Extract customer delivery artifacts out of the product repo
 ## [2.0.0] - 2026-06-25
@@ -31,7 +31,7 @@ All notable changes to decant. Generated from Conventional Commits.
 - Optimise renovate config for vendored go + conventional commits
 
 ### Refactor
-- Rename project to genai-otel-bridge, artifacts to decant
+- Rename project to genai-otel-bridge, artifacts to genai-otel-bridge
 ## [1.5.0] - 2026-06-24
 
 ### Bug Fixes
@@ -77,7 +77,7 @@ All notable changes to decant. Generated from Conventional Commits.
 - ValidateOwnership passes with api_key_use_cases (M7 regression guard)
 # Changelog
 
-All notable changes to decant. Subsequent releases are generated from Conventional Commits.
+All notable changes to genai-otel-bridge. Subsequent releases are generated from Conventional Commits.
 
 ## [1.3.1] - 2026-06-23
 
@@ -124,7 +124,7 @@ All notable changes to decant. Subsequent releases are generated from Convention
 
 ### Features
 
-- Add decant self-observability dashboard (v2, self-obs role)
+- Add genai-otel-bridge self-observability dashboard (v2, self-obs role)
 - Stamp a `source` record attribute on product logs (portkey/langsmith)
 
 ## [1.1.1] - 2026-06-23
@@ -179,7 +179,7 @@ All notable changes to decant. Subsequent releases are generated from Convention
 
 Initial release.
 
-decant is a vendor-neutral integrator that polls AI-platform APIs (LLM gateways such as Portkey,
+genai-otel-bridge is a vendor-neutral integrator that polls AI-platform APIs (LLM gateways such as Portkey,
 evaluation platforms such as LangSmith) and emits operational telemetry to Grafana Cloud as OTLP
 metrics and logs.
 

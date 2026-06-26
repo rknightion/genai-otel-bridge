@@ -99,7 +99,7 @@ func New(cfg config.SourceConfig, deps source.Deps) (source.Source, error) {
 func newClient(cfg config.SourceConfig, deps source.Deps) *httpx.Client {
 	ua := cfg.HTTP.UserAgent
 	if ua == "" {
-		ua = "decant/0.1"
+		ua = "genai-otel-bridge/0.1"
 	}
 	return httpx.New(httpx.Config{
 		UserAgent: ua, Timeout: 10 * time.Second,

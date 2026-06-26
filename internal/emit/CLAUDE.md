@@ -31,7 +31,7 @@ fixed and guarded:
 
 ## DPM cap (product plane)
 
-`coalesce.go` = `CoalesceDPM`: stateless per-(series,minute) LWW coalesce stage (collision-safe key independent of `otlp.labelKey`); called from `schedule.ProcessBatch` before `splitByBucket`. Suppressions counted by the caller via `decant_samples_capped_total{loop,reason="dpm"}`.
+`coalesce.go` = `CoalesceDPM`: stateless per-(series,minute) LWW coalesce stage (collision-safe key independent of `otlp.labelKey`); called from `schedule.ProcessBatch` before `splitByBucket`. Suppressions counted by the caller via `genai_otel_bridge_samples_capped_total{loop,reason="dpm"}`.
 
 ## Other gotchas
 

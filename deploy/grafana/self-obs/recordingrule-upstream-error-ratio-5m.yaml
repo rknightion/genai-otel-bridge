@@ -1,14 +1,14 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: RecordingRule
 metadata:
-  name: decant-upstream-error-ratio-5m
+  name: genai-otel-bridge-upstream-error-ratio-5m
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: decant:upstream_error_ratio:5m
-  metric: decant:upstream_error_ratio:5m
+  title: genai-otel-bridge:upstream_error_ratio:5m
+  metric: genai-otel-bridge:upstream_error_ratio:5m
   targetDatasourceUID: grafanacloud-prom
   trigger:
     interval: 1m
@@ -21,11 +21,11 @@ spec:
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
         # Request-level error fraction to each upstream source API (host = target), from the
-        # decant_upstream_request_duration_seconds histogram count (a cumulative counter — rate() is
+        # genai_otel_bridge_upstream_request_duration_seconds histogram count (a cumulative counter — rate() is
         # correct here, unlike the per-bucket product gauges). status_class 4xx/5xx/error over all
         # requests. Rising => the vendor API is erroring/rejecting/timing out the poller (e.g. Portkey
         # context-deadline). Denominator clamped to avoid divide-by-zero in quiet windows.
-        expr: 'sum by (target) (rate(decant_upstream_request_duration_seconds_count{status_class=~"4xx|5xx|error"}[5m])) / clamp_min(sum by (target) (rate(decant_upstream_request_duration_seconds_count[5m])), 1e-9)'
+        expr: 'sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds_count{status_class=~"4xx|5xx|error"}[5m])) / clamp_min(sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds_count[5m])), 1e-9)'
         instant: true
         range: false
         intervalMs: 1000

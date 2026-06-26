@@ -2,7 +2,7 @@
 
 `Build` assembles the app from injected dependencies; `Run` serves health + runs the scheduler under
 the coordinator. Dependencies (`checkpoint.Checkpointer`, `coordinate.Coordinator`, `emit.Emitter`,
-`schedule.Metrics`) are injected so `cmd/decant` supplies real ones and tests supply fakes.
+`schedule.Metrics`) are injected so `cmd/genai-otel-bridge` supplies real ones and tests supply fakes.
 
 ```go
 func Build(ctx, cfg *config.Config, cp checkpoint.Checkpointer, coord coordinate.Coordinator,

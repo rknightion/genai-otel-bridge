@@ -57,9 +57,9 @@ race test on shared `Sanitize`. Not heavily table-driven.
 
 `Constructor`/`Registry.Build` take a `source.Deps` alongside `config.SourceConfig` — cross-cutting
 hooks that aren't YAML data. Today it carries `UpstreamObserver httpx.Observer` (wired into the
-`httpx.Client` so outbound calls feed the self-obs `decant_upstream_request_duration_seconds` histogram)
+`httpx.Client` so outbound calls feed the self-obs `genai_otel_bridge_upstream_request_duration_seconds` histogram)
 plus the injected self-metric hooks `OnBucketRevised`/`OnGraphSkipped`/`OnAuthError(loop,source)` — the
-last fires on a 401/403 (use `source.IsAuthStatus(code)`) → `decant_auth_errors_total{loop,source}`, so a
+last fires on a 401/403 (use `source.IsAuthStatus(code)`) → `genai_otel_bridge_auth_errors_total{loop,source}`, so a
 credential failure is its own alertable signal. Every hook's zero value is a no-op, so tests pass
 `Deps{}`. Add future cross-cutting deps (tracer, logger) here rather than widening the constructor again.
 
@@ -80,7 +80,7 @@ From an external review (2026-06):
   `OTEL_GO_X_CARDINALITY_LIMIT`, off by default, and *overflows* — `otel.metric.overflow=true` — rather
   than silently dropping.) The selfobs path *does* use the SDK but is low-cardinality.
 - **Overflow-collapse instead of drop (future).** Today over-budget series are dropped (counted via
-  `decant_guard_dropped_total`). When higher-cardinality labels get allow-listed (beyond v1's
+  `genai_otel_bridge_guard_dropped_total`). When higher-cardinality labels get allow-listed (beyond v1's
   `quantile`-only), collapse over-budget series into a single `otel.metric.overflow=true` bucket to
   preserve the aggregate — **but only for additive series** (request/error/token counts). Quantile/
   latency *gauges* stay drop-with-counter: summing p99s across collapsed series is meaningless. Use the

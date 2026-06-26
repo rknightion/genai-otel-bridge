@@ -1,9 +1,9 @@
-# Example decant Helm overrides for an EKS cluster (private API endpoint, NAT egress, direct-to-Grafana-Cloud).
+# Example genai-otel-bridge Helm overrides for an EKS cluster (private API endpoint, NAT egress, direct-to-Grafana-Cloud).
 #
-# Deploy: helm upgrade --install decant ./deploy/helm -n default -f test/eks/values-eks.yaml
+# Deploy: helm upgrade --install genai-otel-bridge ./deploy/helm -n default -f test/eks/values-eks.yaml
 #
-# Prereq: the `decant-secrets` Secret must exist in the target namespace first — create it with
-# test/eks/make-decant-secret.sh (which reads the required values from your environment). The ${ENV}
+# Prereq: the `genai-otel-bridge-secrets` Secret must exist in the target namespace first — create it with
+# test/eks/make-genai-otel-bridge-secret.sh (which reads the required values from your environment). The ${ENV}
 # refs in configOverride below are resolved by the binary from that Secret (envFrom); an unset ref is fatal.
 #
 # Telemetry: product metrics/logs and self-observability go to Grafana Cloud over https via the cluster
@@ -14,7 +14,7 @@ replicas: 2
 
 # Container image. `:latest` tracks the most recent release; pin a specific `:vX.Y.Z` tag instead for a
 # fully reproducible deploy. imagePullPolicy: Always so deleting a pod re-pulls a moved `:latest`.
-image: ghcr.io/rknightion/decant:latest
+image: ghcr.io/rknightion/genai-otel-bridge:latest
 imagePullPolicy: Always
 
 # Image pull secret (a kubernetes.io/dockerconfigjson Secret in the release namespace). Required when the
@@ -54,7 +54,7 @@ profiling:
   mode: push
 
 # Fully-resolved runtime config (verbatim). Secret-bearing fields use ${ENV} refs injected from the
-# decant-secrets Secret; everything else is literal. Product -> emit.telemetry, self-obs -> emit.self,
+# genai-otel-bridge-secrets Secret; everything else is literal. Product -> emit.telemetry, self-obs -> emit.self,
 # self-profiles -> Pyroscope (selfobs.profiling.push).
 configOverride: |
   emit:
@@ -72,7 +72,7 @@ configOverride: |
         token: ${GC_SELF_OTLP_TOKEN}
         allow_insecure: false
   identity:
-    service_namespace: decant
+    service_namespace: genai-otel-bridge
     deployment_environment: eks-test
   ha:
     coordinator: lease
@@ -182,7 +182,7 @@ configOverride: |
     # Key is tenant-scoped (one tenant_id, many projects). The base URL MUST include /api/v1
     # (the client appends only /sessions, /runs/query). sessions=metrics, runs=logs.
     # base_url is env-injected (instance-specific endpoint, kept out of git) via LANGSMITH_BASE_URL
-    # in the decant-secrets Secret — see test/eks/make-decant-secret.sh.
+    # in the genai-otel-bridge-secrets Secret — see test/eks/make-genai-otel-bridge-secret.sh.
     - type: langsmith
       enabled: true
       base_url: ${LANGSMITH_BASE_URL}

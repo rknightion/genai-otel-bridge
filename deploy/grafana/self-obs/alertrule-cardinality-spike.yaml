@@ -1,13 +1,13 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: decant-cardinality-spike
+  name: genai-otel-bridge-cardinality-spike
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: DecantCardinalitySpike
+  title: GenaiOtelBridgeCardinalitySpike
   # Sustained creation of never-before-seen label-value combinations on a series — a cardinality
   # early-warning. In steady state, no new label values are expected (all dimensions are bounded).
   # A sustained rate >0.05/s means ~180 new combinations/hour on that series, which will eventually
@@ -21,8 +21,8 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "decant cardinality spike on series {{ $labels.series }}"
-    description: "decant_new_label_values_total for series {{ $labels.series }} is increasing at >0.05/s sustained for 15m — a cardinality early-warning. New never-before-seen label-value combinations are being created. Likely cause: an unbounded label dimension (e.g. a request ID or freeform metadata field) is leaking through the Guard allow-list into emitted metrics. Check the Guard allow-list config (governance.allow_label_keys) and the source dimension feeding {{ $labels.series }}. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge cardinality spike on series {{ $labels.series }}"
+    description: "genai_otel_bridge_new_label_values_total for series {{ $labels.series }} is increasing at >0.05/s sustained for 15m — a cardinality early-warning. New never-before-seen label-value combinations are being created. Likely cause: an unbounded label dimension (e.g. a request ID or freeform metadata field) is leaking through the Guard allow-list into emitted metrics. Check the Guard allow-list config (governance.allow_label_keys) and the source dimension feeding {{ $labels.series }}. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -30,7 +30,7 @@ spec:
       relativeTimeRange: {from: 1h5s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (series) (rate(decant_new_label_values_total[1h])) > 0.05'
+        expr: 'sum by (series) (rate(genai_otel_bridge_new_label_values_total[1h])) > 0.05'
         instant: true
         range: false
         intervalMs: 1000

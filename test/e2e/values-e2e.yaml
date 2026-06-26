@@ -2,7 +2,7 @@
 # source over an in-cluster ClusterIP (http + allow_private), and a loopback OTLP sink sidecar
 # (emit is https-or-loopback, so the sink must be in-pod loopback, not a Service).
 replicas: 3
-image: decant:dev
+image: genai-otel-bridge:dev
 imagePullPolicy: IfNotPresent
 resources:                    # lean e2e box; limit == request keeps it tight
   requests:
@@ -32,7 +32,7 @@ configOverride: |
         instance_id: "1"
         token: "e2e"
   identity:
-    service_namespace: decant
+    service_namespace: genai-otel-bridge
     deployment_environment: e2e
   ha:
     coordinator: lease
@@ -68,7 +68,7 @@ configOverride: |
 extraContainers:
   # Loopback OTLP sink — absorbs emit (127.0.0.1:4318) + reports per-pod export count (8090).
   - name: otlp-sink
-    image: decant-e2e-helper:dev
+    image: genai-otel-bridge-e2e-helper:dev
     imagePullPolicy: IfNotPresent
     args: ["-mode=sink"]
     ports:
@@ -88,7 +88,7 @@ extraContainers:
   # Mock Portkey Analytics — loopback source (127.0.0.1:8080). Per-pod, so the leader polls its own
   # mock; the watermark advances on every (empty) poll and commits to the SHARED checkpoint ConfigMap.
   - name: mock-portkey
-    image: decant-e2e-helper:dev
+    image: genai-otel-bridge-e2e-helper:dev
     imagePullPolicy: IfNotPresent
     args: ["-mode=portkey"]
     ports:

@@ -19,7 +19,7 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
-const scopeName = "decant"
+const scopeName = "genai-otel-bridge"
 
 // sortedKVs converts a map to []*KeyValue in sorted-key order (deterministic).
 func sortedKVs(m map[string]string) []*commonpb.KeyValue {

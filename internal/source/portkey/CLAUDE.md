@@ -171,7 +171,7 @@ allow-list), `logs_settings.go` (decoupled knobs + `newLogsExportLoop`).
   truncation). Per-chunk re-download is the resume mechanism — bounded memory, but a >chunk_max_records
   page re-GETs the whole object per chunk (tune `chunk_max_records`/`window` for high-traffic windows).
 - **Failure honesty:** failed/stopped/stuck jobs `slog.Error` AND fire `Deps.OnGraphSkipped` (→
-  `decant_source_graph_unavailable_total{loop=logs_export,graph=export_failed|export_stuck}`).
+  `genai_otel_bridge_source_graph_unavailable_total{loop=logs_export,graph=export_failed|export_stuck}`).
   `max_pages_per_window` over-size → loud error (no silent tail-drop). `max_backfill` floor skips an
   unstorable old span loudly (mirrors analytics F25).
 - **Decoupled knobs** (`settings`, no `internal/config` change): `window`(1h) `settle`(10m)

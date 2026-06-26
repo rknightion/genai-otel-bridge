@@ -1,14 +1,14 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: RecordingRule
 metadata:
-  name: decant-window-truncated-rate5m
+  name: genai-otel-bridge-window-truncated-rate5m
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: decant:window_truncated:rate5m
-  metric: decant:window_truncated:rate5m
+  title: genai-otel-bridge:window_truncated:rate5m
+  metric: genai-otel-bridge:window_truncated:rate5m
   targetDatasourceUID: grafanacloud-prom
   trigger:
     interval: 1m
@@ -20,7 +20,7 @@ spec:
       relativeTimeRange: {from: 6m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop) (rate(decant_source_graph_unavailable_total{graph="window_truncated"}[5m]))'
+        expr: 'sum by (loop) (rate(genai_otel_bridge_source_graph_unavailable_total{graph="window_truncated"}[5m]))'
         instant: true
         range: false
         intervalMs: 1000

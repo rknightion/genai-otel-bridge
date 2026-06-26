@@ -18,14 +18,14 @@ import (
 // sub-minute / grouped source that produces several distinct-timestamp points inside one minute for one
 // series is collapsed before those points fan into separate per-bucket emits (each of which Mimir would
 // otherwise accept = >1DPM). Returns the surviving samples (input order preserved on the common no-op
-// path) and the count suppressed (counted via decant_samples_capped_total, never silent).
+// path) and the count suppressed (counted via genai_otel_bridge_samples_capped_total, never silent).
 //
 // Why stateless / intra-batch is sufficient (no cross-batch seen-set on the gap-free path):
 //   - cross-batch same-minute re-emit is already prevented by bucket-settle + the forward-only,
 //     epoch-fenced watermark (a settled minute is emitted once, never re-collected);
 //   - cross-LOOP same-series collision is prevented at config time by source.ValidateOwnership;
 //   - exact-duplicate-timestamp writes are the backstop: Mimir rejects them and the runner skips-with-
-//     gap (decant_samples_skipped_total{reason="duplicate_timestamp"}), also counted.
+//     gap (genai_otel_bridge_samples_skipped_total{reason="duplicate_timestamp"}), also counted.
 //
 // So the only uncaught >1DPM path is intra-batch sub-minute multiplicity — exactly what this closes.
 //

@@ -1,14 +1,14 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: decant-no-standby
+  name: genai-otel-bridge-no-standby
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: DecantNoStandby
-  # Fewer than 2 replicas are self-reporting decant_window_lag_seconds — no standby is present, so
+  title: GenaiOtelBridgeNoStandby
+  # Fewer than 2 replicas are self-reporting genai_otel_bridge_window_lag_seconds — no standby is present, so
   # there is no failover headroom. Both the active (leader) and standby replicas self-emit this metric,
   # so healthy HA shows >=2 distinct service_instance_id values. A single pod restart would cause an
   # emit gap until the new replica wins the lease. This alert is expected to fire on intentionally
@@ -21,8 +21,8 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "decant has no standby replica (fewer than 2 replicas self-reporting)"
-    description: "count(group by (service_instance_id) (decant_window_lag_seconds)) < 2 for 15m — fewer than 2 replicas are self-reporting, so there is no standby and no failover headroom. A single pod restart will cause an emit gap until a replacement wins the lease. Check the Deployment replica count (expected >=2 for HA), pod health/scheduling, and whether the standby is crashing before it starts emitting metrics. Expected on intentionally single-replica dev stacks. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge has no standby replica (fewer than 2 replicas self-reporting)"
+    description: "count(group by (service_instance_id) (genai_otel_bridge_window_lag_seconds)) < 2 for 15m — fewer than 2 replicas are self-reporting, so there is no standby and no failover headroom. A single pod restart will cause an emit gap until a replacement wins the lease. Check the Deployment replica count (expected >=2 for HA), pod health/scheduling, and whether the standby is crashing before it starts emitting metrics. Expected on intentionally single-replica dev stacks. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -30,7 +30,7 @@ spec:
       relativeTimeRange: {from: 16m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'count(group by (service_instance_id) (decant_window_lag_seconds)) < 2'
+        expr: 'count(group by (service_instance_id) (genai_otel_bridge_window_lag_seconds)) < 2'
         instant: true
         range: false
         intervalMs: 1000

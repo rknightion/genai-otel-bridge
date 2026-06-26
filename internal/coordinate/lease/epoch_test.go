@@ -34,9 +34,9 @@ func TestEpochRetriesTransientGetError(t *testing.T) {
 		if atomic.AddInt32(&calls, 1) < 3 {
 			return true, nil, errors.New("transient API blip")
 		}
-		return true, leaseWith("decant", "decant-leader", 7), nil
+		return true, leaseWith("genai-otel-bridge", "genai-otel-bridge-leader", 7), nil
 	})
-	c := New(cs, "decant", "decant-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
+	c := New(cs, "genai-otel-bridge", "genai-otel-bridge-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
 
 	got := c.epoch(context.Background())
 
@@ -57,7 +57,7 @@ func TestEpochReturnsZeroAfterRetriesExhausted(t *testing.T) {
 		atomic.AddInt32(&calls, 1)
 		return true, nil, errors.New("sustained API outage")
 	})
-	c := New(cs, "decant", "decant-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
+	c := New(cs, "genai-otel-bridge", "genai-otel-bridge-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
 
 	if got := c.epoch(context.Background()); got != 0 {
 		t.Fatalf("epoch = %d, want 0 (a genuine read failure must fall back to the loud fence)", got)
@@ -75,11 +75,11 @@ func TestEpochNilTransitionsIsZeroWithoutRetry(t *testing.T) {
 	cs.PrependReactor("get", "leases", func(ktesting.Action) (bool, kruntime.Object, error) {
 		atomic.AddInt32(&calls, 1)
 		return true, &coordv1.Lease{
-			ObjectMeta: metav1.ObjectMeta{Name: "decant-leader", Namespace: "decant"},
+			ObjectMeta: metav1.ObjectMeta{Name: "genai-otel-bridge-leader", Namespace: "genai-otel-bridge"},
 			Spec:       coordv1.LeaseSpec{LeaseTransitions: nil},
 		}, nil
 	})
-	c := New(cs, "decant", "decant-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
+	c := New(cs, "genai-otel-bridge", "genai-otel-bridge-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
 
 	if got := c.epoch(context.Background()); got != 0 {
 		t.Fatalf("epoch = %d, want 0 for nil LeaseTransitions", got)
@@ -96,7 +96,7 @@ func TestEpochAbortsRetryOnContextCancel(t *testing.T) {
 	cs.PrependReactor("get", "leases", func(ktesting.Action) (bool, kruntime.Object, error) {
 		return true, nil, errors.New("transient API blip")
 	})
-	c := New(cs, "decant", "decant-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
+	c := New(cs, "genai-otel-bridge", "genai-otel-bridge-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

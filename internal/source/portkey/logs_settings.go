@@ -289,7 +289,7 @@ func newLogsExportLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps so
 	}
 	ua := cfg.HTTP.UserAgent
 	if ua == "" {
-		ua = "decant/0.1"
+		ua = "genai-otel-bridge/0.1"
 	}
 	dl := httpx.New(httpx.Config{
 		UserAgent: ua, Timeout: ls.downloadTimeout,

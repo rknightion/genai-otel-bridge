@@ -43,7 +43,7 @@ func TestDoSetsUserAgentAndAcquiresToken(t *testing.T) {
 		gotUA = r.Header.Get("User-Agent")
 	}))
 	defer srv.Close()
-	c := New(Config{UserAgent: "decant/0.1", Timeout: 2 * time.Second, AllowPrivate: true,
+	c := New(Config{UserAgent: "genai-otel-bridge/0.1", Timeout: 2 * time.Second, AllowPrivate: true,
 		Limiter: rate.NewLimiter(rate.Every(time.Millisecond), 1)})
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
 	resp, err := c.Do(req)
@@ -51,7 +51,7 @@ func TestDoSetsUserAgentAndAcquiresToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if gotUA != "decant/0.1" {
+	if gotUA != "genai-otel-bridge/0.1" {
 		t.Fatalf("UA=%q", gotUA)
 	}
 }

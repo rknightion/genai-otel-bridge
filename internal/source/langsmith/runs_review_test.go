@@ -71,7 +71,7 @@ func TestRunsDiscoveryFrozenWhileDraining_H1(t *testing.T) {
 }
 
 // TestSessionDiscoveryTruncationCounted_M1 [adversarial-review M1]: a max_sessions truncation must be
-// COUNTED (OnGraphSkipped → decant_source_graph_unavailable_total), not merely logged — otherwise a
+// COUNTED (OnGraphSkipped → genai_otel_bridge_source_graph_unavailable_total), not merely logged — otherwise a
 // project population growing past the cap silently stops being pulled with no alert.
 func TestSessionDiscoveryTruncationCounted_M1(t *testing.T) {
 	var hits int32

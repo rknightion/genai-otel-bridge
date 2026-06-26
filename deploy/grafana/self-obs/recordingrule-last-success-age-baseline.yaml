@@ -1,14 +1,14 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: RecordingRule
 metadata:
-  name: decant-last-success-age-baseline
+  name: genai-otel-bridge-last-success-age-baseline
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: decant:last_success_age:baseline6h
-  metric: decant:last_success_age:baseline6h
+  title: genai-otel-bridge:last_success_age:baseline6h
+  metric: genai-otel-bridge:last_success_age:baseline6h
   targetDatasourceUID: grafanacloud-prom
   trigger:
     interval: 1m
@@ -24,10 +24,10 @@ spec:
         # what makes the staleness thresholds self-relative and decoupled — no hardcoded per-loop number.
         # A snapshot loop (sessions) settles ~2m; a windowed log loop (runs) sawtooths to tens of minutes;
         # the baseline tracks whatever is normal FOR THAT LOOP. Self-contained (subquery off the raw
-        # metric) so it does not depend on decant:last_success_age:seconds being recorded. Ramps over the
+        # metric) so it does not depend on genai-otel-bridge:last_success_age:seconds being recorded. Ramps over the
         # first ~6h after deploy; during a sustained outage the baseline drifts up (the climbing age series
-        # feeds it) — DecantLeaderAbsent is the absolute backstop for that case.
-        expr: 'quantile_over_time(0.9, (time() - max by (loop) (decant_last_success_timestamp_seconds))[6h:1m])'
+        # feeds it) — GenaiOtelBridgeLeaderAbsent is the absolute backstop for that case.
+        expr: 'quantile_over_time(0.9, (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])'
         instant: true
         range: false
         intervalMs: 1000

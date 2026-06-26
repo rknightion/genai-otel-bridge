@@ -108,7 +108,7 @@ func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, co
 		deps.OnAuthError = authErrorHook(m, logging.NewLimiter(time.Minute))
 	}
 	// [Loki stream-label budget] A logs loop's IndexedAttributes become OTLP resource attrs → Loki stream
-	// labels once GS1 promotes them; together with decant's product identity resource attrs (all in the GC
+	// labels once GS1 promotes them; together with genai-otel-bridge's product identity resource attrs (all in the GC
 	// Loki default-promoted set) they consume the tenant's max_label_names_per_series budget. Loki REJECTS
 	// (silently drops) a stream over that limit — which the operationally-honest rule forbids — so fail
 	// fast here, not at emit time. Ceiling = governance.max_stream_label_keys (default = the GC Loki

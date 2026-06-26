@@ -1,14 +1,14 @@
-# cmd/decant — the binary
+# cmd/genai-otel-bridge — the binary
 
 `main.go`: parse flags → set memory limit → load config → wire real OTLP/k8s/selfobs → run under
 coordinator → handle SIGTERM. No logic beyond wiring (that's `internal/app`).
 
 ## Flags
 
-- `-config` (default `/etc/decant/config.yaml`), `-health-addr` (default `:8080`),
+- `-config` (default `/etc/genai-otel-bridge/config.yaml`), `-health-addr` (default `:8080`),
   `-namespace` (`$POD_NAMESPACE`), `-identity` (`$POD_NAME`, lease identity),
   `-container-mem-bytes` (numerator for `GOMEMLIMIT`),
-  `-checkpoint-file` (default `/var/lib/decant/checkpoints.yaml`; path for the `ha.checkpoint=file`
+  `-checkpoint-file` (default `/var/lib/genai-otel-bridge/checkpoints.yaml`; path for the `ha.checkpoint=file`
   store — override for local runs, e.g. `./checkpoints.local.yaml`).
 - `-validate-config`: **validation path, not a normal run.** Loads + schema/semantic-checks the
   `-config` file via `app.ValidateConfigFile` (placeholders unset `${ENV}` refs so no secrets are
@@ -16,14 +16,14 @@ coordinator → handle SIGTERM. No logic beyond wiring (that's `internal/app`).
   Branches before any wiring. For pre-deploy / CI overlay validation (e.g. an external overlay repo
   validating against the published image).
 - `-cleanup` (+ `-cleanup-retain-checkpoint`): **uninstall path, not a normal run.** Builds an
-  in-cluster client, deletes the app-created `decant-leader` Lease and (unless retain) the
-  `decant-checkpoints` ConfigMap via `internal/cleanup.Run`, then exits. The chart's `post-delete`
+  in-cluster client, deletes the app-created `genai-otel-bridge-leader` Lease and (unless retain) the
+  `genai-otel-bridge-checkpoints` ConfigMap via `internal/cleanup.Run`, then exits. The chart's `post-delete`
   hook invokes it so `helm uninstall` leaves no orphans. Branches **before** any config/emit/selfobs
   wiring — it needs only `-namespace`. Idempotent (NotFound = success).
 
 ## Shared HA-object names
 
-`leaseName` (`decant-leader`) and `checkpointCMName` (`decant-checkpoints`) are package consts — the
+`leaseName` (`genai-otel-bridge-leader`) and `checkpointCMName` (`genai-otel-bridge-checkpoints`) are package consts — the
 single source of truth shared by `buildHA` (creates them) and `runCleanup` (deletes them), and they
 must match the chart RBAC `resourceNames`. Names are fixed (single-instance chart).
 
@@ -44,10 +44,10 @@ must match the chart RBAC `resourceNames`. Names are fixed (single-instance char
   exported), not a coincidental literal; same numeric result as before. So a leader in retry/backpressure
   isn't killed, but a wedged scheduler is. (bucket_settle drives the window_lag alert, not this beat.)
 - **Replica double-emit guard:** the chart fails to render on `ha.coordinator=none` + `replicas>1`
-  (all-leader double-emit); the binary re-checks via the `DECANT_REPLICAS` env (defence-in-depth).
+  (all-leader double-emit); the binary re-checks via the `GENAI_OTEL_BRIDGE_REPLICAS` env (defence-in-depth).
 - **HA wiring (`buildHA`):** an in-cluster k8s client is created only if `coordinator=lease` **or**
-  `checkpoint=configmap`. checkpoint: `configmap` → ConfigMap `decant-checkpoints`; `file` →
-  `/var/lib/decant/checkpoints.yaml`. coordinator: `lease` → Lease `decant-leader` (15s/10s/2s);
+  `checkpoint=configmap`. checkpoint: `configmap` → ConfigMap `genai-otel-bridge-checkpoints`; `file` →
+  `/var/lib/genai-otel-bridge/checkpoints.yaml`. coordinator: `lease` → Lease `genai-otel-bridge-leader` (15s/10s/2s);
   `none` → `coordinate.Noop`.
 
 Version is stamped into `internal/version.Version` via `make build` ldflags

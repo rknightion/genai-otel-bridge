@@ -1,16 +1,16 @@
 apiVersion: dashboard.grafana.app/v2
 kind: Dashboard
 metadata:
-  name: decant-self-obs
+  name: genai-otel-bridge-self-obs
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: "decant \u2014 self-observability"
-  description: "Operational health of the decant integrator itself (the decant_* self-metrics, the poller's own stdout logs, and its runtime profiles). Tabbed top-down triage. Staleness is shown self-relative (decant:freshness_ratio: >1 = staler than the loop's own 6h baseline) so one scale serves loops of any cadence. Stack-agnostic: pick the Prometheus/Loki/Pyroscope datasources via the variables. NOTE: emitted/last_success/window_lag are recorded only on a SUCCESSFUL emit (the watermark must leave zero) \u2014 empty there is a real signal that emit is failing, not a broken panel. The freshness/upstream-ratio panels need the self-obs recording rules pushed."
+  title: "genai-otel-bridge \u2014 self-observability"
+  description: "Operational health of the genai-otel-bridge integrator itself (the genai_otel_bridge_* self-metrics, the poller's own stdout logs, and its runtime profiles). Tabbed top-down triage. Staleness is shown self-relative (genai-otel-bridge:freshness_ratio: >1 = staler than the loop's own 6h baseline) so one scale serves loops of any cadence. Stack-agnostic: pick the Prometheus/Loki/Pyroscope datasources via the variables. NOTE: emitted/last_success/window_lag are recorded only on a SUCCESSFUL emit (the watermark must leave zero) \u2014 empty there is a real signal that emit is failing, not a broken panel. The freshness/upstream-ratio panels need the self-obs recording rules pushed."
   tags:
-  - decant
+  - genai-otel-bridge
   - self-obs
   - gcx
   editable: true
@@ -105,7 +105,7 @@ spec:
     spec:
       name: loop
       label: Loop
-      definition: label_values(decant_window_lag_seconds,loop)
+      definition: label_values(genai_otel_bridge_window_lag_seconds,loop)
       current:
         text:
         - All
@@ -128,13 +128,13 @@ spec:
         datasource:
           name: ${datasource}
         spec:
-          query: label_values(decant_window_lag_seconds,loop)
+          query: label_values(genai_otel_bridge_window_lag_seconds,loop)
           refId: PrometheusVariableQueryEditor-VariableQuery
   - kind: QueryVariable
     spec:
       name: namespace
       label: Namespace
-      definition: label_values({service_name="decant"}, namespace)
+      definition: label_values({service_name="genai-otel-bridge"}, namespace)
       current:
         text:
         - All
@@ -157,7 +157,7 @@ spec:
         datasource:
           name: ${loki}
         spec:
-          query: label_values({service_name="decant"}, namespace)
+          query: label_values({service_name="genai-otel-bridge"}, namespace)
           refId: LokiVariableQueryEditor-VariableQuery
   elements:
     panel-100:
@@ -183,7 +183,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(decant:freshness_ratio{loop=~"$loop"}) < bool 2
+                    expr: max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2
                     legendFormat: ''
                     range: false
                     instant: true
@@ -254,7 +254,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(present_over_time(decant_last_success_timestamp_seconds{loop=~"$loop"}[15m]))
+                    expr: max(present_over_time(genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"}[15m]))
                     legendFormat: ''
                     range: false
                     instant: true
@@ -310,7 +310,7 @@ spec:
       spec:
         id: 102
         title: Replicas emitting
-        description: Distinct service_instance_id self-reporting. <2 => no standby (DecantNoStandby). Both active+standby self-emit, so 2 is the healthy HA steady state.
+        description: Distinct service_instance_id self-reporting. <2 => no standby (GenaiOtelBridgeNoStandby). Both active+standby self-emit, so 2 is the healthy HA steady state.
         links: []
         data:
           kind: QueryGroup
@@ -328,7 +328,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: count(group by (service_instance_id) (decant_window_lag_seconds))
+                    expr: count(group by (service_instance_id) (genai_otel_bridge_window_lag_seconds))
                     legendFormat: ''
                     range: false
                     instant: true
@@ -370,7 +370,7 @@ spec:
       spec:
         id: 103
         title: Worst freshness ratio
-        description: 'max(decant:freshness_ratio): each loop''s staleness over its OWN trailing-6h p90 baseline. <1.5 normal, >2 = much staler than this loop''s normal. Uniform scale across loops of any cadence. Needs the recording rules pushed.'
+        description: 'max(genai-otel-bridge:freshness_ratio): each loop''s staleness over its OWN trailing-6h p90 baseline. <1.5 normal, >2 = much staler than this loop''s normal. Uniform scale across loops of any cadence. Needs the recording rules pushed.'
         links: []
         data:
           kind: QueryGroup
@@ -388,7 +388,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(decant:freshness_ratio{loop=~"$loop"})
+                    expr: max(genai-otel-bridge:freshness_ratio{loop=~"$loop"})
                     legendFormat: ''
                     range: false
                     instant: true
@@ -450,7 +450,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(decant_window_lag_seconds{loop=~"$loop"})
+                    expr: max(genai_otel_bridge_window_lag_seconds{loop=~"$loop"})
                     legendFormat: ''
                     range: false
                     instant: true
@@ -494,7 +494,7 @@ spec:
       spec:
         id: 105
         title: Fatal emit errors (1h)
-        description: "sum(increase(decant_emit_errors_total{kind!='collect'}[1h])) \u2014 fatal kinds only (retryable_exhausted / checkpoint_* / bad_encoding); the benign upstream-fetch 'collect' retries are excluded. >0 => emit/commit is failing."
+        description: "sum(increase(genai_otel_bridge_emit_errors_total{kind!='collect'}[1h])) \u2014 fatal kinds only (retryable_exhausted / checkpoint_* / bad_encoding); the benign upstream-fetch 'collect' retries are excluded. >0 => emit/commit is failing."
         links: []
         data:
           kind: QueryGroup
@@ -512,7 +512,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: (sum(increase(decant_emit_errors_total{loop=~"$loop",kind!="collect"}[1h])) or vector(0))
+                    expr: (sum(increase(genai_otel_bridge_emit_errors_total{loop=~"$loop",kind!="collect"}[1h])) or vector(0))
                     legendFormat: ''
                     range: false
                     instant: true
@@ -554,7 +554,7 @@ spec:
       spec:
         id: 110
         title: Freshness ratio by loop (self-relative staleness)
-        description: "decant:freshness_ratio per loop. 1.0 = exactly the loop's own 6h-p90 staleness; the lines mark 1 (baseline) and 2 (alert). This is the decoupled, per-loop staleness view \u2014 a flat 15m threshold can't serve loops whose normal ranges from ~2m (sessions) to tens of minutes (runs)."
+        description: "genai-otel-bridge:freshness_ratio per loop. 1.0 = exactly the loop's own 6h-p90 staleness; the lines mark 1 (baseline) and 2 (alert). This is the decoupled, per-loop staleness view \u2014 a flat 15m threshold can't serve loops whose normal ranges from ~2m (sessions) to tens of minutes (runs)."
         links: []
         data:
           kind: QueryGroup
@@ -572,7 +572,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: decant:freshness_ratio{loop=~"$loop"}
+                    expr: genai-otel-bridge:freshness_ratio{loop=~"$loop"}
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -625,7 +625,7 @@ spec:
       spec:
         id: 111
         title: Emitted throughput by loop
-        description: rate of metric samples (decant_emitted_total) and log records (decant_emitted_logs_total) successfully emitted, per loop. Zero across all while data exists upstream => emit broken.
+        description: rate of metric samples (genai_otel_bridge_emitted_total) and log records (genai_otel_bridge_emitted_logs_total) successfully emitted, per loop. Zero across all while data exists upstream => emit broken.
         links: []
         data:
           kind: QueryGroup
@@ -643,7 +643,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(decant_emitted_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} samples'
                     range: true
                     instant: false
@@ -661,7 +661,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(decant_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} logs'
                     range: true
                     instant: false
@@ -701,7 +701,7 @@ spec:
       spec:
         id: 120
         title: Window lag by loop
-        description: decant_window_lag_seconds per loop (now - watermark frontier). Flat-low is healthy; a sustained climb means the loop is not advancing its watermark.
+        description: genai_otel_bridge_window_lag_seconds per loop (now - watermark frontier). Flat-low is healthy; a sustained climb means the loop is not advancing its watermark.
         links: []
         data:
           kind: QueryGroup
@@ -719,7 +719,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: decant_window_lag_seconds{loop=~"$loop"}
+                    expr: genai_otel_bridge_window_lag_seconds{loop=~"$loop"}
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -759,7 +759,7 @@ spec:
       spec:
         id: 121
         title: Last-success age vs each loop's baseline
-        description: Solid = time() - last_success (age). Dashed = decant:last_success_age:baseline6h (the loop's own 6h-p90 normal). Age sawtoothing under its baseline is healthy; age pulling away above the baseline is the staleness signal DecantPollerStale fires on.
+        description: Solid = time() - last_success (age). Dashed = genai-otel-bridge:last_success_age:baseline6h (the loop's own 6h-p90 normal). Age sawtoothing under its baseline is healthy; age pulling away above the baseline is the staleness signal GenaiOtelBridgePollerStale fires on.
         links: []
         data:
           kind: QueryGroup
@@ -777,7 +777,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: time() - max by (loop) (decant_last_success_timestamp_seconds{loop=~"$loop"})
+                    expr: time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})
                     legendFormat: '{{loop}} age'
                     range: true
                     instant: false
@@ -795,7 +795,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: decant:last_success_age:baseline6h{loop=~"$loop"}
+                    expr: genai-otel-bridge:last_success_age:baseline6h{loop=~"$loop"}
                     legendFormat: '{{loop}} baseline'
                     range: true
                     instant: false
@@ -853,7 +853,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: count(group by (service_instance_id) (decant_window_lag_seconds))
+                    expr: count(group by (service_instance_id) (genai_otel_bridge_window_lag_seconds))
                     legendFormat: replicas
                     range: true
                     instant: false
@@ -911,7 +911,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: decant:freshness_ratio{loop="$loop"}
+                    expr: genai-otel-bridge:freshness_ratio{loop="$loop"}
                     legendFormat: ''
                     range: false
                     instant: true
@@ -945,7 +945,7 @@ spec:
       spec:
         id: 130
         title: Emitted samples /s by loop
-        description: rate(decant_emitted_total). Metric data points successfully emitted.
+        description: rate(genai_otel_bridge_emitted_total). Metric data points successfully emitted.
         links: []
         data:
           kind: QueryGroup
@@ -963,7 +963,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(decant_emitted_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1003,7 +1003,7 @@ spec:
       spec:
         id: 131
         title: Emitted logs /s by loop
-        description: 'rate(decant_emitted_logs_total). Log records emitted (logs loops: logs_export, runs).'
+        description: 'rate(genai_otel_bridge_emitted_logs_total). Log records emitted (logs loops: logs_export, runs).'
         links: []
         data:
           kind: QueryGroup
@@ -1021,7 +1021,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(decant_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1061,7 +1061,7 @@ spec:
       spec:
         id: 132
         title: Emit errors /s by loop & kind
-        description: rate(decant_emit_errors_total) by kind. 'collect' = benign upstream-fetch retry; retryable_exhausted / checkpoint_* / bad_encoding are fatal (DecantEmitFailing).
+        description: rate(genai_otel_bridge_emit_errors_total) by kind. 'collect' = benign upstream-fetch retry; retryable_exhausted / checkpoint_* / bad_encoding are fatal (GenaiOtelBridgeEmitFailing).
         links: []
         data:
           kind: QueryGroup
@@ -1079,7 +1079,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, kind) (rate(decant_emit_errors_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, kind) (rate(genai_otel_bridge_emit_errors_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{kind}}'
                     range: true
                     instant: false
@@ -1119,7 +1119,7 @@ spec:
       spec:
         id: 133
         title: Queue depth by loop
-        description: "decant_queue_depth_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). Sustained non-zero => emit can't keep up with collect (backpressure \u2192 DecantQueueBackpressure)."
+        description: "genai_otel_bridge_queue_depth_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). Sustained non-zero => emit can't keep up with collect (backpressure \u2192 GenaiOtelBridgeQueueBackpressure)."
         links: []
         data:
           kind: QueryGroup
@@ -1137,7 +1137,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max by (loop) (decant_queue_depth_ratio{loop=~"$loop"})
+                    expr: max by (loop) (genai_otel_bridge_queue_depth_ratio{loop=~"$loop"})
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1177,7 +1177,7 @@ spec:
       spec:
         id: 134
         title: Samples skipped /s (counted gaps) by reason
-        description: "rate(decant_samples_skipped_total) by reason. too_old / payload_too_large / duplicate_timestamp = real loss (DecantDataLoss); quota_exceeded / backfill_unstorable are benign. The loop advances past the bad bucket with a counted gap \u2014 never silent."
+        description: "rate(genai_otel_bridge_samples_skipped_total) by reason. too_old / payload_too_large / duplicate_timestamp = real loss (GenaiOtelBridgeDataLoss); quota_exceeded / backfill_unstorable are benign. The loop advances past the bad bucket with a counted gap \u2014 never silent."
         links: []
         data:
           kind: QueryGroup
@@ -1195,7 +1195,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, reason) (rate(decant_samples_skipped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, reason) (rate(genai_otel_bridge_samples_skipped_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{reason}}'
                     range: true
                     instant: false
@@ -1235,7 +1235,7 @@ spec:
       spec:
         id: 135
         title: Samples capped /s (DPM)
-        description: "rate(decant_samples_capped_total{reason=dpm}). Coalesced last-write-wins per series-minute to honour max_dpm. Expected non-zero when source resolution > cap \u2014 NOT data loss."
+        description: "rate(genai_otel_bridge_samples_capped_total{reason=dpm}). Coalesced last-write-wins per series-minute to honour max_dpm. Expected non-zero when source resolution > cap \u2014 NOT data loss."
         links: []
         data:
           kind: QueryGroup
@@ -1253,7 +1253,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(decant_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1293,7 +1293,7 @@ spec:
       spec:
         id: 136
         title: Guard dropped /s by loop (governance)
-        description: rate(decant_guard_dropped_total). Data points / logs dropped by the cardinality/content governance Guard (default-deny label allow-list, field denylist). Expected non-zero if a denylist is configured.
+        description: rate(genai_otel_bridge_guard_dropped_total). Data points / logs dropped by the cardinality/content governance Guard (default-deny label allow-list, field denylist). Expected non-zero if a denylist is configured.
         links: []
         data:
           kind: QueryGroup
@@ -1311,7 +1311,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(decant_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1351,7 +1351,7 @@ spec:
       spec:
         id: 137
         title: Buckets revised after settle /s
-        description: rate(decant_bucket_revised_after_settle_total). A settled bucket changed value after bucket_settle (late arrivals). Persistent non-zero => widen the loop's bucket_settle (DecantBucketRevisedAfterSettle).
+        description: rate(genai_otel_bridge_bucket_revised_after_settle_total). A settled bucket changed value after bucket_settle (late arrivals). Persistent non-zero => widen the loop's bucket_settle (GenaiOtelBridgeBucketRevisedAfterSettle).
         links: []
         data:
           kind: QueryGroup
@@ -1369,7 +1369,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(decant_bucket_revised_after_settle_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1409,7 +1409,7 @@ spec:
       spec:
         id: 138
         title: Bucket revision lateness (age p50/p95)
-        description: "histogram_quantile over decant_bucket_revised_after_settle_age_seconds \u2014 HOW LATE post-settle revisions are (now - bucketEnd), vs panel 137's how-often. Tune bucket_settle toward p95 to capture them (metrics can't be backfilled \u2014 Mimir rejects a changed value at an already-emitted timestamp). Floors at bucket_settle by construction."
+        description: "histogram_quantile over genai_otel_bridge_bucket_revised_after_settle_age_seconds \u2014 HOW LATE post-settle revisions are (now - bucketEnd), vs panel 137's how-often. Tune bucket_settle toward p95 to capture them (metrics can't be backfilled \u2014 Mimir rejects a changed value at an already-emitted timestamp). Floors at bucket_settle by construction."
         links: []
         data:
           kind: QueryGroup
@@ -1427,7 +1427,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.50, sum by (le, loop) (rate(decant_bucket_revised_after_settle_age_seconds_bucket{loop=~"$loop"}[$__rate_interval])))
+                    expr: histogram_quantile(0.50, sum by (le, loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds_bucket{loop=~"$loop"}[$__rate_interval])))
                     legendFormat: p50 {{loop}}
                     range: true
                     instant: false
@@ -1445,7 +1445,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.95, sum by (le, loop) (rate(decant_bucket_revised_after_settle_age_seconds_bucket{loop=~"$loop"}[$__rate_interval])))
+                    expr: histogram_quantile(0.95, sum by (le, loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds_bucket{loop=~"$loop"}[$__rate_interval])))
                     legendFormat: p95 {{loop}}
                     range: true
                     instant: false
@@ -1485,7 +1485,7 @@ spec:
       spec:
         id: 140
         title: Upstream request rate by target & status
-        description: rate(decant_upstream_request_duration_seconds_count) by target (source API host) & status_class. The poller's own pull traffic to vendor APIs.
+        description: rate(genai_otel_bridge_upstream_request_duration_seconds_count) by target (source API host) & status_class. The poller's own pull traffic to vendor APIs.
         links: []
         data:
           kind: QueryGroup
@@ -1503,7 +1503,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (target, status_class) (rate(decant_upstream_request_duration_seconds_count[$__rate_interval]))
+                    expr: sum by (target, status_class) (rate(genai_otel_bridge_upstream_request_duration_seconds_count[$__rate_interval]))
                     legendFormat: '{{target}} {{status_class}}'
                     range: true
                     instant: false
@@ -1542,7 +1542,7 @@ spec:
       spec:
         id: 141
         title: Upstream latency p50/p95/p99 by target
-        description: "histogram_quantile over decant_upstream_request_duration_seconds_bucket (cumulative histogram \u2014 rate() correct). Time-to-response-headers, excludes limiter wait."
+        description: "histogram_quantile over genai_otel_bridge_upstream_request_duration_seconds_bucket (cumulative histogram \u2014 rate() correct). Time-to-response-headers, excludes limiter wait."
         links: []
         data:
           kind: QueryGroup
@@ -1560,7 +1560,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.50, sum by (le, target) (rate(decant_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    expr: histogram_quantile(0.50, sum by (le, target) (rate(genai_otel_bridge_upstream_request_duration_seconds_bucket[$__rate_interval])))
                     legendFormat: p50 {{target}}
                     range: true
                     instant: false
@@ -1578,7 +1578,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.95, sum by (le, target) (rate(decant_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    expr: histogram_quantile(0.95, sum by (le, target) (rate(genai_otel_bridge_upstream_request_duration_seconds_bucket[$__rate_interval])))
                     legendFormat: p95 {{target}}
                     range: true
                     instant: false
@@ -1596,7 +1596,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.99, sum by (le, target) (rate(decant_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    expr: histogram_quantile(0.99, sum by (le, target) (rate(genai_otel_bridge_upstream_request_duration_seconds_bucket[$__rate_interval])))
                     legendFormat: p99 {{target}}
                     range: true
                     instant: false
@@ -1636,7 +1636,7 @@ spec:
       spec:
         id: 142
         title: Upstream error ratio by target
-        description: "decant:upstream_error_ratio:5m \u2014 fraction of requests to each target with status_class 4xx/5xx/error (incl. timeouts). >0.2 sustained => DecantUpstreamErrorBudget. Needs the recording rules pushed."
+        description: "genai-otel-bridge:upstream_error_ratio:5m \u2014 fraction of requests to each target with status_class 4xx/5xx/error (incl. timeouts). >0.2 sustained => GenaiOtelBridgeUpstreamErrorBudget. Needs the recording rules pushed."
         links: []
         data:
           kind: QueryGroup
@@ -1654,7 +1654,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: decant:upstream_error_ratio:5m
+                    expr: genai-otel-bridge:upstream_error_ratio:5m
                     legendFormat: '{{target}}'
                     range: true
                     instant: false
@@ -1705,7 +1705,7 @@ spec:
       spec:
         id: 143
         title: Auth errors /s (401/403)
-        description: "rate(decant_auth_errors_total) by loop & source. Credential failure (wrong/expired key, missing scope) \u2014 distinct from slow/erroring endpoints. DecantAuthErrors fires on > 0."
+        description: "rate(genai_otel_bridge_auth_errors_total) by loop & source. Credential failure (wrong/expired key, missing scope) \u2014 distinct from slow/erroring endpoints. GenaiOtelBridgeAuthErrors fires on > 0."
         links: []
         data:
           kind: QueryGroup
@@ -1723,7 +1723,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, source) (rate(decant_auth_errors_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, source) (rate(genai_otel_bridge_auth_errors_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{source}}'
                     range: true
                     instant: false
@@ -1763,7 +1763,7 @@ spec:
       spec:
         id: 144
         title: Source graph unavailable /s (404 / window truncated)
-        description: rate(decant_source_graph_unavailable_total) by graph. Steady increments on a real graph => API permanently absent (permission/capability) or timing out. graph=window_truncated => records dropped at the page cap (DecantWindowTruncatedDroppingRecords).
+        description: rate(genai_otel_bridge_source_graph_unavailable_total) by graph. Steady increments on a real graph => API permanently absent (permission/capability) or timing out. graph=window_truncated => records dropped at the page cap (GenaiOtelBridgeWindowTruncatedDroppingRecords).
         links: []
         data:
           kind: QueryGroup
@@ -1781,7 +1781,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, graph) (rate(decant_source_graph_unavailable_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, graph) (rate(genai_otel_bridge_source_graph_unavailable_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{graph}}'
                     range: true
                     instant: false
@@ -1821,7 +1821,7 @@ spec:
       spec:
         id: 150
         title: New label-value combinations /s by series (top 15)
-        description: "rate(decant_new_label_values_total) by series. Each is a never-before-seen label combo \u2014 a cardinality early-warning. A sustained climb on one series = unbounded labels (DecantCardinalitySpike)."
+        description: "rate(genai_otel_bridge_new_label_values_total) by series. Each is a never-before-seen label combo \u2014 a cardinality early-warning. A sustained climb on one series = unbounded labels (GenaiOtelBridgeCardinalitySpike)."
         links: []
         data:
           kind: QueryGroup
@@ -1839,7 +1839,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: topk(15, sum by (series) (rate(decant_new_label_values_total[$__rate_interval])))
+                    expr: topk(15, sum by (series) (rate(genai_otel_bridge_new_label_values_total[$__rate_interval])))
                     legendFormat: '{{series}}'
                     range: true
                     instant: false
@@ -1879,7 +1879,7 @@ spec:
       spec:
         id: 151
         title: Guard dropped /s by loop
-        description: rate(decant_guard_dropped_total). Governance Guard drops (default-deny label allow-list / field denylist). The content-minimisation enforcement point.
+        description: rate(genai_otel_bridge_guard_dropped_total). Governance Guard drops (default-deny label allow-list / field denylist). The content-minimisation enforcement point.
         links: []
         data:
           kind: QueryGroup
@@ -1897,7 +1897,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(decant_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1937,7 +1937,7 @@ spec:
       spec:
         id: 152
         title: Samples capped /s (DPM)
-        description: "rate(decant_samples_capped_total). DPM cap coalescing \u2014 the cardinality/cost guard on the metrics plane."
+        description: "rate(genai_otel_bridge_samples_capped_total). DPM cap coalescing \u2014 the cardinality/cost guard on the metrics plane."
         links: []
         data:
           kind: QueryGroup
@@ -1955,7 +1955,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(decant_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1995,7 +1995,7 @@ spec:
       spec:
         id: 160
         title: Log rate by level
-        description: "count_over_time of the poller's OWN stdout (namespace=$namespace, service_name=decant), by detected level. A warn/error climb corroborates the metric-side signals (e.g. Portkey fetch timeouts). Uses Loki's $__auto range (NOT $__rate_interval \u2014 that is Prometheus-only)."
+        description: "count_over_time of the poller's OWN stdout (namespace=$namespace, service_name=genai-otel-bridge), by detected level. A warn/error climb corroborates the metric-side signals (e.g. Portkey fetch timeouts). Uses Loki's $__auto range (NOT $__rate_interval \u2014 that is Prometheus-only)."
         links: []
         data:
           kind: QueryGroup
@@ -2013,7 +2013,7 @@ spec:
                     name: ${loki}
                   spec:
                     editorMode: code
-                    expr: sum by (detected_level) (count_over_time({namespace=~"$namespace", service_name="decant", container="decant"} [$__auto]))
+                    expr: sum by (detected_level) (count_over_time({namespace=~"$namespace", service_name="genai-otel-bridge", container="genai-otel-bridge"} [$__auto]))
                     queryType: range
                     maxLines: 1000
             queryOptions: {}
@@ -2108,7 +2108,7 @@ spec:
       spec:
         id: 161
         title: Poller logs (warn+error)
-        description: The integrator's own warn/error stdout. NOT the republished product logs (those are service_namespace=decant, high volume). Drill here when a metric signal fires.
+        description: The integrator's own warn/error stdout. NOT the republished product logs (those are service_namespace=genai-otel-bridge, high volume). Drill here when a metric signal fires.
         links: []
         data:
           kind: QueryGroup
@@ -2126,7 +2126,7 @@ spec:
                     name: ${loki}
                   spec:
                     editorMode: code
-                    expr: '{namespace=~"$namespace", service_name="decant", container="decant"} | detected_level=~"warn|error"'
+                    expr: '{namespace=~"$namespace", service_name="genai-otel-bridge", container="genai-otel-bridge"} | detected_level=~"warn|error"'
                     queryType: range
                     maxLines: 1000
             queryOptions: {}
@@ -2151,7 +2151,7 @@ spec:
       spec:
         id: 170
         title: CPU usage (process_cpu)
-        description: Continuous CPU profile of the integrator process (Pyroscope push). decant is near-idle between ticks; spikes align with poll/emit cycles.
+        description: Continuous CPU profile of the integrator process (Pyroscope push). genai-otel-bridge is near-idle between ticks; spikes align with poll/emit cycles.
         links: []
         data:
           kind: QueryGroup
@@ -2169,7 +2169,7 @@ spec:
                     name: ${pyroscope}
                   spec:
                     profileTypeId: process_cpu:cpu:nanoseconds:cpu:nanoseconds
-                    labelSelector: '{service_name="decant"}'
+                    labelSelector: '{service_name="genai-otel-bridge"}'
                     groupBy: []
                     queryType: metrics
             queryOptions: {}
@@ -2221,7 +2221,7 @@ spec:
                     name: ${pyroscope}
                   spec:
                     profileTypeId: memory:inuse_space:bytes:space:bytes
-                    labelSelector: '{service_name="decant"}'
+                    labelSelector: '{service_name="genai-otel-bridge"}'
                     groupBy: []
                     queryType: metrics
             queryOptions: {}
@@ -2273,7 +2273,7 @@ spec:
                     name: ${pyroscope}
                   spec:
                     profileTypeId: goroutines:goroutine:count:goroutine:count
-                    labelSelector: '{service_name="decant"}'
+                    labelSelector: '{service_name="genai-otel-bridge"}'
                     groupBy: []
                     queryType: metrics
             queryOptions: {}
@@ -2325,7 +2325,7 @@ spec:
                     name: ${pyroscope}
                   spec:
                     profileTypeId: process_cpu:cpu:nanoseconds:cpu:nanoseconds
-                    labelSelector: '{service_name="decant"}'
+                    labelSelector: '{service_name="genai-otel-bridge"}'
                     groupBy: []
                     queryType: profile
             queryOptions: {}

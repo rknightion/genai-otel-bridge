@@ -9,13 +9,13 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: decant
+  name: genai-otel-bridge
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "decant.labels" . | nindent 4 }}
+    {{- include "genai-otel-bridge.labels" . | nindent 4 }}
 spec:
   maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
   selector:
     matchLabels:
-      {{- include "decant.selectorLabels" . | nindent 6 }}
+      {{- include "genai-otel-bridge.selectorLabels" . | nindent 6 }}
 {{- end }}

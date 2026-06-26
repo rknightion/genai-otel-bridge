@@ -1,13 +1,13 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: decant-bucket-revised-after-settle
+  name: genai-otel-bridge-bucket-revised-after-settle
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: DecantBucketRevisedAfterSettle
+  title: GenaiOtelBridgeBucketRevisedAfterSettle
   # Already-emitted (settled) buckets are still changing value after the loop's bucket_settle window.
   # This means late-arriving source data is landing beyond the settle deadline — previously-emitted
   # metrics will be revised (upserted) by Mimir. Sustained at >30 revisions/h means the settle window
@@ -20,8 +20,8 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "decant {{ $labels.loop }} loop: settled buckets are still being revised (late source data)"
-    description: "decant_bucket_revised_after_settle_total for the {{ $labels.loop }} loop is increasing at >30/h — late-arriving source data is landing after the bucket_settle window, so already-emitted metrics are being revised. The source API is back-filling its own aggregates later than expected. Remedy: widen the loop's settings.bucket_settle. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge {{ $labels.loop }} loop: settled buckets are still being revised (late source data)"
+    description: "genai_otel_bridge_bucket_revised_after_settle_total for the {{ $labels.loop }} loop is increasing at >30/h — late-arriving source data is landing after the bucket_settle window, so already-emitted metrics are being revised. The source API is back-filling its own aggregates later than expected. Remedy: widen the loop's settings.bucket_settle. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -29,7 +29,7 @@ spec:
       relativeTimeRange: {from: 1h5s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop) (increase(decant_bucket_revised_after_settle_total[1h])) > 30'
+        expr: 'sum by (loop) (increase(genai_otel_bridge_bucket_revised_after_settle_total[1h])) > 30'
         instant: true
         range: false
         intervalMs: 1000

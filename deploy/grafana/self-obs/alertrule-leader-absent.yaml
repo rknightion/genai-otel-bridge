@@ -1,16 +1,16 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: decant-leader-absent
+  name: genai-otel-bridge-leader-absent
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: DecantLeaderAbsent
-  # No decant_last_success_timestamp_seconds series at all for 15m => no replica has successfully
+  title: GenaiOtelBridgeLeaderAbsent
+  # No genai_otel_bridge_last_success_timestamp_seconds series at all for 15m => no replica has successfully
   # emitted (leader gone / crashlooping / never reached a first commit). This is the "poller down"
-  # signal and is distinct from a single stale loop (DecantPollerStale). absent_over_time emits a value
+  # signal and is distinct from a single stale loop (GenaiOtelBridgePollerStale). absent_over_time emits a value
   # (1) only when the metric is missing, so the normal/healthy case is noData => Ok.
   execErrState: Alerting
   noDataState: Ok
@@ -20,8 +20,8 @@ spec:
   labels:
     severity: critical
   annotations:
-    summary: "decant poller is not emitting (no successful emit from any replica in 15m)"
-    description: "decant_last_success_timestamp_seconds has been absent for 15m. No leader is committing+emitting: check the Deployment/lease, pod readiness, OTLP egress (e.g. the product OTLP port) and credentials. Pull metrics may exist while emit is blocked. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge poller is not emitting (no successful emit from any replica in 15m)"
+    description: "genai_otel_bridge_last_success_timestamp_seconds has been absent for 15m. No leader is committing+emitting: check the Deployment/lease, pod readiness, OTLP egress (e.g. the product OTLP port) and credentials. Pull metrics may exist while emit is blocked. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -29,7 +29,7 @@ spec:
       relativeTimeRange: {from: 16m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'absent_over_time(decant_last_success_timestamp_seconds[15m])'
+        expr: 'absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m])'
         instant: true
         range: false
         intervalMs: 1000

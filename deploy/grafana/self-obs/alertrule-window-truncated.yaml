@@ -1,13 +1,13 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: decant-window-truncated
+  name: genai-otel-bridge-window-truncated
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: DecantWindowTruncatedDroppingRecords
+  title: GenaiOtelBridgeWindowTruncatedDroppingRecords
   execErrState: Ok
   noDataState: Ok
   for: 0s
@@ -16,7 +16,7 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "decant {{ $labels.loop }} loop is dropping records (window exceeded max_pages_per_window)"
+    summary: "genai-otel-bridge {{ $labels.loop }} loop is dropping records (window exceeded max_pages_per_window)"
     description: "The {{ $labels.loop }} loop truncated >=1 polling window in the last 10m and advanced past undrained records (counted gap). Raise settings.max_pages_per_window or shrink settings.window. See deploy/grafana/README.md."
   expressions:
     query:
@@ -25,7 +25,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop) (increase(decant_source_graph_unavailable_total{graph="window_truncated"}[10m])) > 0'
+        expr: 'sum by (loop) (increase(genai_otel_bridge_source_graph_unavailable_total{graph="window_truncated"}[10m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

@@ -1,18 +1,18 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: decant-poller-stale
+  name: genai-otel-bridge-poller-stale
   annotations:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
   labels:
-    grafana.app/folder: decant
+    grafana.app/folder: genai-otel-bridge
 spec:
-  title: DecantPollerStale
+  title: GenaiOtelBridgePollerStale
   # A loop is still exporting its self-metrics (process up) but its last-success age has exceeded 2x its
   # own trailing-6h p90 baseline AND the 300s absolute floor — it is staler than normal for THIS loop.
   # The threshold is self-relative so fast loops (e.g. analytics at ~60s cadence) fire quickly while
   # slow loops (e.g. log-export at ~5m) don't false-positive. The "leader entirely gone" case (no series
-  # at all) is covered by DecantLeaderAbsent, hence noData=Ok here.
+  # at all) is covered by GenaiOtelBridgeLeaderAbsent, hence noData=Ok here.
   execErrState: Ok
   noDataState: Ok
   for: 15m
@@ -21,8 +21,8 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "decant {{ $labels.loop }} loop is stale vs its own baseline"
-    description: "The {{ $labels.loop }} loop's last-success age has exceeded 2x its own trailing-6h p90 baseline AND the 300s absolute floor — it is staler than normal for this loop (not a flat threshold, so it won't false-positive on the slow log-export loops). The loop is not advancing its watermark: collect/emit is wedged or the source is failing. Check decant_emit_errors_total / decant_window_lag_seconds and the pod logs. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge {{ $labels.loop }} loop is stale vs its own baseline"
+    description: "The {{ $labels.loop }} loop's last-success age has exceeded 2x its own trailing-6h p90 baseline AND the 300s absolute floor — it is staler than normal for this loop (not a flat threshold, so it won't false-positive on the slow log-export loops). The loop is not advancing its watermark: collect/emit is wedged or the source is failing. Check genai_otel_bridge_emit_errors_total / genai_otel_bridge_window_lag_seconds and the pod logs. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -30,7 +30,7 @@ spec:
       relativeTimeRange: {from: 6h0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: '(time() - max by (loop) (decant_last_success_timestamp_seconds)) > (2 * quantile_over_time(0.9, (time() - max by (loop) (decant_last_success_timestamp_seconds))[6h:1m])) and (time() - max by (loop) (decant_last_success_timestamp_seconds)) > 300'
+        expr: '(time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > (2 * quantile_over_time(0.9, (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])) and (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 300'
         instant: true
         range: false
         intervalMs: 1000

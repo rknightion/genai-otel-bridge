@@ -25,6 +25,9 @@ jobs:
           # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
           cache: true
       - run: make ci
+        env:
+          # term list for the forbidden-words hygiene guard (kept out of the repo; see scripts/forbidden-words.sh)
+          FORBIDDEN_WORDS_PATTERN: ${{ secrets.FORBIDDEN_WORDS_PATTERN }}
 
   e2e:
     runs-on: ubuntu-latest

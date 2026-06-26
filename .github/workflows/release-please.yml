@@ -13,6 +13,7 @@ name: release-please
 on:
   push:
     branches: [main]
+  workflow_dispatch:   # manual re-trigger (e.g. after a config change)
 
 permissions:
   contents: read

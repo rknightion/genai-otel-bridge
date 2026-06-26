@@ -35,3 +35,6 @@ docs/superpowers/
 
 # gcx dashboard snapshot PNGs (scratch)
 /snapshots/
+
+# Zensical docs-site build output
+/site/

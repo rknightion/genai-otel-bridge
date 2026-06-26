@@ -91,6 +91,8 @@ Requires Go 1.26+. Acceptance gates: `go test -tags acceptance ./internal/app/`.
 
 ## Documentation
 
+- **[User documentation](https://m7kni.io/genai-otel-bridge/)** — install, configure, the telemetry
+  catalogue, operations + runbooks. The pages below are the maintainer-facing design docs.
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — the durable design: components, interfaces,
   data flow, HA, emit model, configuration, and the decision ledger.
 - **[docs/DESIGN.md](./docs/DESIGN.md)** — the detailed, build-facing design spec: scope, concrete

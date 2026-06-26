@@ -7,20 +7,22 @@
     "helpers:pinGitHubActionDigests"
   ],
   "timezone": "Europe/London",
-  "schedule": ["before 9am on monday"],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 0,
   "semanticCommits": "enabled",
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
   "labels": ["dependencies"],
-  "description": "chore(deps) keeps dep bumps out of the git-cliff CHANGELOG (chore is excluded); see CLAUDE.md release ritual. Weekly batch to cut PR noise on a critical-path service.",
+  "description": "chore(deps) keeps dep bumps out of the git-cliff CHANGELOG (chore is excluded); see CLAUDE.md release ritual. No schedule — PRs open as soon as a release clears minimumReleaseAge; non-major bumps automerge once CI is green. platformAutomerge is false because this private repo's plan has no branch protection, so Renovate itself merges the PR after waiting for every CI check (gate matrix + e2e + secret-scan + ci-success) to pass. If the repo goes public (or upgrades), flip platformAutomerge to true and require the ci-success check via a ruleset.",
+  "automerge": true,
+  "platformAutomerge": false,
+  "automergeStrategy": "squash",
   "postUpdateOptions": [
     "gomodTidy",
     "gomodUpdateImportPaths",
     "gomodVendor"
   ],
-  "minimumReleaseAge": "5 days",
+  "minimumReleaseAge": "2 days",
   "internalChecksFilter": "strict",
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
@@ -30,7 +32,12 @@
   },
   "packageRules": [
     {
-      "description": "Batch all non-major Go module bumps into one weekly PR — most are transitive churn not worth a PR each.",
+      "description": "Major bumps can carry behavioural breaks the test suite won't catch (k8s libs, action majors) — open a PR but require a manual merge. Everything else automerges on green CI.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "Batch all non-major Go module bumps into one PR — most are transitive churn not worth a PR each.",
       "matchManagers": ["gomod"],
       "matchUpdateTypes": ["minor", "patch", "digest"],
       "groupName": "go modules (non-major)"

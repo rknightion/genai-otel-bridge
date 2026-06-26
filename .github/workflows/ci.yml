@@ -13,8 +13,30 @@ permissions:
   contents: read
 
 jobs:
+  # The `make ci` gate, fanned out across parallel jobs so a slow leg (race, envtest) no longer
+  # serialises behind the others. Each leg is an independent required check; branch protection
+  # requires only the `ci-success` aggregator below, so adding/renaming a leg never touches protection.
   gate:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # one failing leg shouldn't cancel the others — we want every failure reported
+      matrix:
+        include:
+          - name: build-vet
+            run: make ci-build ci-vet
+          - name: lint
+            run: make ci-lint ci-lint-acceptance
+          - name: test
+            run: make ci-test
+          - name: race
+            run: make ci-race
+          - name: acceptance
+            run: make ci-acceptance
+          - name: envtest
+            run: make ci-envtest
+          - name: hygiene
+            run: make forbidden-words spdx-check helm-lint
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -24,7 +46,7 @@ jobs:
           go-version-file: go.mod
           # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
           cache: true
-      - run: make ci
+      - run: ${{ matrix.run }}
         env:
           # term list for the forbidden-words hygiene guard (kept out of the repo; see scripts/forbidden-words.sh)
           FORBIDDEN_WORDS_PATTERN: ${{ secrets.FORBIDDEN_WORDS_PATTERN }}
@@ -58,6 +80,25 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz gitleaks
           ./gitleaks detect --source . --redact --no-banner
 
+  # Single required status check. Branch protection on `main` requires ONLY this job, so the gate's
+  # matrix legs (and e2e / secret-scan) can be added or renamed without re-touching protection.
+  # It fails if any dependency failed or was cancelled; a legitimately skipped job (e.g. e2e on a
+  # workflow_dispatch run) does not fail it. Renovate's automerge waits for this to go green.
+  ci-success:
+    name: ci-success
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [gate, e2e, secret-scan]
+    steps:
+      - name: Fail if any required job did not pass
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "A required job failed or was cancelled: ${{ join(needs.*.result, ', ') }}"
+          exit 1
+      - name: All required jobs passed
+        run: |
+          echo "ci-success — ${{ join(needs.*.result, ', ') }}"
+
   # Publish the container image + Helm chart to GHCR on a v* tag.
   #   image: ghcr.io/<owner>/genai-otel-bridge:<vX.Y.Z> + :latest
   #   chart: oci://ghcr.io/<owner>/charts/genai-otel-bridge  (version X.Y.Z)
@@ -65,7 +106,7 @@ jobs:
   # the repo's visibility: private while the repo is private, public once it is.
   publish:
     runs-on: ubuntu-latest
-    needs: [gate, e2e]
+    needs: [ci-success]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read

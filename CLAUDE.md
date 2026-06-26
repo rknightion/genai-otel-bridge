@@ -76,7 +76,11 @@ F1–F47 failure handling, review dispositions). Read these before changing a se
 - **Git workflow: direct to `main`.** Commit straight to `main` — no feature branches, no PRs.
   `make gate` green before *every* commit (evidence, not assertion). Stage
   explicit paths (`git add <path>`), never `-A`/`.` — concurrent agents may share the working tree;
-  never stage, commit, or revert work that isn't yours.
+  never stage, commit, or revert work that isn't yours. *Exception:* Renovate dependency bumps open
+  PRs and self-automerge (non-major only) once the full CI suite is green — see `renovate.json`.
+- **CI fans out** (`.github/workflows/ci.yml`): `make ci` is split into a parallel `gate` matrix
+  (build-vet / lint / test / race / acceptance / envtest / hygiene) plus `e2e` and `secret-scan`;
+  the `ci-success` aggregator job is the single check that gates Renovate automerge and `publish`.
 - **Conventional Commits** (`feat:`/`fix:`/`chore:`/`docs:`/`refactor:`/…) — subjects drive the
   generated `CHANGELOG.md` (`make changelog`); `chore`/`style`/release commits are excluded from it.
 - **Gate extras:** `make gate` runs `forbidden-words` (a content/decoupling guard — self-skips where its

@@ -1,6 +1,26 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [3.0.1](https://github.com/rknightion/genai-otel-bridge/compare/v3.0.0...v3.0.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* force release-please generic updater on Chart.yaml; add workflow_dispatch ([3050d0b](https://github.com/rknightion/genai-otel-bridge/commit/3050d0bda9c1a104600bc85f741ecb8d892d7481))
+
+
+### Documentation
+
+* repo is public + main requires ci-success (admin bypass) ([f2b88e2](https://github.com/rknightion/genai-otel-bridge/commit/f2b88e24e90df60af064a037629452ad254c12dd))
+
+
+### Build & CI
+
+* add hybrid issue-triage (no-tools AI analysis + deterministic apply) ([98cc6a0](https://github.com/rknightion/genai-otel-bridge/commit/98cc6a0dcf2f23883eaeee51cb3e74059b5805ca))
+* automate releases with release-please (changelog + GitHub Releases + chart bump) ([d5c84f1](https://github.com/rknightion/genai-otel-bridge/commit/d5c84f1d6f563aeb16a6a3bdd2c2c1338f06642c))
+* parallelize CI matrix + add ci-success gate; enable Renovate automerge ([fd6a293](https://github.com/rknightion/genai-otel-bridge/commit/fd6a29352e7c3bf39e04dd2c20f7042433977a63))
+* wire release-please config, workflows, and chart bump ([98db168](https://github.com/rknightion/genai-otel-bridge/commit/98db1681116894919db0d4530df5d7e05d1b5f8a))
+
 ## [3.0.0] - 2026-06-26
 
 ### Build & CI

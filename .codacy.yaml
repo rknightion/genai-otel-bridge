@@ -1,0 +1,13 @@
+---
+# Codacy configuration — file exclusions for Cloud analysis.
+# File exclusions cannot be imported via the API; Codacy Cloud reads this file
+# from the default branch. See https://docs.codacy.com/repositories-configure/codacy-configuration-file/
+#
+# docs/**        — MkDocs site assets (incl. vendored mathjax.js); not application code.
+# test/** + *_test.go — Go test/e2e harness: deliberately exercises cleartext HTTP,
+#                  exec.Command and http:// URLs, so SAST flags there are false positives.
+#                  Production Go retains full security-pattern coverage.
+exclude_paths:
+  - "docs/**"
+  - "test/**"
+  - "**/*_test.go"

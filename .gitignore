@@ -15,6 +15,12 @@
 # Pinned CI tooling (installed by `make tools` / `make tools-e2e`)
 /.tools/
 
+# Codacy scratch artifacts (the tuning skill's intermediates + run summary).
+# .codacy.yaml (Cloud file-exclusions) and .codacy/codacy.config.json (local analysis
+# config) ARE tracked; these two are throwaway.
+/.codacy/tmp/
+/.codacy/configure-codacy-summary.json
+
 # Go
 /vendor/
 go.work

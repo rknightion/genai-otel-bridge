@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -49,4 +50,18 @@ func healthCheckCode(base string) int {
 		return 0
 	}
 	return 1
+}
+
+// localHealthURL turns a -health-addr listen spec into a loopback probe base for -healthcheck. An
+// unspecified bind host (":8080", "0.0.0.0:8080", "[::]:8080") becomes 127.0.0.1 so the probe targets
+// this container's own listener.
+func localHealthURL(healthAddr string) string {
+	host, port, err := net.SplitHostPort(healthAddr)
+	if err != nil {
+		return "http://127.0.0.1" + healthAddr // not host:port (e.g. a bare ":8080" edge) — best effort
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }

@@ -325,6 +325,14 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	}
+	return LoadBytes(raw)
+}
+
+// LoadBytes parses, secret-resolves, and structurally parses config from raw YAML bytes — the file-less
+// path used by the ECS GENAI_OTEL_BRIDGE_CONFIG env delivery (parsed in-memory, so no temp file is
+// needed and a read-only root filesystem is fine). Identical processing to Load; secret-resolution
+// failure (unset ${ENV} / missing file:) is fatal here (F21).
+func LoadBytes(raw []byte) (*Config, error) {
 	// [ext-review-9] ${VAR} can appear in ANY YAML context, including a flow mapping (`{value: ${X}}`)
 	// where the '{' '}' of an unresolved ref are flow indicators that make the raw text invalid YAML —
 	// so we cannot parse first. And substituting into raw TEXT before parsing (the old approach) let a

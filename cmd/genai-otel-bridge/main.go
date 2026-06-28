@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -83,11 +82,7 @@ func main() {
 	// Health-check probe path (ECS container health check). Pure HTTP probe of the local /healthz +
 	// exit 0/1 — no config/wiring. distroless has no shell, so ECS runs the binary itself.
 	if *healthCheckMode {
-		host := *healthAddr
-		if strings.HasPrefix(host, ":") {
-			host = "127.0.0.1" + host
-		}
-		os.Exit(healthCheckCode("http://" + host))
+		os.Exit(healthCheckCode(localHealthURL(*healthAddr)))
 	}
 
 	// ECS identity fallback: with no -identity/$POD_NAME (ECS has no downward API for the task id), read
@@ -103,7 +98,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	cfg, err := config.Load(*cfgPath)
+	// Config delivery: a file at -config, OR (ECS/Fargate, no file mount) the GENAI_OTEL_BRIDGE_CONFIG
+	// env var, parsed in-memory (no temp file, so a read-only root filesystem is fine). Either path
+	// resolves ${ENV}/file: secret refs at load.
+	var cfg *config.Config
+	var err error
+	if inline := os.Getenv("GENAI_OTEL_BRIDGE_CONFIG"); inline != "" {
+		cfg, err = config.LoadBytes([]byte(inline))
+	} else {
+		cfg, err = config.Load(*cfgPath)
+	}
 	if err != nil {
 		fatal("load config", err)
 	}

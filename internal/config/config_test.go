@@ -430,3 +430,17 @@ sources:
 		t.Errorf("RetryPeriod default: got %s, want 2s", time.Duration(cfg.HA.DynamoDB.RetryPeriod))
 	}
 }
+
+// TestLoadBytesResolvesEnv covers the file-less config path (the ECS GENAI_OTEL_BRIDGE_CONFIG delivery):
+// LoadBytes parses raw YAML in-memory and resolves ${ENV} secret refs, identically to Load — so no temp
+// file is needed and a read-only root filesystem is fine.
+func TestLoadBytesResolvesEnv(t *testing.T) {
+	t.Setenv("TEST_OTLP_EP", "https://otlp.example.com")
+	cfg, err := LoadBytes([]byte("emit:\n  telemetry:\n    otlp:\n      endpoint: ${TEST_OTLP_EP}\n"))
+	if err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	if got := cfg.Emit.Telemetry.OTLP.Endpoint; got != "https://otlp.example.com" {
+		t.Fatalf("endpoint=%q, want the resolved env value", got)
+	}
+}

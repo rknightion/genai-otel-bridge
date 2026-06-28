@@ -58,7 +58,7 @@ func main() {
 	cleanupMode := flag.Bool("cleanup", false, "delete the app-created lease + checkpoint ConfigMap, then exit (the chart's post-delete uninstall hook)")
 	cleanupRetainCheckpoint := flag.Bool("cleanup-retain-checkpoint", false, "with -cleanup: keep the checkpoint ConfigMap (only remove the lease) so a reinstall resumes the watermark")
 	validateConfigMode := flag.Bool("validate-config", false, "load + validate the -config file (placeholdering unset ${ENV} refs so secrets aren't needed), print the result, and exit 0/1")
-	healthCheckMode := flag.Bool("healthcheck", false, "probe http://127.0.0.1<health-addr>/healthz and exit 0/1 (ECS container health check; distroless has no shell for curl)")
+	healthCheckMode := flag.Bool("healthcheck", false, "probe the local /healthz derived from -health-addr (a 0.0.0.0/[::] bind, or a bare port, is dialed via 127.0.0.1) and exit 0/1 (ECS container health check; distroless has no shell for curl)")
 	flag.Parse()
 
 	// Config-validation path: load + schema/semantic-check the -config file and exit. No wiring, no

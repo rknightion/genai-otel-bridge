@@ -8,8 +8,52 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsddb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
 )
+
+// TestAcquireSelfHealsMissingExpiry [copilot-pr13]: a lock item with `pk` but NO `expiresAtMs`
+// (hand-seeded / partial write / corruption) must still be acquirable — `expiresAtMs < :now` is FALSE
+// for a missing attribute, so without the `attribute_not_exists(expiresAtMs)` self-heal clause in
+// acquire() leadership would wedge forever. The acquired fence must still be a monotonic bump above the
+// seeded fence (the no-TTL invariant — never reset the epoch below a surviving checkpoint).
+func TestAcquireSelfHealsMissingExpiry(t *testing.T) {
+	db := newTestClient(t)
+	table := createTable(t, db)
+	const pk = "lock#leader"
+	if _, err := db.PutItem(context.Background(), &awsddb.PutItemInput{
+		TableName: aws.String(table),
+		Item: map[string]ddbtypes.AttributeValue{
+			"pk":     &ddbtypes.AttributeValueMemberS{Value: pk},
+			"holder": &ddbtypes.AttributeValueMemberS{Value: "ghost"},
+			"fence":  &ddbtypes.AttributeValueMemberN{Value: "7"}, // a surviving epoch; bump must exceed it
+			// expiresAtMs intentionally ABSENT
+		},
+	}); err != nil {
+		t.Fatalf("seed malformed lock item: %v", err)
+	}
+	c := New(db, table, pk, "node-a", 2*time.Second, 1*time.Second, 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	epochC := make(chan int64, 1)
+	go func() {
+		_ = c.Run(ctx, func(lc context.Context) {
+			epochC <- coordinate.EpochFromContext(lc)
+			<-lc.Done()
+		})
+	}()
+	select {
+	case e := <-epochC:
+		if e <= 7 {
+			t.Fatalf("self-heal acquire fence=%d, want > 7 (monotonic bump from the seeded fence)", e)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("node-a never acquired the no-expiresAtMs lock — self-heal clause missing?")
+	}
+}
 
 func TestElectionAndFence(t *testing.T) {
 	db := newTestClient(t)

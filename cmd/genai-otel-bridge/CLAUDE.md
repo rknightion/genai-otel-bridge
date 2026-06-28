@@ -12,8 +12,10 @@ coordinator → handle SIGTERM. No logic beyond wiring (that's `internal/app`).
   `-checkpoint-file` (default `/var/lib/genai-otel-bridge/checkpoints.yaml`; path for the `ha.checkpoint=file`
   store — override for local runs, e.g. `./checkpoints.local.yaml`).
 - `-healthcheck`: **probe path, not a normal run** (ECS container health check — distroless has no shell
-  for curl). GETs `http://127.0.0.1<health-addr>/healthz` and exits 0/1. Branches with the other early
-  exits, before any config/wiring. ECS task def: `["CMD","/genai-otel-bridge","-healthcheck"]`.
+  for curl). GETs `/healthz` on the `-health-addr` port via 127.0.0.1 (`localHealthURL` rewrites a
+  `0.0.0.0`/`[::]` bind — and accepts a bare port — to a dialable `127.0.0.1:<port>`) and exits 0/1.
+  Branches with the other early exits, before any config/wiring. ECS task def:
+  `["CMD","/genai-otel-bridge","-healthcheck"]`.
 - `-validate-config`: **validation path, not a normal run.** Loads + schema/semantic-checks the
   `-config` file via `app.ValidateConfigFile` (placeholders unset `${ENV}` refs so no secrets are
   needed — endpoints/URLs get an https placeholder), prints `validate-config: OK/FAIL`, exits 0/1.

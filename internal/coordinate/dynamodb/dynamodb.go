@@ -94,13 +94,19 @@ func (c *Coordinator) setNow(f Clock) { c.now = f }
 // to 1 on the next acquire, below a surviving checkpoint's epoch, permanently fencing all writes after a
 // long full outage. Expiry is by the `expiresAtMs` comparison only; the item persists (parity with the
 // K8s Lease, which is never auto-deleted either).
+//
+// The `attribute_not_exists(expiresAtMs)` clause is a self-heal: a normally-written lock ALWAYS has
+// expiresAtMs (acquire+renew both SET it), but a hand-seeded/partially-written/corrupt item could have
+// pk without expiresAtMs — and `expiresAtMs < :now` is FALSE for a missing attribute, which would
+// otherwise wedge leadership forever. Treating a missing expiresAtMs as acquirable lets the coordinator
+// recover; it can't cause double-acquire because no live leader writes pk without expiresAtMs.
 func (c *Coordinator) acquire(ctx context.Context) (fence int64, acquired bool, err error) {
 	now := c.now()
 	exp := now.Add(c.lease).UnixMilli()
 	out, err := c.db.UpdateItem(ctx, &awsddb.UpdateItemInput{
 		TableName:           aws.String(c.table),
 		Key:                 map[string]ddbtypes.AttributeValue{"pk": sstr(c.pk)},
-		ConditionExpression: aws.String("attribute_not_exists(pk) OR expiresAtMs < :now"),
+		ConditionExpression: aws.String("attribute_not_exists(pk) OR attribute_not_exists(expiresAtMs) OR expiresAtMs < :now"),
 		UpdateExpression:    aws.String("SET holder = :me, expiresAtMs = :exp ADD fence :one"),
 		ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
 			":now": nstr(now.UnixMilli()), ":me": sstr(c.identity),

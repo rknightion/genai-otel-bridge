@@ -90,11 +90,19 @@ func decode(item map[string]ddbtypes.AttributeValue) (model.Watermark, int64, er
 	if err != nil {
 		return model.Watermark{}, 0, err
 	}
-	// A missing `version` is an internal-token absence, NOT data corruption → default 0 (don't refuse Load).
+	// A MISSING `version` is an internal-token absence, NOT data corruption → default 0 (don't refuse
+	// Load; Save upgrades it via attribute_not_exists(version)). But a PRESENT version of the wrong
+	// DynamoDB type (e.g. a String) IS corruption: silently treating it as 0 would send Save down the
+	// versionPresent path where `version = :v` (a Number) can never match, spinning until retries
+	// exhaust. Surface it as a decode error so Load/Save fail fast and clear (never clobber).
 	var ver int64
-	if v, ok := item["version"].(*ddbtypes.AttributeValueMemberN); ok {
+	if raw, present := item["version"]; present {
+		v, ok := raw.(*ddbtypes.AttributeValueMemberN)
+		if !ok {
+			return model.Watermark{}, 0, fmt.Errorf("checkpoint/dynamodb: %q present but not a number (corrupt item)", "version")
+		}
 		if ver, err = strconv.ParseInt(v.Value, 10, 64); err != nil {
-			return model.Watermark{}, 0, err
+			return model.Watermark{}, 0, fmt.Errorf("checkpoint/dynamodb: parse version %q: %w", v.Value, err)
 		}
 	}
 	cursor, _ := strAttr(item, "cursor")

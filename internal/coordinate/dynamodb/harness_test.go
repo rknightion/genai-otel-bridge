@@ -31,8 +31,8 @@ func newTestClient(t *testing.T) *awsddb.Client {
 	cfg, err := awscfg.LoadDefaultConfig(context.Background(),
 		awscfg.WithRegion("us-east-1"),
 		awscfg.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "")),
-		awscfg.WithSharedConfigFiles(nil),      // skip ~/.aws/config so no profile lookup occurs
-		awscfg.WithSharedCredentialsFiles(nil), // skip ~/.aws/credentials likewise
+		awscfg.WithSharedConfigFiles([]string{}),      // EMPTY (not nil): nil falls back to the default ~/.aws/config; an empty slice truly skips it
+		awscfg.WithSharedCredentialsFiles([]string{}), // likewise skip ~/.aws/credentials — keeps the test isolated from shell profiles (parity with the checkpoint harness)
 	)
 	if err != nil {
 		t.Fatalf("load aws config: %v", err)

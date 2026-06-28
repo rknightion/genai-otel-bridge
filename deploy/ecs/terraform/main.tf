@@ -35,7 +35,7 @@
 module "table" {
   # checkov:skip=CKV_TF_1: registry module version-pinned (~>) + .terraform.lock.hcl; commit-hash pinning is not idiomatic for terraform-aws-modules
   source  = "terraform-aws-modules/dynamodb-table/aws"
-  version = "~> 4.0"
+  version = "~> 5.0"
 
   name         = "${var.name}-ha"
   hash_key     = "pk"

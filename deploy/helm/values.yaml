@@ -9,7 +9,7 @@ replicas: 2
 
 # Full image reference including tag. Override at deploy time to point at your registry:
 #   helm upgrade genai-otel-bridge ./deploy/helm --set image=<registry>/genai-otel-bridge:v0.1.0
-image: ghcr.io/rknightion/genai-otel-bridge:latest
+image: ghcr.io/rknightion/genai-otel-bridge:latest@sha256:6b8946d9e12bf04d520d2fc25ea1644cf57f1dcdc23e1574ad40d0c653329282
 
 # Image pull secrets for a private registry. Each entry is a {name: <secret>} referencing a
 # kubernetes.io/dockerconfigjson Secret that must already exist in the release namespace. Default

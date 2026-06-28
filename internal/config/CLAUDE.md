@@ -30,6 +30,23 @@ renders each source's per-loop `settings` at its package default with vendor-own
 supplied via each package's `ExampleSettingsComments()`. `TestHelmGeneratedExamplesUpToDate` guards
 this block for drift.
 
+### ECS config example (`deploy/ecs/terraform/config.example.yaml` — same generator, ECS profile)
+
+`make generate` ALSO writes `deploy/ecs/terraform/config.example.yaml` from the SAME `config.Config`
+schema, via `helmgen.RenderECSConfigFile` under a `helmgen.Profile` (`helmgen.ECSProfile()`). A `Profile`
+customises the type-driven render for a non-Helm target: `Include` force-renders specific `helm:"omit"`
+field paths (keyed `"StructName.FieldName"`) and `Defaults` overrides a tagged scalar default. The ECS
+profile flips `ha.coordinator`/`ha.checkpoint` to `dynamodb` and force-includes the `ha.dynamodb` block
+(omitted from the chart) at its defaults — the optional `region`/`endpoint`/`key_prefix` are left out
+(empty/env defaults), matching how the chart omits optional `helm:"omit"` blocks. The output is a BARE
+config doc (no `config:` wrapper) the ECS module injects verbatim as `GENAI_OTEL_BRIDGE_CONFIG`. The zero
+`Profile` is byte-identical to the old path, so `values.yaml` is unaffected
+(`TestRenderTypeProfile_ZeroProfileMatchesRenderType` guards this). Three package-`config` gates:
+`TestECSConfigExampleUpToDate` (byte-compare drift), `TestECSConfigLoadsAgainstSchema` (LoadBytes
+round-trip), and `TestECSProfileDefaultsMatchLoad` — which ties the profile's hard-coded dynamodb default
+STRINGS to the `defaultDynamoDB*` consts `Load` actually applies (the consts are the single source of
+truth; `helmgen` can't import `config`, so the test closes the gap).
+
 ## Secret substitution (§4.1 — subtle, don't simplify)
 
 `${VAR}` / `file:/path` refs are replaced with **YAML-safe placeholders** (`genai-otel-bridgeXsecretX<N>Xgenai-otel-bridge`)

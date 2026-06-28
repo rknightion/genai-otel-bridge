@@ -53,6 +53,19 @@ const defaultMaxCatchupPerTick = 1
 // (k8s.*/cloud.* — also in the Loki default-promoted set) share this same budget, so size with headroom.
 const DefaultMaxStreamLabelKeys = 15
 
+// DynamoDB HA defaults — applied in Load when coordinator|checkpoint == dynamodb (ECS target). These
+// are the single source of truth: the ECS config generator's render profile (helmgen.ECSProfile)
+// carries the SAME values as literal strings, and the package-config gate TestECSProfileDefaultsMatchLoad
+// asserts the two agree, so the generated deploy/ecs/terraform/config.example.yaml can never drift
+// from what Load actually applies. (Table/Region/Endpoint/KeyPrefix have no default — required or
+// resolved from AWS_REGION/the SDK.)
+const (
+	defaultDynamoDBLockName      = "genai-otel-bridge-leader"
+	defaultDynamoDBLeaseDuration = 15 * time.Second
+	defaultDynamoDBRenewDeadline = 10 * time.Second
+	defaultDynamoDBRetryPeriod   = 2 * time.Second
+)
+
 // Duration is a time.Duration that yaml.v3 can decode from a human string like "60s" or "50m".
 // yaml.v3 does not natively decode duration strings into time.Duration, so we wrap it.
 type Duration time.Duration
@@ -383,16 +396,16 @@ func LoadBytes(raw []byte) (*Config, error) {
 	}
 	if cfg.HA.Coordinator == "dynamodb" || cfg.HA.Checkpoint == "dynamodb" {
 		if cfg.HA.DynamoDB.LockName == "" {
-			cfg.HA.DynamoDB.LockName = "genai-otel-bridge-leader"
+			cfg.HA.DynamoDB.LockName = defaultDynamoDBLockName
 		}
 		if cfg.HA.DynamoDB.LeaseDuration == 0 {
-			cfg.HA.DynamoDB.LeaseDuration = Duration(15 * time.Second)
+			cfg.HA.DynamoDB.LeaseDuration = Duration(defaultDynamoDBLeaseDuration)
 		}
 		if cfg.HA.DynamoDB.RenewDeadline == 0 {
-			cfg.HA.DynamoDB.RenewDeadline = Duration(10 * time.Second)
+			cfg.HA.DynamoDB.RenewDeadline = Duration(defaultDynamoDBRenewDeadline)
 		}
 		if cfg.HA.DynamoDB.RetryPeriod == 0 {
-			cfg.HA.DynamoDB.RetryPeriod = Duration(2 * time.Second)
+			cfg.HA.DynamoDB.RetryPeriod = Duration(defaultDynamoDBRetryPeriod)
 		}
 	}
 	return &cfg, nil

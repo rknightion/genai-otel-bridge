@@ -39,36 +39,16 @@ module "genai_otel_bridge" {
   vpc_id     = "vpc-0abc123"
   subnet_ids = ["subnet-0aaa", "subnet-0bbb"]  # >= 2 AZs for active/standby spread
 
-  # config_yaml is the rendered app config injected as GENAI_OTEL_BRIDGE_CONFIG env var.
-  # The ha.* block must point at the table this module creates (always "${name}-ha").
-  # Secret values go in secret_arns (never inline here); reference them as ${MY_API_KEY} in config.
-  # NOTE on $: ${...} is Terraform interpolation (used here to inject the table/region locals);
-  # $${...} is escaped so the LITERAL ${VAR} reaches the binary, which resolves it from the
-  # Secrets-Manager-injected env vars at load time. The structure below mirrors the chart's config:
-  # block (deploy/helm/values.yaml) — see internal/config/config.go for the full schema.
-  config_yaml = <<-EOT
-    ha:
-      coordinator: dynamodb
-      checkpoint: dynamodb
-      dynamodb:
-        table: ${local.bridge_table_name}
-        region: ${local.bridge_region}
-    emit:
-      telemetry:
-        otlp:
-          endpoint: https://your-otlp-gateway/otlp
-          instance_id: "123456"
-          token: $${GC_OTLP_TOKEN}
-    identity:
-      service_namespace: genai-otel-bridge
-      deployment_environment: prod
-    sources:
-      - type: portkey
-        enabled: true
-        base_url: https://api.portkey.ai/v1
-        auth:
-          value: $${PORTKEY_API_KEY}
-  EOT
+  # config_yaml is the rendered app config, injected verbatim as the GENAI_OTEL_BRIDGE_CONFIG env var.
+  # This module ships a complete, schema-GENERATED starting point at config.example.yaml — produced by
+  # `make generate` in the product repo from the SAME Go config schema as the Helm chart's values.yaml
+  # and drift-gated in CI, so it never falls behind the schema (see "Generated reference config" below).
+  # Copy that file next to your root module and adapt it: set ha.dynamodb.table to "<name>-ha", choose
+  # your source(s), tune governance. It already sets ha.coordinator/checkpoint=dynamodb + the dynamodb
+  # block at defaults.
+  config_yaml = file("${path.module}/config.example.yaml")
+  # In the YAML, reference each secret as $${MY_ENV_NAME} — the LITERAL ${MY_ENV_NAME} reaches the
+  # binary, which resolves it from the Secrets-Manager-injected env var at load time (see secret_arns).
 
   # Secrets Manager ARNs — injected as env vars; reference them in config_yaml as $${MY_ENV_NAME}.
   secret_arns = {
@@ -84,10 +64,23 @@ output "table_name" {
 }
 ```
 
+### Generated reference config (`config.example.yaml`)
+
+`config.example.yaml` in this module is **generated** from the Go config schema
+(`internal/config/config.go`) by `make generate` — the same source of truth and the same generator that
+produce the Helm chart's `values.yaml` `config:` block, but rendered under the **ECS profile**
+(`ha.coordinator`/`ha.checkpoint` = `dynamodb` and the `ha.dynamodb` block included at its defaults,
+which the chart omits). A drift gate (`TestECSConfigExampleUpToDate`) fails CI if a schema change is not
+regenerated and committed, so this file can never silently fall out of sync with the binary's accepted
+config — every current setting appears at its default with the field's inline doc-comment. **Never
+hand-edit it**; treat it as a copy-and-adapt starting point for your deployment's `config_yaml`.
+
 ### Minimum required `config_yaml` HA block
 
-The config passed via `config_yaml` must set the DynamoDB HA backend so the tasks elect a leader
-and write checkpoints to the table this module creates:
+The generated `config.example.yaml` already contains this block at its defaults — you only change
+`table` (to `<name>-ha`) and `region`. Shown here for reference; the config passed via `config_yaml`
+must set the DynamoDB HA backend so the tasks elect a leader and write checkpoints to the table this
+module creates:
 
 ```yaml
 ha:

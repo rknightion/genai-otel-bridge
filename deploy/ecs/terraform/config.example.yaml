@@ -1,0 +1,151 @@
+# genai-otel-bridge — ECS (DynamoDB-backed HA) default config — GENERATED, do not edit by hand.
+#
+# Generated from the Go config schema (internal/config/config.go) by `make generate` — the SAME
+# source of truth as deploy/helm/values.yaml, so this example can never drift from the schema. The
+# drift gate TestECSConfigExampleUpToDate (internal/config) fails CI if it is stale; re-run
+# `make generate` and commit. Field comments below are the Go doc-comments.
+#
+# The ECS Terraform module (deploy/ecs/terraform) injects this verbatim as the GENAI_OTEL_BRIDGE_CONFIG
+# container env var; the binary parses it in-memory via config.LoadBytes (no temp file — read-only
+# rootfs safe). The ${...} placeholders in the body resolve at load time from the Secrets-Manager-
+# injected env vars (the module's secret_arns map).
+#
+# This is a STARTING POINT, not a drop-in: copy it into your deployment, set ha.dynamodb.table to the
+# module's table ("<var.name>-ha"), set ha.dynamodb.region (or rely on the task's AWS_REGION), and
+# adjust the source/governance blocks per environment.
+emit:
+  telemetry:
+    otlp:
+      # Grafana Cloud OTLP gateway base URL (no trailing /v1/metrics — the emitter appends it).
+      endpoint: ${GC_OTLP_ENDPOINT}
+      instance_id: ${GC_INSTANCE_ID}
+      token: ${GC_OTLP_TOKEN}
+      # AllowInsecure opts this endpoint out of the https-only gate for an IN-CLUSTER cleartext OTLP
+      # receiver — the regulated/EKS topology where genai-otel-bridge emits to an in-cluster Alloy (which holds the
+      # real Grafana Cloud credentials) over the pod network rather than straight to the public gateway.
+      # [CP-M7] Default false (https or loopback required). When true, an http NON-loopback endpoint is
+      # permitted ONLY IF (a) no credential is set — instance_id/token must be empty, so nothing rides the
+      # cleartext link (the collector authenticates to Grafana Cloud, not genai-otel-bridge); and (b) the host is a
+      # private target — an IP literal must be RFC-1918/loopback/link-local (a public IP is rejected), while
+      # a DNS name (e.g. a Kubernetes Service) is permitted since it can't be resolved at config-load time.
+      # https endpoints ignore this flag.
+      allow_insecure: false
+identity:
+  service_namespace: genai-otel-bridge
+  # Deployment environment label (e.g. dev, staging, prod).
+  deployment_environment: ${ENV}
+ha:
+  # lease: use a k8s Lease for leader election (production multi-replica). none: disable HA (single-replica dev/test). dynamodb: DynamoDB lock (ECS/AWS).
+  coordinator: dynamodb
+  # configmap: durable watermark in a k8s ConfigMap (required with coordinator=lease). file: local file (dev only). dynamodb: DynamoDB item (ECS/AWS).
+  checkpoint: dynamodb
+  # DynamoDB-backed HA (ECS). Required when coordinator|checkpoint == dynamodb. ECS-only ⇒ helm:"omit".
+  dynamodb:
+    table: genai-otel-bridge-ha
+    lock_name: genai-otel-bridge-leader
+    lease_duration: 15s
+    renew_deadline: 10s
+    retry_period: 2s
+queue:
+  # Per-loop in-memory queue depth (batches). At ~1 batch/min this is ~4h of backlog before the
+  # queue blocks the scheduler (the block-on-full backpressure path).
+  max_batches: 256
+  # Per-batch size cap in bytes (~1 MiB). An over-cap batch is proactively split before transmit;
+  # a 413 from the gateway triggers a reactive split (DESIGN §4.5/C11).
+  max_batch_bytes: 1048576
+  # emit_workers must be 1: per-loop single-flight emit so the watermark advances monotonically to
+  # the contiguous successor (DESIGN §4.2/C3; config validates this).
+  emit_workers: 1
+governance:
+  # PerMetricCardinalityBudget caps the number of DISTINCT label-sets tracked per metric NAME — not
+  # a global cap. Over-budget series are dropped and counted (genai_otel_bridge_guard_dropped_total). Unset (0)
+  # defaults to defaultPerMetricCardinalityBudget. The real ceiling is the downstream Mimir/Adaptive
+  # Metrics limit (DESIGN §7 GS2/GS3), not this guard.
+  per_metric_cardinality_budget: 10000
+  # MaxDPM hard-caps every exported series at ≤ N data points per minute of SERIES (sample-timestamp)
+  # time, on BOTH planes. Product plane: emit.CoalesceDPM collapses each (series, 60s) group LWW.
+  # Self plane: the PeriodicReader interval is clamped to ≥ 60s/MaxDPM. Unset (0) ⇒ defaultMaxDPM (1);
+  # negative is rejected. (followup.md §0.)
+  max_dpm: 1
+  # MaxCatchupPerTick bounds how many windows a backlogged loop drains per cadence period: when a loop
+  # is more than one window behind (only possible when max_backfill > window, e.g. raised per GS2), the
+  # scheduler accelerates the tick interval to drain up to N windows, then takes a cadence breather —
+  # bounded and fair, and won't burst the source (each call is still rate-limited). Unset (0) ⇒
+  # defaultMaxCatchupPerTick (1) ⇒ one window per cadence, i.e. no acceleration (the v1 behaviour);
+  # negative is rejected. (DESIGN §7a Cdx-C13/F44.)
+  max_catchup_per_tick: 1
+  # MaxStreamLabelKeys caps how many OTLP resource attributes a single LOGS loop may contribute to a
+  # Loki stream: genai-otel-bridge's product identity resource attrs (service.name/service.namespace/
+  # deployment.environment.name) PLUS the loop's indexed attrs (its base content-free set ∪
+  # settings.extra_indexed_fields). Loki's max_label_names_per_series (Grafana Cloud default 15) REJECTS
+  # — silently drops — a stream over the limit, so the composition root fails fast at startup if a loop
+  # would exceed it. Unset (0) ⇒ DefaultMaxStreamLabelKeys (15). Raise ONLY to match a Grafana-staff
+  # tenant override of max_label_names_per_series. In the in-cluster-Alloy topology, Alloy's k8s.*/cloud.*
+  # enrichment attrs share this same budget — leave headroom.
+  max_stream_label_keys: 15
+  # AllowLabelKeys are EXTRA content-free attribute keys the operator opts into the cardinality guard's
+  # indexed/label allow-list, ON TOP OF the keys each enabled source already declares (so a default
+  # deployment needs nothing here). Use it to promote a content-free log attribute to the indexed tier
+  # (OTLP resource attr → Loki stream-label candidate). Default empty.
+
+  # LIMITATION (label promotion): listing a key here only allows it PAST the guard. A promoted
+  # attribute becomes a QUERYABLE Loki stream label only if it is in the Grafana OTel gateway's default
+  # label configuration; any label NOT in that default needs a Grafana support ticket before
+  # `{label="…"}` matches — until promoted stack-side it lands as structured metadata, not a stream
+  # label. Content-floor keys (message bodies / injected PII) are REJECTED here at startup.
+  allow_label_keys: []
+log:
+  # Log output format: logfmt (default, key=value) or json.
+  format: logfmt
+  # Minimum level emitted: debug, info (default), warn, or error. Info keeps warnings and errors
+  # visible on kubectl logs out of the box; raise to debug at bring-up for per-tick detail.
+  level: info
+selfobs:
+  profiling:
+    enabled: false
+    mode: pull
+    pull:
+      addr: :6060
+  tracing:
+    enabled: false
+sources:
+  - type: portkey
+    enabled: true
+    # Source API base URL (public control plane). MUST be https unless http.allow_private is set.
+    base_url: https://api.portkey.ai/v1
+    # source_instance is part of the CheckpointKey — it namespaces the watermark. Use a stable,
+    # env-scoped identifier; changing it resets the watermark (a new bootstrap).
+    source_instance: portkey-${ENV}
+    auth:
+      header: x-portkey-api-key
+      value: ${PORTKEY_API_KEY}
+    rate_limit:
+      # Sustained request rate (req/s). Portkey's shared budget is ~10 req/10s across tenants — stay well under (DESIGN §15).
+      rps: 1
+      burst: 3
+    loops:
+      analytics:
+        enabled: true
+        # Poll cadence (± 10% jitter applied by the scheduler).
+        cadence: 60s
+        # Query window; 50m keeps bucket granularity at 1 minute (≤55m clamp; H5/OP5c).
+        window: 50m
+        # bucket_settle: age at which a source bucket stops changing after first observation. 10m is the
+        # live-measured default (3m was insufficient); tune up if late-arrival lag is observed in prod.
+        bucket_settle: 10m
+        # On first run (or after a watermark reset), how far back to bootstrap. Must be ≤ max_backfill.
+        bootstrap_lookback: 50m
+        # Maximum backfill window. Capped by the metrics backend's accept window — on Grafana Cloud the
+        # Mimir out_of_order_time_window is 2h (per-tenant; raise via GS2). 90m leaves margin for clock
+        # skew + the catch-up walk; samples older than now-max_backfill are abandoned loud
+        # (backfill_unstorable_total). NOTE: unrelated to the ≤55m Portkey granularity clamp.
+        max_backfill: 90m
+        metric_prefix: portkey_api
+        # Configured graph set. An unknown graph is logged and skipped; an all-unknown response is an error
+        # (no silent-healthy advance without data).
+        graphs:
+          - requests
+          - cost
+          - tokens
+          - latency
+          - errors

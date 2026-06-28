@@ -34,15 +34,17 @@ gate: vet test lint forbidden-words spdx-check tf-validate
 	$(GO) build ./...
 
 # ── code generation ───────────────────────────────────────────────────────────
-# Regenerate the Helm chart's default `config:` block in deploy/helm/values.yaml from the Go config
-# schema (internal/config/config.go). Run after changing any config field/tag/default/doc-comment.
-# TestHelmGeneratedConfigUpToDate (in the gate's `test`) fails if this output is not committed.
+# Regenerate the config artifacts from the Go config schema (internal/config/config.go):
+# deploy/helm/values.yaml (chart default `config:` block) AND deploy/ecs/terraform/config.example.yaml
+# (the DynamoDB-backed ECS default config, same schema under the ECS render profile). Run after
+# changing any config field/tag/default/doc-comment. Their drift gates (TestHelmGeneratedConfigUpToDate /
+# TestECSConfigExampleUpToDate, in the gate's `test`) fail if the output is not committed.
 generate:
 	$(GO) run ./internal/config/gen
 	$(GO) run ./internal/docs/gen
-# generate-check verifies BOTH generated artifacts are up to date without modifying the tree (CI use).
+# generate-check verifies ALL generated artifacts are up to date without modifying the tree (CI use).
 generate-check: generate
-	@git diff --exit-code -- deploy/helm/values.yaml docs/telemetry.md || \
+	@git diff --exit-code -- deploy/helm/values.yaml deploy/ecs/terraform/config.example.yaml docs/telemetry.md || \
 	  (echo "generated files are stale — run 'make generate' and commit" && exit 1)
 # Regenerate the self-observability dashboard manifest (deploy/grafana/self-obs/dashboard-self-obs.yaml)
 # from its Python generator. Run after editing gen_dashboard.py; commit the emitted YAML. Needs PyYAML.

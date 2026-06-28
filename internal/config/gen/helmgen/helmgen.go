@@ -28,6 +28,7 @@ import (
 	"go/parser"
 	"go/token"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,6 +73,91 @@ func RenderConfigBlock(typ reflect.Type, srcPath string) ([]byte, error) {
 	}
 	b.WriteString(EndMarker)
 	b.WriteByte('\n')
+	return []byte(b.String()), nil
+}
+
+// ECSConfigHeader is the fixed banner prepended to the generated ECS config file. It carries NO
+// `${WORD}` env-ref syntax (only `${...}` prose) so the file round-trips through config.LoadBytes
+// without an unset-env fatal from a ref inside a comment (injectEnvPlaceholders scans raw text).
+const ECSConfigHeader = `# genai-otel-bridge — ECS (DynamoDB-backed HA) default config — GENERATED, do not edit by hand.
+#
+# Generated from the Go config schema (internal/config/config.go) by ` + "`make generate`" + ` — the SAME
+# source of truth as deploy/helm/values.yaml, so this example can never drift from the schema. The
+# drift gate TestECSConfigExampleUpToDate (internal/config) fails CI if it is stale; re-run
+# ` + "`make generate`" + ` and commit. Field comments below are the Go doc-comments.
+#
+# The ECS Terraform module (deploy/ecs/terraform) injects this verbatim as the GENAI_OTEL_BRIDGE_CONFIG
+# container env var; the binary parses it in-memory via config.LoadBytes (no temp file — read-only
+# rootfs safe). The ${...} placeholders in the body resolve at load time from the Secrets-Manager-
+# injected env vars (the module's secret_arns map).
+#
+# This is a STARTING POINT, not a drop-in: copy it into your deployment, set ha.dynamodb.table to the
+# module's table ("<var.name>-ha"), set ha.dynamodb.region (or rely on the task's AWS_REGION), and
+# adjust the source/governance blocks per environment.
+`
+
+// ECSProfile is the render Profile for the ECS deployment target: it flips the HA backends to
+// DynamoDB and force-includes the DynamoDB HA block (helm:"omit" in the chart) at its defaults. The
+// dynamodb-default strings here are tied to config.Load's actual defaults by the package-config gate
+// (TestECSProfileDefaultsMatchLoad), so they cannot silently diverge. The optional dynamodb fields
+// (region/endpoint/key_prefix) are intentionally NOT force-included — they default to empty/env and
+// are documented in the header, matching how values.yaml omits optional helm:"omit" blocks.
+func ECSProfile() Profile {
+	return Profile{
+		Include: map[string]bool{
+			"HAConfig.DynamoDB":              true,
+			"DynamoDBHAConfig.Table":         true,
+			"DynamoDBHAConfig.LockName":      true,
+			"DynamoDBHAConfig.LeaseDuration": true,
+			"DynamoDBHAConfig.RenewDeadline": true,
+			"DynamoDBHAConfig.RetryPeriod":   true,
+		},
+		Defaults: map[string]string{
+			"HAConfig.Coordinator":           "dynamodb",
+			"HAConfig.Checkpoint":            "dynamodb",
+			"DynamoDBHAConfig.Table":         "genai-otel-bridge-ha",
+			"DynamoDBHAConfig.LockName":      "genai-otel-bridge-leader",
+			"DynamoDBHAConfig.LeaseDuration": "15s",
+			"DynamoDBHAConfig.RenewDeadline": "10s",
+			"DynamoDBHAConfig.RetryPeriod":   "2s",
+		},
+	}
+}
+
+// ecsEnvRefRe matches the binary's ${VAR} env-ref syntax (mirrors config.envRefRe). Used to neutralize
+// refs inside the commented example block of the ECS file — see neutralizeEnvRefs.
+var ecsEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// neutralizeEnvRefs rewrites ${VAR} → <VAR>. The ECS config file is parsed WHOLE by config.LoadBytes,
+// which resolves ${VAR} even inside a `#` comment (a documented gotcha — an unset one is fatal). The
+// commented source-examples block carries example creds like ${LANGSMITH_API_KEY} that a Portkey-only
+// default deploy would NOT set; neutralizing them to <LANGSMITH_API_KEY> placeholders keeps the bundled
+// default loadable with only the active config's secrets. An operator restores the ${VAR} form when
+// they uncomment a source into the active config.
+func neutralizeEnvRefs(b []byte) []byte {
+	return ecsEnvRefRe.ReplaceAll(b, []byte("<$1>"))
+}
+
+// RenderECSConfigFile renders the complete generated ECS config file: the ECSConfigHeader banner, the
+// full default config rendered under ECSProfile (a bare config document — NO `config:` wrapper, since
+// the ECS module injects it verbatim as GENAI_OTEL_BRIDGE_CONFIG), then a COMMENTED all-loops/both-
+// vendor source-examples block (from each source's ExampleSource(), same as values.yaml) with its
+// env-refs neutralized so the whole file stays loadable with only the active config's secrets. This is
+// the exact byte sequence the generator writes and the gate test byte-compares.
+func RenderECSConfigFile(typ reflect.Type, srcPath string, examples []Example) ([]byte, error) {
+	body, err := RenderTypeProfile(typ, srcPath, ECSProfile())
+	if err != nil {
+		return nil, err
+	}
+	exBlock, err := RenderExampleBlock(examples)
+	if err != nil {
+		return nil, err
+	}
+	var b strings.Builder
+	b.WriteString(ECSConfigHeader)
+	b.Write(body)
+	b.WriteByte('\n')
+	b.Write(neutralizeEnvRefs(exBlock))
 	return []byte(b.String()), nil
 }
 
@@ -148,16 +234,37 @@ func SpliceExampleBlock(valuesYAML, block []byte) ([]byte, error) {
 	return spliceRegion(valuesYAML, block, ExampleBeginMarker, ExampleEndMarker)
 }
 
+// Profile customises the type-driven render for a non-default deployment target (e.g. ECS, which
+// needs the DynamoDB HA block the Helm chart omits). The zero Profile is the chart default — it
+// renders byte-identically to the untagged path (RenderType). Both maps are keyed by
+// "StructName.FieldName" (the Go type + field name, NOT the yaml name).
+//
+//   - Include force-renders a helm:"omit" field for the listed paths only (other omit fields stay
+//     excluded). A force-included STRUCT recurses as a nested mapping; a force-included LEAF must have
+//     a matching Defaults entry (else render errors — the same forcing function as an untagged leaf).
+//   - Defaults overrides the rendered scalar default for the listed paths (e.g. flip
+//     ha.coordinator's `lease` default to `dynamodb`). Ignored for struct-typed fields.
+type Profile struct {
+	Include  map[string]bool
+	Defaults map[string]string
+}
+
 // RenderType reflects typ (a struct or pointer-to-struct) and returns the YAML for its default
 // config map, with each key preceded by its Go doc-comment. srcPath, if non-empty, is the path to
 // the Go source file whose field doc-comments are emitted as `#` head comments; pass "" to skip
-// comment extraction (used in unit tests).
+// comment extraction (used in unit tests). This is the chart-default path (zero Profile).
 func RenderType(typ reflect.Type, srcPath string) ([]byte, error) {
+	return RenderTypeProfile(typ, srcPath, Profile{})
+}
+
+// RenderTypeProfile is RenderType under a Profile (see Profile). A zero Profile is byte-identical to
+// RenderType.
+func RenderTypeProfile(typ reflect.Type, srcPath string, profile Profile) ([]byte, error) {
 	docs, err := parseFieldDocs(srcPath)
 	if err != nil {
 		return nil, err
 	}
-	node, err := renderStruct(typ, docs)
+	node, err := renderStruct(typ, docs, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -209,8 +316,9 @@ func parseFieldDocs(srcPath string) (fieldDocs, error) {
 	return docs, nil
 }
 
-// renderStruct builds a yaml MappingNode for the struct type, in field-declaration order.
-func renderStruct(typ reflect.Type, docs fieldDocs) (*yaml.Node, error) {
+// renderStruct builds a yaml MappingNode for the struct type, in field-declaration order. profile
+// (see Profile) is the zero value for the chart-default path.
+func renderStruct(typ reflect.Type, docs fieldDocs, profile Profile) (*yaml.Node, error) {
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
@@ -225,10 +333,28 @@ func renderStruct(typ reflect.Type, docs fieldDocs) (*yaml.Node, error) {
 			continue
 		}
 		tag := f.Tag.Get("helm")
-		if tag == "omit" {
-			continue
+		path := typ.Name() + "." + f.Name
+		ft := f.Type
+		for ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
 		}
-		valNode, err := renderField(f, tag, docs)
+		if tag == "omit" {
+			if !profile.Include[path] {
+				continue
+			}
+			// Force-included omit field: a struct recurses as a nested mapping; a leaf needs an
+			// explicit profile default (mirrors the untagged-leaf forcing function).
+			if ft.Kind() == reflect.Struct {
+				tag = ""
+			} else if d, ok := profile.Defaults[path]; ok {
+				tag = "default=" + d
+			} else {
+				return nil, fmt.Errorf("field %s.%s: profile force-includes a helm:%q leaf but supplies no Defaults[%q]", typ.Name(), f.Name, "omit", path)
+			}
+		} else if d, ok := profile.Defaults[path]; ok && ft.Kind() != reflect.Struct {
+			tag = "default=" + d // override a tagged scalar default (e.g. coordinator lease→dynamodb)
+		}
+		valNode, err := renderField(f, tag, docs, profile)
 		if err != nil {
 			return nil, fmt.Errorf("field %s.%s: %w", typ.Name(), f.Name, err)
 		}
@@ -244,7 +370,7 @@ func renderStruct(typ reflect.Type, docs fieldDocs) (*yaml.Node, error) {
 	return m, nil
 }
 
-func renderField(f reflect.StructField, tag string, docs fieldDocs) (*yaml.Node, error) {
+func renderField(f reflect.StructField, tag string, docs fieldDocs, profile Profile) (*yaml.Node, error) {
 	ft := f.Type
 	for ft.Kind() == reflect.Pointer {
 		ft = ft.Elem()
@@ -277,7 +403,7 @@ func renderField(f reflect.StructField, tag string, docs fieldDocs) (*yaml.Node,
 			return nil, fmt.Errorf(`helm:"key=" only valid on a map field`)
 		}
 		key := strings.TrimPrefix(tag, "key=")
-		elem, err := renderStruct(ft.Elem(), docs)
+		elem, err := renderStruct(ft.Elem(), docs, profile)
 		if err != nil {
 			return nil, err
 		}
@@ -289,7 +415,7 @@ func renderField(f reflect.StructField, tag string, docs fieldDocs) (*yaml.Node,
 		if ft.Kind() != reflect.Slice {
 			return nil, fmt.Errorf(`helm:"instance" only valid on a slice field`)
 		}
-		elem, err := renderStruct(ft.Elem(), docs)
+		elem, err := renderStruct(ft.Elem(), docs, profile)
 		if err != nil {
 			return nil, err
 		}
@@ -297,7 +423,7 @@ func renderField(f reflect.StructField, tag string, docs fieldDocs) (*yaml.Node,
 
 	case tag == "":
 		if ft.Kind() == reflect.Struct {
-			return renderStruct(ft, docs)
+			return renderStruct(ft, docs, profile)
 		}
 		return nil, fmt.Errorf("untagged leaf field of kind %s — add a helm:\"...\" tag (env/default/omit)", ft.Kind())
 

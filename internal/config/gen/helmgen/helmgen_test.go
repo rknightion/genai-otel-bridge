@@ -117,6 +117,112 @@ func TestRenderTagGrammar(t *testing.T) {
 	}
 }
 
+// profileHA / profileDDB mirror the real HAConfig/DynamoDBHAConfig omit+override shape so the Profile
+// mechanism (force-include a helm:"omit" subtree, override a tagged default) can be exercised without
+// importing internal/config (which would create a cycle with the in-package gate test).
+type profileHA struct {
+	// Coordinator selects the leader-election backend.
+	Coordinator string     `yaml:"coordinator" helm:"default=lease"`
+	Checkpoint  string     `yaml:"checkpoint" helm:"default=configmap"`
+	DynamoDB    profileDDB `yaml:"dynamodb" helm:"omit"`
+}
+
+type profileDDB struct {
+	// Table is the lock+checkpoint table.
+	Table    string   `yaml:"table" helm:"omit"`
+	LockName string   `yaml:"lock_name" helm:"omit"`
+	Lease    Duration `yaml:"lease_duration" helm:"omit"`
+	Region   string   `yaml:"region" helm:"omit"` // NOT force-included → must stay absent
+}
+
+// TestRenderTypeProfile_IncludeAndOverride verifies the ECS render profile: a helm:"omit" struct
+// (DynamoDB) is force-included and recursed; its force-included omit-leaf children render at the
+// profile-supplied default; a tagged scalar default (Coordinator/Checkpoint) is overridden; and an
+// omit child NOT in the include set stays absent.
+func TestRenderTypeProfile_IncludeAndOverride(t *testing.T) {
+	p := Profile{
+		Include: map[string]bool{
+			"profileHA.DynamoDB":  true,
+			"profileDDB.Table":    true,
+			"profileDDB.LockName": true,
+			"profileDDB.Lease":    true,
+		},
+		Defaults: map[string]string{
+			"profileHA.Coordinator": "dynamodb",
+			"profileHA.Checkpoint":  "dynamodb",
+			"profileDDB.Table":      "genai-otel-bridge-ha",
+			"profileDDB.LockName":   "genai-otel-bridge-leader",
+			"profileDDB.Lease":      "15s",
+		},
+	}
+	out, err := RenderTypeProfile(reflect.TypeFor[profileHA](), "", p)
+	if err != nil {
+		t.Fatalf("RenderTypeProfile: %v", err)
+	}
+	s := string(out)
+	for _, c := range []string{
+		"coordinator: dynamodb", // tagged default overridden
+		"checkpoint: dynamodb",
+		"dynamodb:",                   // omit struct force-included
+		"table: genai-otel-bridge-ha", // omit leaf force-included w/ profile default
+		"lock_name: genai-otel-bridge-leader",
+		"lease_duration:", "15s", // Duration leaf → compact !!str
+	} {
+		if !strings.Contains(s, c) {
+			t.Errorf("rendered output missing %q\n---\n%s", c, s)
+		}
+	}
+	if strings.Contains(s, "region:") {
+		t.Errorf("omit child not in the include set leaked into output\n---\n%s", s)
+	}
+	// Field doc-comments still flow through under a profile (srcPath="" here so none parsed; just
+	// assert the force-included struct didn't break the comment plumbing by rendering structurally).
+	if !strings.Contains(s, "lease_duration: 15s") && !strings.Contains(s, "lease_duration: \"15s\"") {
+		t.Errorf("lease_duration default not rendered as a duration string:\n%s", s)
+	}
+}
+
+// TestRenderTypeProfile_ForceIncludedLeafWithoutDefaultErrors: force-including an omit LEAF without a
+// matching Defaults entry is a hard error (same forcing-function spirit as an untagged leaf).
+func TestRenderTypeProfile_ForceIncludedLeafWithoutDefaultErrors(t *testing.T) {
+	p := Profile{Include: map[string]bool{"profileHA.DynamoDB": true, "profileDDB.Table": true}}
+	if _, err := RenderTypeProfile(reflect.TypeFor[profileHA](), "", p); err == nil {
+		t.Fatal("expected an error force-including an omit leaf with no Defaults entry, got nil")
+	}
+}
+
+// TestRenderTypeProfile_ZeroProfileMatchesRenderType: a zero Profile must produce byte-identical
+// output to the plain RenderType path (protects TestHelmGeneratedConfigUpToDate / values.yaml).
+func TestRenderTypeProfile_ZeroProfileMatchesRenderType(t *testing.T) {
+	a, err := RenderType(reflect.TypeFor[sample](), "")
+	if err != nil {
+		t.Fatalf("RenderType: %v", err)
+	}
+	b, err := RenderTypeProfile(reflect.TypeFor[sample](), "", Profile{})
+	if err != nil {
+		t.Fatalf("RenderTypeProfile: %v", err)
+	}
+	if string(a) != string(b) {
+		t.Errorf("zero Profile diverged from RenderType\n--- RenderType ---\n%s\n--- zero Profile ---\n%s", a, b)
+	}
+}
+
+// TestNeutralizeEnvRefs: ${VAR} → <VAR> so a commented example block is safe inside a file the binary
+// parses whole (config.LoadBytes resolves ${VAR} even in comments — an unset one is fatal). Non-ref
+// text (including bare braces / values) is untouched.
+func TestNeutralizeEnvRefs(t *testing.T) {
+	in := "      value: ${PORTKEY_API_KEY}\n    source_instance: langsmith-${ENV}\n    base_url: https://api.smith.langchain.com\n"
+	got := string(neutralizeEnvRefs([]byte(in)))
+	for _, want := range []string{"value: <PORTKEY_API_KEY>", "langsmith-<ENV>", "base_url: https://api.smith.langchain.com"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "${") {
+		t.Errorf("env-ref syntax survived neutralization:\n%s", got)
+	}
+}
+
 type sliceDefaults struct {
 	Empty  []string `yaml:"empty" helm:"default="`
 	Filled []string `yaml:"filled" helm:"default=x,y"`

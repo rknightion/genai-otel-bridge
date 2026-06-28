@@ -17,7 +17,7 @@ export PATH := $(TOOLS_DIR):$(PATH)
 .PHONY: build test vet lint gate generate generate-check \
         tools tools-e2e \
         ci ci-build ci-vet ci-lint ci-lint-acceptance ci-test ci-race ci-acceptance ci-envtest \
-        forbidden-words spdx-check helm-lint install-hooks gen-dashboard \
+        forbidden-words spdx-check helm-lint tf-validate install-hooks gen-dashboard \
         ci-e2e image image-local helm-package k3d-up k3d-down k3d-e2e \
         publish
 
@@ -30,19 +30,21 @@ vet:
 	$(GO) vet ./...
 lint: tools
 	$(TOOLS_DIR)/golangci-lint run
-gate: vet test lint forbidden-words spdx-check
+gate: vet test lint forbidden-words spdx-check tf-validate
 	$(GO) build ./...
 
 # ── code generation ───────────────────────────────────────────────────────────
-# Regenerate the Helm chart's default `config:` block in deploy/helm/values.yaml from the Go config
-# schema (internal/config/config.go). Run after changing any config field/tag/default/doc-comment.
-# TestHelmGeneratedConfigUpToDate (in the gate's `test`) fails if this output is not committed.
+# Regenerate the config artifacts from the Go config schema (internal/config/config.go):
+# deploy/helm/values.yaml (chart default `config:` block) AND deploy/ecs/terraform/config.example.yaml
+# (the DynamoDB-backed ECS default config, same schema under the ECS render profile). Run after
+# changing any config field/tag/default/doc-comment. Their drift gates (TestHelmGeneratedConfigUpToDate /
+# TestECSConfigExampleUpToDate, in the gate's `test`) fail if the output is not committed.
 generate:
 	$(GO) run ./internal/config/gen
 	$(GO) run ./internal/docs/gen
-# generate-check verifies BOTH generated artifacts are up to date without modifying the tree (CI use).
+# generate-check verifies ALL generated artifacts are up to date without modifying the tree (CI use).
 generate-check: generate
-	@git diff --exit-code -- deploy/helm/values.yaml docs/telemetry.md || \
+	@git diff --exit-code -- deploy/helm/values.yaml deploy/ecs/terraform/config.example.yaml docs/telemetry.md || \
 	  (echo "generated files are stale — run 'make generate' and commit" && exit 1)
 # Regenerate the self-observability dashboard manifest (deploy/grafana/self-obs/dashboard-self-obs.yaml)
 # from its Python generator. Run after editing gen_dashboard.py; commit the emitted YAML. Needs PyYAML.
@@ -98,6 +100,24 @@ forbidden-words:
 	@if [ -f scripts/forbidden-words.sh ]; then bash scripts/forbidden-words.sh; else echo "forbidden-words: skipped (guard not present in this repo)"; fi
 spdx-check:
 	bash scripts/spdx-check.sh
+# tf-validate: validate + lint + security-scan the ECS Terraform module.
+# OpenTofu-first (tofu native), falling back to terraform. tflint (correctness/hygiene) and checkov
+# (AWS security posture) each self-skip when not installed — mirroring forbidden-words — so a bare
+# `make gate` stays green without the IaC toolchain. CI installs all three (ci.yml hygiene leg).
+tf-validate: ## validate + lint + scan the ECS Terraform module (tofu-first; self-skips absent tools)
+	@if command -v tofu >/dev/null 2>&1; then TF=tofu; \
+	elif command -v terraform >/dev/null 2>&1; then TF=terraform; \
+	else echo "tf-validate: no tofu/terraform found, skipping"; exit 0; fi; \
+	echo "tf-validate: $$TF fmt + validate"; \
+	$$TF -chdir=deploy/ecs/terraform fmt -check -recursive && \
+	$$TF -chdir=deploy/ecs/terraform init -backend=false -input=false >/dev/null && \
+	$$TF -chdir=deploy/ecs/terraform validate
+	@if command -v tflint >/dev/null 2>&1; then \
+		echo "tf-validate: tflint"; tflint --chdir=deploy/ecs/terraform; \
+	else echo "tf-validate: tflint not found, skipping"; fi
+	@if command -v checkov >/dev/null 2>&1; then \
+		echo "tf-validate: checkov"; checkov -d deploy/ecs/terraform --framework terraform --quiet --compact; \
+	else echo "tf-validate: checkov not found, skipping"; fi
 helm-lint: tools-e2e
 	$(TOOLS_DIR)/helm lint deploy/helm
 

@@ -6,10 +6,16 @@ coordinator → handle SIGTERM. No logic beyond wiring (that's `internal/app`).
 ## Flags
 
 - `-config` (default `/etc/genai-otel-bridge/config.yaml`), `-health-addr` (default `:8080`),
-  `-namespace` (`$POD_NAMESPACE`), `-identity` (`$POD_NAME`, lease identity),
+  `-namespace` (`$POD_NAMESPACE`), `-identity` (`$POD_NAME`, lease/lock identity — on ECS, falls back to
+  the Task ARN read from `$ECS_CONTAINER_METADATA_URI_V4/task` when unset; see `ecs.go`),
   `-container-mem-bytes` (numerator for `GOMEMLIMIT`),
   `-checkpoint-file` (default `/var/lib/genai-otel-bridge/checkpoints.yaml`; path for the `ha.checkpoint=file`
   store — override for local runs, e.g. `./checkpoints.local.yaml`).
+- `-healthcheck`: **probe path, not a normal run** (ECS container health check — distroless has no shell
+  for curl). GETs `/healthz` on the `-health-addr` port via 127.0.0.1 (`localHealthURL` rewrites a
+  `0.0.0.0`/`[::]` bind — and accepts a bare port — to a dialable `127.0.0.1:<port>`) and exits 0/1.
+  Branches with the other early exits, before any config/wiring. ECS task def:
+  `["CMD","/genai-otel-bridge","-healthcheck"]`.
 - `-validate-config`: **validation path, not a normal run.** Loads + schema/semantic-checks the
   `-config` file via `app.ValidateConfigFile` (placeholders unset `${ENV}` refs so no secrets are
   needed — endpoints/URLs get an https placeholder), prints `validate-config: OK/FAIL`, exits 0/1.
@@ -45,10 +51,15 @@ must match the chart RBAC `resourceNames`. Names are fixed (single-instance char
   isn't killed, but a wedged scheduler is. (bucket_settle drives the window_lag alert, not this beat.)
 - **Replica double-emit guard:** the chart fails to render on `ha.coordinator=none` + `replicas>1`
   (all-leader double-emit); the binary re-checks via the `GENAI_OTEL_BRIDGE_REPLICAS` env (defence-in-depth).
-- **HA wiring (`buildHA`):** an in-cluster k8s client is created only if `coordinator=lease` **or**
-  `checkpoint=configmap`. checkpoint: `configmap` → ConfigMap `genai-otel-bridge-checkpoints`; `file` →
-  `/var/lib/genai-otel-bridge/checkpoints.yaml`. coordinator: `lease` → Lease `genai-otel-bridge-leader` (15s/10s/2s);
-  `none` → `coordinate.Noop`.
+- **HA wiring (`buildHA`):** the ONLY HA-backend-aware code. An in-cluster k8s client is built only if
+  `coordinator=lease` **or** `checkpoint=configmap`; a DynamoDB client (SDK default credential chain →
+  ECS task role; `ha.dynamodb.endpoint` overrides `BaseEndpoint` for dynamodb-local/VPC endpoints) only
+  if `coordinator=dynamodb` **or** `checkpoint=dynamodb`. checkpoint: `configmap` → ConfigMap
+  `genai-otel-bridge-checkpoints`; `file` → `/var/lib/genai-otel-bridge/checkpoints.yaml`; `dynamodb` →
+  table `ha.dynamodb.table`, pk prefix `<key_prefix>ckpt#`. coordinator: `lease` → Lease
+  `genai-otel-bridge-leader` (15s/10s/2s); `dynamodb` → lock item `<key_prefix>lock#<lock_name>`
+  (durations from `ha.dynamodb.*`, default 15s/10s/2s); `none` → `coordinate.Noop`. Construction is lazy
+  (no DynamoDB call here) so it's safe before `cfg.Validate` runs inside `app.Build`.
 
 Version is stamped into `internal/version.Version` via `make build` ldflags
 (`git describe --tags --always --dirty`, default `dev`).

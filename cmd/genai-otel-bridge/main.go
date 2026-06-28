@@ -14,6 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	awsddb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"go.opentelemetry.io/otel"
 	corev1client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -21,10 +24,12 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/app"
 	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
 	cpcm "github.com/rknightion/genai-otel-bridge/internal/checkpoint/configmap"
+	cpddb "github.com/rknightion/genai-otel-bridge/internal/checkpoint/dynamodb"
 	cpfile "github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
 	"github.com/rknightion/genai-otel-bridge/internal/cleanup"
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	ddbcoord "github.com/rknightion/genai-otel-bridge/internal/coordinate/dynamodb"
 	leasecoord "github.com/rknightion/genai-otel-bridge/internal/coordinate/lease"
 	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
 	"github.com/rknightion/genai-otel-bridge/internal/httpx"
@@ -53,6 +58,7 @@ func main() {
 	cleanupMode := flag.Bool("cleanup", false, "delete the app-created lease + checkpoint ConfigMap, then exit (the chart's post-delete uninstall hook)")
 	cleanupRetainCheckpoint := flag.Bool("cleanup-retain-checkpoint", false, "with -cleanup: keep the checkpoint ConfigMap (only remove the lease) so a reinstall resumes the watermark")
 	validateConfigMode := flag.Bool("validate-config", false, "load + validate the -config file (placeholdering unset ${ENV} refs so secrets aren't needed), print the result, and exit 0/1")
+	healthCheckMode := flag.Bool("healthcheck", false, "probe the local /healthz derived from -health-addr (a 0.0.0.0/[::] bind, or a bare port, is dialed via 127.0.0.1) and exit 0/1 (ECS container health check; distroless has no shell for curl)")
 	flag.Parse()
 
 	// Config-validation path: load + schema/semantic-check the -config file and exit. No wiring, no
@@ -73,11 +79,35 @@ func main() {
 		return
 	}
 
+	// Health-check probe path (ECS container health check). Pure HTTP probe of the local /healthz +
+	// exit 0/1 — no config/wiring. distroless has no shell, so ECS runs the binary itself.
+	if *healthCheckMode {
+		os.Exit(healthCheckCode(localHealthURL(*healthAddr)))
+	}
+
+	// ECS identity fallback: with no -identity/$POD_NAME (ECS has no downward API for the task id), read
+	// the Task ARN from the task-metadata endpoint. Must run before *identity is consumed below (logger
+	// correlation, self-obs instance, buildHA lock identity). An explicit -identity/env still wins.
+	if *identity == "" {
+		if id := resolveECSIdentity(os.Getenv("ECS_CONTAINER_METADATA_URI_V4")); id != "" {
+			*identity = id
+		}
+	}
+
 	selfobs.SetMemoryLimit(0.9, *memLimit)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	cfg, err := config.Load(*cfgPath)
+	// Config delivery: a file at -config, OR (ECS/Fargate, no file mount) the GENAI_OTEL_BRIDGE_CONFIG
+	// env var, parsed in-memory (no temp file, so a read-only root filesystem is fine). Either path
+	// resolves ${ENV}/file: secret refs at load.
+	var cfg *config.Config
+	var err error
+	if inline := os.Getenv("GENAI_OTEL_BRIDGE_CONFIG"); inline != "" {
+		cfg, err = config.LoadBytes([]byte(inline))
+	} else {
+		cfg, err = config.Load(*cfgPath)
+	}
 	if err != nil {
 		fatal("load config", err)
 	}
@@ -201,7 +231,7 @@ func main() {
 		Identity: cfg.Identity.ProductIdentity(),
 	})
 
-	cp, coord := buildHA(cfg, *ns, *identity, *cpFile)
+	cp, coord := buildHA(ctx, cfg, *ns, *identity, *cpFile)
 
 	// [CP-C5] /healthz liveness threshold = the worst LEGITIMATE gap between two tick-ATTEMPT beats, so a
 	// leader blocked in an intended emit-retry/backpressure, or a degraded loop on its slow backoff, is
@@ -238,32 +268,64 @@ func main() {
 	slog.Info("genai-otel-bridge stopped")
 }
 
-func buildHA(cfg *config.Config, ns, identity, cpFile string) (checkpoint.Checkpointer, coordinate.Coordinator) {
+// buildHA constructs the checkpoint store + coordinator from cfg.HA. This is the ONLY place that knows
+// about a specific HA backend: K8s (lease/configmap, via an in-cluster client) or AWS (dynamodb, via the
+// SDK default credential chain → the ECS task role). No DynamoDB API call is made here — construction is
+// lazy; cfg.Validate (inside app.Build) runs before app.Run, so an empty/invalid table is rejected first.
+func buildHA(ctx context.Context, cfg *config.Config, ns, identity, cpFile string) (checkpoint.Checkpointer, coordinate.Coordinator) {
 	needK8s := cfg.HA.Coordinator == "lease" || cfg.HA.Checkpoint == "configmap"
+	needDynamo := cfg.HA.Coordinator == "dynamodb" || cfg.HA.Checkpoint == "dynamodb"
+
 	var cs corev1client.Interface
 	if needK8s {
 		rc, err := rest.InClusterConfig()
 		if err != nil {
 			fatal("in-cluster k8s config", err)
 		}
-		cs, err = corev1client.NewForConfig(rc)
-		if err != nil {
+		if cs, err = corev1client.NewForConfig(rc); err != nil {
 			fatal("k8s client", err)
 		}
 	}
+
+	var ddb *awsddb.Client
+	if needDynamo {
+		var loadOpts []func(*awscfg.LoadOptions) error
+		if r := cfg.HA.DynamoDB.Region; r != "" {
+			loadOpts = append(loadOpts, awscfg.WithRegion(r))
+		}
+		acfg, err := awscfg.LoadDefaultConfig(ctx, loadOpts...)
+		if err != nil {
+			fatal("aws config", err)
+		}
+		ddb = awsddb.NewFromConfig(acfg, func(o *awsddb.Options) {
+			if ep := cfg.HA.DynamoDB.Endpoint; ep != "" {
+				o.BaseEndpoint = aws.String(ep)
+			}
+		})
+	}
+
 	var cp checkpoint.Checkpointer
-	if cfg.HA.Checkpoint == "configmap" {
+	switch cfg.HA.Checkpoint {
+	case "configmap":
 		cp = cpcm.New(cs, ns, checkpointCMName)
-	} else {
+	case "dynamodb":
+		cp = cpddb.New(ddb, cfg.HA.DynamoDB.Table, cfg.HA.DynamoDB.KeyPrefix+"ckpt#")
+	default: // file
 		f, err := cpfile.New(cpFile, false)
 		if err != nil {
 			fatal("file checkpoint", err)
 		}
 		cp = f
 	}
+
 	var coord coordinate.Coordinator = coordinate.Noop{}
-	if cfg.HA.Coordinator == "lease" {
+	switch cfg.HA.Coordinator {
+	case "lease":
 		coord = leasecoord.New(cs, ns, leaseName, identity, 15*time.Second, 10*time.Second, 2*time.Second)
+	case "dynamodb":
+		d := cfg.HA.DynamoDB
+		coord = ddbcoord.New(ddb, d.Table, d.KeyPrefix+"lock#"+d.LockName, identity,
+			time.Duration(d.LeaseDuration), time.Duration(d.RenewDeadline), time.Duration(d.RetryPeriod))
 	}
 	return cp, coord
 }

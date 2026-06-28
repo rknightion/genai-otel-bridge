@@ -35,7 +35,7 @@ jobs:
           - name: envtest
             run: make ci-envtest
           - name: hygiene
-            run: make forbidden-words spdx-check helm-lint
+            run: make forbidden-words spdx-check helm-lint tf-validate
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -45,6 +45,17 @@ jobs:
           go-version-file: go.mod
           # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
           cache: true
+      # IaC toolchain for the `tf-validate` hygiene step: OpenTofu (tofu-native), tflint (correctness),
+      # and checkov (AWS security posture). Only the hygiene leg needs them.
+      - uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # v2.0.1
+        if: matrix.name == 'hygiene'
+        with:
+          tofu_wrapper: false
+      - uses: terraform-linters/setup-tflint@b480b8fcdaa6f2c577f8e4fa799e89e756bb7c93 # v6.2.2
+        if: matrix.name == 'hygiene'
+      - name: install checkov
+        if: matrix.name == 'hygiene'
+        run: pipx install checkov
       - run: ${{ matrix.run }}
         env:
           # term list for the forbidden-words hygiene guard (kept out of the repo; see scripts/forbidden-words.sh)
@@ -79,6 +90,30 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz gitleaks
           ./gitleaks detect --source . --redact --no-banner
 
+  # DynamoDB backend integration tests (coordinate + checkpoint packages + acceptance gate).
+  # Runs against dynamodb-local so no live AWS is required. This is a dedicated job (not a matrix
+  # leg) because GitHub Actions does not support per-leg service containers on a shared matrix.
+  dynamodb-backends:
+    runs-on: ubuntu-latest
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:2.5.2@sha256:d7ebddeb60fa418bcda218a6c6a402a58441b2a20d54c9cb1d85fd5194341753
+        ports:
+          - 8000:8000
+    env:
+      DYNAMODB_ENDPOINT: http://localhost:8000
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
+          cache: true
+      - run: go test ./internal/coordinate/dynamodb/... ./internal/checkpoint/dynamodb/...
+      - run: go test -tags acceptance ./internal/app/ -run TestDynamoDB
+
   # Single required status check. Branch protection on `main` requires ONLY this job, so the gate's
   # matrix legs (and e2e / secret-scan) can be added or renamed without re-touching protection.
   # It fails if any dependency failed or was cancelled; a legitimately skipped job (e.g. e2e on a
@@ -87,7 +122,7 @@ jobs:
     name: ci-success
     runs-on: ubuntu-latest
     if: always()
-    needs: [gate, e2e, secret-scan]
+    needs: [gate, e2e, secret-scan, dynamodb-backends]
     steps:
       - name: Fail if any required job did not pass
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}

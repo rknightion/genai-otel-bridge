@@ -1,0 +1,4 @@
+# Terraform working directory — not committed for library modules.
+# Root modules (deploy-infra repos) commit .terraform.lock.hcl; library modules do not.
+.terraform/
+.terraform.lock.hcl

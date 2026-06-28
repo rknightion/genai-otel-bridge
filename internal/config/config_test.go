@@ -5,6 +5,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -269,5 +270,177 @@ func TestValidateSelfMetricInterval(t *testing.T) {
 	cfg3.Emit.Self = self(0)
 	if err := cfg3.Validate(map[string]struct{}{"portkey": {}}); err != nil {
 		t.Fatalf("unset self interval should pass, got %v", err)
+	}
+}
+
+// TestValidateDynamoDBHA covers the DynamoDB HA validation rules added in Task C1.
+func TestValidateDynamoDBHA(t *testing.T) {
+	knownSources := map[string]struct{}{"portkey": {}}
+	// base returns a freshly loaded valid *Config for mutation.
+	base := func(t *testing.T) *Config {
+		t.Helper()
+		setEnv(t)
+		cfg, err := Load("testdata/valid.yaml")
+		if err != nil {
+			t.Fatalf("Load valid.yaml: %v", err)
+		}
+		return cfg
+	}
+
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string // empty ⇒ expect no error
+	}{
+		{
+			name: "coordinator dynamodb requires checkpoint dynamodb",
+			mutate: func(c *Config) {
+				c.HA.Coordinator = "dynamodb"
+				c.HA.Checkpoint = "configmap"
+				c.HA.DynamoDB.Table = "t"
+			},
+			wantErr: "ha.coordinator=dynamodb requires ha.checkpoint=dynamodb",
+		},
+		{
+			name: "dynamodb checkpoint requires table",
+			mutate: func(c *Config) {
+				c.HA.Coordinator = "none"
+				c.HA.Checkpoint = "dynamodb"
+				// DynamoDB.Table intentionally left empty
+			},
+			wantErr: "ha.dynamodb.table is required",
+		},
+		{
+			name: "good dynamodb pair",
+			mutate: func(c *Config) {
+				c.HA.Coordinator = "dynamodb"
+				c.HA.Checkpoint = "dynamodb"
+				c.HA.DynamoDB.Table = "t"
+				c.HA.DynamoDB.LeaseDuration = Duration(15 * time.Second)
+				c.HA.DynamoDB.RenewDeadline = Duration(10 * time.Second)
+				c.HA.DynamoDB.RetryPeriod = Duration(2 * time.Second)
+			},
+			wantErr: "",
+		},
+		{
+			name: "lease must exceed renew deadline",
+			mutate: func(c *Config) {
+				c.HA.Coordinator = "dynamodb"
+				c.HA.Checkpoint = "dynamodb"
+				c.HA.DynamoDB.Table = "t"
+				c.HA.DynamoDB.LeaseDuration = Duration(5 * time.Second)
+				c.HA.DynamoDB.RenewDeadline = Duration(10 * time.Second)
+				c.HA.DynamoDB.RetryPeriod = Duration(2 * time.Second)
+			},
+			wantErr: "ha.dynamodb.lease_duration must be > renew_deadline",
+		},
+		{
+			name: "unknown coordinator rejected",
+			mutate: func(c *Config) {
+				c.HA.Coordinator = "etcd"
+			},
+			wantErr: "ha.coordinator must be lease|none|dynamodb",
+		},
+		{
+			name: "unknown checkpoint rejected",
+			mutate: func(c *Config) {
+				c.HA.Checkpoint = "redis"
+			},
+			wantErr: "ha.checkpoint must be configmap|file|dynamodb",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base(t)
+			tc.mutate(c)
+			err := c.Validate(knownSources)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want ok, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestDynamoDBLoadDefaults verifies that Load fills in the DynamoDB defaults when coordinator or
+// checkpoint is set to dynamodb (via YAML), so callers never see zero-value durations.
+func TestDynamoDBLoadDefaults(t *testing.T) {
+	setEnv(t)
+	// Write a minimal valid config with coordinator+checkpoint=dynamodb to a temp file.
+	// Cannot use withExtraYAML (it appends, but valid.yaml already has ha:).
+	const dynYAML = `emit:
+  telemetry:
+    otlp:
+      endpoint: ${GC_OTLP_ENDPOINT}
+      instance_id: ${GC_INSTANCE_ID}
+      token: ${GC_OTLP_TOKEN}
+identity:
+  service_namespace: genai-otel-bridge
+  deployment_environment: ${ENV}
+ha:
+  coordinator: dynamodb
+  checkpoint: dynamodb
+  dynamodb:
+    table: mytable
+queue:
+  max_batches: 256
+  max_batch_bytes: 1048576
+  emit_workers: 1
+sources:
+  - type: portkey
+    enabled: true
+    base_url: https://api.portkey.ai/v1
+    source_instance: portkey-${ENV}
+    auth: { header: x-portkey-api-key, value: ${PORTKEY_API_KEY} }
+    rate_limit: { rps: 1, burst: 3 }
+    loops:
+      analytics:
+        enabled: true
+        cadence: 60s
+        window: 50m
+        bucket_settle: 3m
+        bootstrap_lookback: 50m
+        max_backfill: 55m
+        metric_prefix: portkey_api
+        graphs: [requests, cost, tokens, latency, errors]
+`
+	p := filepath.Join(t.TempDir(), "dyn.yaml")
+	if err := os.WriteFile(p, []byte(dynYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HA.DynamoDB.LockName != "genai-otel-bridge-leader" {
+		t.Errorf("LockName default: got %q, want genai-otel-bridge-leader", cfg.HA.DynamoDB.LockName)
+	}
+	if time.Duration(cfg.HA.DynamoDB.LeaseDuration) != 15*time.Second {
+		t.Errorf("LeaseDuration default: got %s, want 15s", time.Duration(cfg.HA.DynamoDB.LeaseDuration))
+	}
+	if time.Duration(cfg.HA.DynamoDB.RenewDeadline) != 10*time.Second {
+		t.Errorf("RenewDeadline default: got %s, want 10s", time.Duration(cfg.HA.DynamoDB.RenewDeadline))
+	}
+	if time.Duration(cfg.HA.DynamoDB.RetryPeriod) != 2*time.Second {
+		t.Errorf("RetryPeriod default: got %s, want 2s", time.Duration(cfg.HA.DynamoDB.RetryPeriod))
+	}
+}
+
+// TestLoadBytesResolvesEnv covers the file-less config path (the ECS GENAI_OTEL_BRIDGE_CONFIG delivery):
+// LoadBytes parses raw YAML in-memory and resolves ${ENV} secret refs, identically to Load — so no temp
+// file is needed and a read-only root filesystem is fine.
+func TestLoadBytesResolvesEnv(t *testing.T) {
+	t.Setenv("TEST_OTLP_EP", "https://otlp.example.com")
+	cfg, err := LoadBytes([]byte("emit:\n  telemetry:\n    otlp:\n      endpoint: ${TEST_OTLP_EP}\n"))
+	if err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	if got := cfg.Emit.Telemetry.OTLP.Endpoint; got != "https://otlp.example.com" {
+		t.Fatalf("endpoint=%q, want the resolved env value", got)
 	}
 }

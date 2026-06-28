@@ -8,6 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsddb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
 	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
@@ -89,5 +93,37 @@ func TestZeroTimeCursorWatermark(t *testing.T) {
 	}
 	if err := s.Save(ctx, key, model.Watermark{Time: time.Time{}, Cursor: "page-2", Epoch: 1}); !errors.Is(err, checkpoint.ErrStaleWrite) {
 		t.Fatalf("zero-time same-cursor err=%v, want ErrStaleWrite", err)
+	}
+}
+
+// TestSaveUpgradesVersionlessItem guards the legacy/hand-seeded path (Copilot review, PR #13): an item
+// that exists but has no `version` attribute must be upgradable, not spin to RMW exhaustion on a
+// `version = 0` condition that can never match an absent attribute.
+func TestSaveUpgradesVersionlessItem(t *testing.T) {
+	db := newTestClient(t)
+	table := createTable(t, db)
+	s := New(db, table, "ckpt#")
+	key := model.CheckpointKey{SourceInstance: "ls", Loop: "runs", OutputFingerprint: "legacy"}
+	ctx := context.Background()
+	t0 := time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC)
+
+	// Seed a versionless item directly (a pre-`version` / hand-seeded checkpoint).
+	if _, err := db.PutItem(ctx, &awsddb.PutItemInput{
+		TableName: aws.String(table),
+		Item: map[string]ddbtypes.AttributeValue{
+			"pk":    &ddbtypes.AttributeValueMemberS{Value: s.pk(key)},
+			"time":  &ddbtypes.AttributeValueMemberS{Value: t0.Format(time.RFC3339Nano)},
+			"epoch": &ddbtypes.AttributeValueMemberN{Value: "1"},
+		},
+	}); err != nil {
+		t.Fatalf("seed versionless item: %v", err)
+	}
+	// A forward Save must upgrade it (attribute_not_exists(version)), not exhaust retries.
+	if err := s.Save(ctx, key, model.Watermark{Time: t0.Add(time.Hour), Epoch: 1}); err != nil {
+		t.Fatalf("upgrade versionless item: %v", err)
+	}
+	// A subsequent Save must then succeed via the normal version path.
+	if err := s.Save(ctx, key, model.Watermark{Time: t0.Add(2 * time.Hour), Epoch: 1}); err != nil {
+		t.Fatalf("second save after upgrade: %v", err)
 	}
 }

@@ -133,21 +133,28 @@ func (s *Store) Save(ctx context.Context, key model.CheckpointKey, w model.Water
 		var stored model.Watermark
 		var version int64
 		exists := out.Item != nil
+		versionPresent := false
 		if exists {
 			stored, version, err = decode(out.Item)
 			if err != nil {
 				return fmt.Errorf("checkpoint/dynamodb: decode %s: %w", key, err) // never clobber (CP-C10 parity)
 			}
+			_, versionPresent = out.Item["version"]
 		}
 		if err := checkpoint.CheckMonotonic(stored, w); err != nil {
 			return err // ErrStaleWrite — benign to the caller
 		}
 		put := &awsddb.PutItemInput{TableName: aws.String(s.table), Item: encode(s.pk(key), w, version+1)}
-		if exists {
+		switch {
+		case !exists:
+			put.ConditionExpression = aws.String("attribute_not_exists(pk)")
+		case versionPresent:
 			put.ConditionExpression = aws.String("version = :v")
 			put.ExpressionAttributeValues = map[string]ddbtypes.AttributeValue{":v": nstr(version)}
-		} else {
-			put.ConditionExpression = aws.String("attribute_not_exists(pk)")
+		default:
+			// Item exists but predates the `version` attribute (hand-seeded / migrated). Condition on
+			// its absence so this write upgrades the item rather than looping forever on `version = 0`.
+			put.ConditionExpression = aws.String("attribute_not_exists(version)")
 		}
 		_, err = s.db.PutItem(ctx, put)
 		if err == nil {

@@ -58,7 +58,7 @@ func healthCheckCode(base string) int {
 func localHealthURL(healthAddr string) string {
 	host, port, err := net.SplitHostPort(healthAddr)
 	if err != nil {
-		return "http://127.0.0.1" + healthAddr // not host:port (e.g. a bare ":8080" edge) — best effort
+		return "http://127.0.0.1:" + healthAddr // bare port (e.g. "8080") — treat it as the port
 	}
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"

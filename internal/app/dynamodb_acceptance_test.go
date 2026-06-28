@@ -91,7 +91,12 @@ func TestDynamoDBFailoverNoDoubleAdvance(t *testing.T) {
 			<-lc.Done()
 		})
 	}()
-	ea := <-epochA
+	var ea int64
+	select {
+	case ea = <-epochA:
+	case <-time.After(10 * time.Second):
+		t.Fatal("node-a was never elected")
+	}
 	if err := store.Save(context.Background(), key, model.Watermark{Time: t0, Epoch: ea}); err != nil {
 		t.Fatalf("leader A save: %v", err)
 	}

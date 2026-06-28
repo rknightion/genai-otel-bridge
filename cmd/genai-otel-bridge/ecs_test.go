@@ -55,6 +55,7 @@ func TestLocalHealthURL(t *testing.T) {
 		"0.0.0.0:8080":   "http://127.0.0.1:8080",
 		"[::]:8080":      "http://127.0.0.1:8080",
 		"127.0.0.1:9000": "http://127.0.0.1:9000",
+		"8080":           "http://127.0.0.1:8080", // bare port — no colon
 	}
 	for in, want := range cases {
 		if got := localHealthURL(in); got != want {

@@ -56,7 +56,12 @@ func TestFailoverBumpsFence(t *testing.T) {
 			<-lc.Done()
 		})
 	}()
-	ea := <-epochA
+	var ea int64
+	select {
+	case ea = <-epochA:
+	case <-time.After(10 * time.Second):
+		t.Fatal("node-a was never elected")
+	}
 	if ea != 1 {
 		t.Fatalf("node-a epoch=%d want 1", ea)
 	}

@@ -17,7 +17,7 @@ export PATH := $(TOOLS_DIR):$(PATH)
 .PHONY: build test vet lint gate generate generate-check \
         tools tools-e2e \
         ci ci-build ci-vet ci-lint ci-lint-acceptance ci-test ci-race ci-acceptance ci-envtest \
-        forbidden-words spdx-check helm-lint install-hooks gen-dashboard \
+        forbidden-words spdx-check helm-lint tf-validate install-hooks gen-dashboard \
         ci-e2e image image-local helm-package k3d-up k3d-down k3d-e2e \
         publish
 
@@ -30,7 +30,7 @@ vet:
 	$(GO) vet ./...
 lint: tools
 	$(TOOLS_DIR)/golangci-lint run
-gate: vet test lint forbidden-words spdx-check
+gate: vet test lint forbidden-words spdx-check tf-validate
 	$(GO) build ./...
 
 # ── code generation ───────────────────────────────────────────────────────────
@@ -98,6 +98,16 @@ forbidden-words:
 	@if [ -f scripts/forbidden-words.sh ]; then bash scripts/forbidden-words.sh; else echo "forbidden-words: skipped (guard not present in this repo)"; fi
 spdx-check:
 	bash scripts/spdx-check.sh
+# tf-validate: validates the ECS Terraform module (fmt -check, init -backend=false, validate).
+# Self-skips gracefully when neither terraform nor tofu is installed, mirroring forbidden-words.
+tf-validate: ## validate the ECS Terraform module (self-skips if terraform/tofu absent)
+	@if command -v terraform >/dev/null 2>&1; then TF=terraform; \
+	elif command -v tofu >/dev/null 2>&1; then TF=tofu; \
+	else echo "tf-validate: no terraform/tofu found, skipping"; exit 0; fi; \
+	echo "tf-validate: using $$TF"; \
+	$$TF -chdir=deploy/ecs/terraform fmt -check -recursive && \
+	$$TF -chdir=deploy/ecs/terraform init -backend=false -input=false >/dev/null && \
+	$$TF -chdir=deploy/ecs/terraform validate
 helm-lint: tools-e2e
 	$(TOOLS_DIR)/helm lint deploy/helm
 

@@ -82,6 +82,10 @@ func main() {
 	// Health-check probe path (ECS container health check). Pure HTTP probe of the local /healthz +
 	// exit 0/1 — no config/wiring. distroless has no shell, so ECS runs the binary itself.
 	if *healthCheckMode {
+		// Not SSRF (Snyk go/Ssrf suppressed in .snyk via the ecs.go exclude): the probe target derives
+		// from the operator's own -health-addr flag and is rewritten to loopback (127.0.0.1) by
+		// localHealthURL — no untrusted input, no trust boundary crossed. Real outbound traffic (vendor/
+		// OTLP) goes through httpx's SSRF egress guard, not this path.
 		os.Exit(healthCheckCode(localHealthURL(*healthAddr)))
 	}
 

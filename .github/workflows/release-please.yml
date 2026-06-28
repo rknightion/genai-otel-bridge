@@ -42,6 +42,5 @@ jobs:
     permissions:
       contents: read
       packages: write
-    secrets: inherit
     with:
       release_tag: ${{ needs.release-please.outputs.tag_name }}

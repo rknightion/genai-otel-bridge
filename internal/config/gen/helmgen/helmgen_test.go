@@ -207,6 +207,22 @@ func TestRenderTypeProfile_ZeroProfileMatchesRenderType(t *testing.T) {
 	}
 }
 
+// TestNeutralizeEnvRefs: ${VAR} → <VAR> so a commented example block is safe inside a file the binary
+// parses whole (config.LoadBytes resolves ${VAR} even in comments — an unset one is fatal). Non-ref
+// text (including bare braces / values) is untouched.
+func TestNeutralizeEnvRefs(t *testing.T) {
+	in := "      value: ${PORTKEY_API_KEY}\n    source_instance: langsmith-${ENV}\n    base_url: https://api.smith.langchain.com\n"
+	got := string(neutralizeEnvRefs([]byte(in)))
+	for _, want := range []string{"value: <PORTKEY_API_KEY>", "langsmith-<ENV>", "base_url: https://api.smith.langchain.com"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "${") {
+		t.Errorf("env-ref syntax survived neutralization:\n%s", got)
+	}
+}
+
 type sliceDefaults struct {
 	Empty  []string `yaml:"empty" helm:"default="`
 	Filled []string `yaml:"filled" helm:"default=x,y"`

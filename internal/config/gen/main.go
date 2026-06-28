@@ -44,10 +44,12 @@ func main() {
 	}
 	// Source examples region: per-source-type example configs (commented-out), rendered from each
 	// source package's ExampleSource(). Vendor-specific example shape stays in the vendor package.
-	exBlock, err := helmgen.RenderExampleBlock([]helmgen.Example{
+	// The SAME example set feeds both the values.yaml examples region and the ECS config file below.
+	examples := []helmgen.Example{
 		{Value: portkey.ExampleSource(), SettingsComments: portkey.ExampleSettingsComments()},
 		{Value: langsmith.ExampleSource(), SettingsComments: langsmith.ExampleSettingsComments()},
-	})
+	}
+	exBlock, err := helmgen.RenderExampleBlock(examples)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gen:", err)
 		os.Exit(1)
@@ -64,10 +66,11 @@ func main() {
 	fmt.Printf("gen: wrote generated config + source-examples blocks to %s\n", *valuesPath)
 
 	// ECS deployment target: the full default config rendered under the DynamoDB-backed ECS profile
-	// (helmgen.ECSProfile) — a standalone file (no `config:` wrapper) the ECS Terraform module injects
-	// verbatim as GENAI_OTEL_BRIDGE_CONFIG. Generated from the SAME config.Config schema as values.yaml,
+	// (helmgen.ECSProfile) PLUS the same commented all-loops source-examples (env-refs neutralized) —
+	// a standalone file (no `config:` wrapper) the ECS Terraform module injects verbatim as
+	// GENAI_OTEL_BRIDGE_CONFIG. Generated from the SAME config.Config schema + examples as values.yaml,
 	// so it cannot drift; the package-config gate (TestECSConfigExampleUpToDate) enforces that.
-	ecsConfig, err := helmgen.RenderECSConfigFile(reflect.TypeFor[config.Config](), *configSrc)
+	ecsConfig, err := helmgen.RenderECSConfigFile(reflect.TypeFor[config.Config](), *configSrc, examples)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gen:", err)
 		os.Exit(1)

@@ -28,6 +28,7 @@ import (
 	"go/parser"
 	"go/token"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -123,18 +124,40 @@ func ECSProfile() Profile {
 	}
 }
 
-// RenderECSConfigFile renders the complete generated ECS config file: the ECSConfigHeader banner
-// followed by the full default config rendered under ECSProfile (a bare config document — NO
-// `config:` wrapper, since the ECS module injects it verbatim as GENAI_OTEL_BRIDGE_CONFIG). This is
+// ecsEnvRefRe matches the binary's ${VAR} env-ref syntax (mirrors config.envRefRe). Used to neutralize
+// refs inside the commented example block of the ECS file — see neutralizeEnvRefs.
+var ecsEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// neutralizeEnvRefs rewrites ${VAR} → <VAR>. The ECS config file is parsed WHOLE by config.LoadBytes,
+// which resolves ${VAR} even inside a `#` comment (a documented gotcha — an unset one is fatal). The
+// commented source-examples block carries example creds like ${LANGSMITH_API_KEY} that a Portkey-only
+// default deploy would NOT set; neutralizing them to <LANGSMITH_API_KEY> placeholders keeps the bundled
+// default loadable with only the active config's secrets. An operator restores the ${VAR} form when
+// they uncomment a source into the active config.
+func neutralizeEnvRefs(b []byte) []byte {
+	return ecsEnvRefRe.ReplaceAll(b, []byte("<$1>"))
+}
+
+// RenderECSConfigFile renders the complete generated ECS config file: the ECSConfigHeader banner, the
+// full default config rendered under ECSProfile (a bare config document — NO `config:` wrapper, since
+// the ECS module injects it verbatim as GENAI_OTEL_BRIDGE_CONFIG), then a COMMENTED all-loops/both-
+// vendor source-examples block (from each source's ExampleSource(), same as values.yaml) with its
+// env-refs neutralized so the whole file stays loadable with only the active config's secrets. This is
 // the exact byte sequence the generator writes and the gate test byte-compares.
-func RenderECSConfigFile(typ reflect.Type, srcPath string) ([]byte, error) {
+func RenderECSConfigFile(typ reflect.Type, srcPath string, examples []Example) ([]byte, error) {
 	body, err := RenderTypeProfile(typ, srcPath, ECSProfile())
+	if err != nil {
+		return nil, err
+	}
+	exBlock, err := RenderExampleBlock(examples)
 	if err != nil {
 		return nil, err
 	}
 	var b strings.Builder
 	b.WriteString(ECSConfigHeader)
 	b.Write(body)
+	b.WriteByte('\n')
+	b.Write(neutralizeEnvRefs(exBlock))
 	return []byte(b.String()), nil
 }
 

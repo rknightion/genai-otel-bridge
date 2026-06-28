@@ -81,6 +81,16 @@ appears at its default with the field's inline doc-comment. The module injects i
 `config_yaml` (table rewritten to `<name>-ha`). **Never hand-edit it**; override `var.config_yaml`
 instead, or copy it as a starting point.
 
+The active config runs one Portkey source (analytics loop) — the only shape that starts cleanly with
+just credentials. The file also carries a **commented all-loops/both-vendor example block** (Portkey
+`groups`/`logs_export`, LangSmith `sessions`/`runs`, from each source's `ExampleSource()`) showing the
+full surface. It is commented because `groups`/`logs_export`/LangSmith need real per-deployment settings
+(`workspace_id`, `signed_url_allow_hosts`, project scope, LangSmith creds) that have no functional
+universal default. Its env-refs are written as `<VAR>` placeholders, not `${VAR}` — the whole file is
+parsed by the binary (which resolves `${VAR}` even in comments), so live refs would force those env vars
+on every default deploy. To enable a loop: uncomment it into `config.sources`, restore the `${VAR}`
+refs, and supply the secrets/settings.
+
 ### Minimum required `config_yaml` HA block
 
 The bundled `config.example.yaml` already contains this block at its defaults (and the module rewrites

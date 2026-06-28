@@ -149,3 +149,146 @@ sources:
           - tokens
           - latency
           - errors
+
+# >>> BEGIN generated source examples — do not edit by hand; run `make generate` <<<
+# Example source(s) — NOT active. Copy under `config.sources`, set the secret(s), and
+# adjust per environment. Generated from each source package's ExampleSource().
+# sources:
+#   - type: portkey
+#     enabled: true
+#     base_url: https://api.portkey.ai/v1
+#     source_instance: portkey-<ENV>
+#     auth:
+#       header: x-portkey-api-key
+#       value: <PORTKEY_API_KEY>
+#     rate_limit:
+#       rps: 1
+#       burst: 3
+#     loops:
+#       groups:
+#         enabled: true
+#         cadence: 1m
+#         settings:
+#           # analytics/groups FILTER (optional): scope every graph/group to these Portkey api-key UUIDs (csv), exactly like the notebook's api_key_ids filter. Empty ⇒ workspace-wide (all keys). Set the SAME value on analytics+groups so the per-key aggregates and the per-model/metadata breakdowns agree. NOTE the UUID is the api-key's id (from GET /api-keys), NOT the key secret — and a read-only poller key has no inference traffic of its own, so point this at the key(s) your application actually calls Portkey with.
+#           api_key_ids: ""
+#           # groups: emit the per-dimension cost gauge in USD (÷100 from Portkey's cents); ON by default
+#           emit_cost: "true"
+#           # groups: per-prompt request dimension (adds requests_by_prompt{prompt}); default ON, set false to opt out. Prompt slug is a content-free identifier, not content.
+#           emit_prompts: "true"
+#           # analytics/groups SAFETY (optional): assert the API key's analytics scope is EXACTLY this workspace (slug, e.g. ws-acme-001) before emitting — catches a too-broad/global key (which Portkey can't request-scope on analytics). Mismatch ⇒ refuse to emit + alert; empty ⇒ no check. Set the same value on analytics+groups.
+#           expected_workspace: ""
+#           # groups: per-poll cap on distinct dimension rows (cardinality guard)
+#           max_groups: "10000"
+#           # groups: opt-in per-metadata-field group endpoints (csv); each adds a _by_metadata gauge
+#           metadata_keys: use_case
+#           # page size per fetch (groups: dimension rows; logs_export: records per export page, server ceiling 50000)
+#           page_size: "1000"
+#           # exclude the still-mutating recent tail from the query upper bound
+#           settle: 10m
+#           # groups: trailing query window [now-window_span, now-settle]
+#           window_span: 1h
+#       logs_export:
+#         enabled: true
+#         cadence: 1m
+#         settings:
+#           # logs_export: per-Collect emit chunk (bounds memory; the export file is never buffered whole)
+#           chunk_max_records: "5000"
+#           # logs_export: signed-URL object GET timeout (S3 downloads are larger than control-plane calls)
+#           download_timeout: 5m
+#           # logs_export: promote content-free fields to the INDEXED (Loki stream-label) tier (csv, default empty); auto-allow-listed in the guard; creates Loki streams (keep LOW cardinality — the per-metric budget is the backstop); needs GS1 stack-side promotion to be queryable as {label=…}; bodies hard-denied
+#           extra_indexed_fields: ""
+#           # logs_export: opt content-free fields into the structured-metadata allow-list (csv); bodies hard-denied
+#           extra_record_fields: cache_status
+#           # logs_export: abandon a stuck job after this interval (cancel + restart the window)
+#           job_poll_timeout: 30m
+#           # logs_export: watermark older than now-max_backfill skipped LOUD. Cap ≤ Loki reject_old_samples_max_age (GC default 7d). Default 24h.
+#           max_backfill: 24h
+#           # logs_export: tripwire — a window exceeding this pages advances-past with a counted gap (never stalls)
+#           max_pages_per_window: "50"
+#           # logs_export: lift named sub-keys OUT of the (otherwise hard-denied) Portkey metadata blob into the structured-metadata tier (csv, default empty) — e.g. correlation_id. Only operator-named content-free sub-keys are extracted; the rest of metadata (PII) stays dropped. Bodies hard-denied.
+#           metadata_record_fields: ""
+#           # logs_export: name ONE metadata sub-key whose UUID value is also mapped to the OTLP log trace_id (logs↔traces correlation), e.g. correlation_id (default empty). Auto-lifted into the record tier too. Bodies hard-denied.
+#           metadata_trace_id_field: ""
+#           # page size per fetch (groups: dimension rows; logs_export: records per export page, server ceiling 50000)
+#           page_size: "50000"
+#           # logs_export: fields requested of Portkey export (NOT an egress filter — the client-side strip governs egress)
+#           requested_data: ai_model,ai_org,cost,created_at,id,prompt_id,prompt_slug,prompt_version_id,req_units,res_units,response_status_code,response_time,total_units,trace_id
+#           # exclude the still-mutating recent tail from the query upper bound
+#           settle: 10m
+#           # logs_export: REQUIRED — allow-list of S3 hosts for the signed download URL (SSRF guard)
+#           signed_url_allow_hosts: signed-url-host.example.com
+#           # logs_export: name ONE TOP-LEVEL export field (e.g. Portkey's native trace_id) whose UUID value is mapped to the OTLP log trace_id (logs↔traces correlation), default empty. The alternative to metadata_trace_id_field for deployments that stamp the trace id as a first-class field; the two are mutually exclusive. Auto-added to the record tier + requested_data. A non-UUID value leaves trace_id unset (counted via trace_id_unparsed) but still ships as a record attr.
+#           trace_id_field: ""
+#           # logs_export: per-export query span; the scheduler is snapshot-gated (LoopConfig.Window==0)
+#           window: 1h
+#           # logs_export: REQUIRED — Portkey workspace id
+#           workspace_id: <your-workspace-id>
+#     api_key_use_cases:
+#       - label: Data Gen
+#         api_key_ids:
+#           - <api-key-uuid>
+#   - type: langsmith
+#     enabled: true
+#     base_url: https://api.smith.langchain.com
+#     source_instance: langsmith-<ENV>
+#     auth:
+#       header: x-api-key
+#       value: <LANGSMITH_API_KEY>
+#     rate_limit:
+#       rps: 10
+#       burst: 20
+#     loops:
+#       runs:
+#         enabled: true
+#         cadence: 1m
+#         settings:
+#           # runs: promote content-free fields to the INDEXED (Loki stream-label) tier (csv, default empty); auto-allow-listed in the guard; creates Loki streams (keep LOW cardinality — the per-metric budget is the backstop); needs GS1 stack-side promotion to be queryable as {label=…}; message bodies are hard-denied.
+#           extra_indexed_fields: ""
+#           # opt content-free fields into the structured-metadata allow-list (csv); message bodies are hard-denied.
+#           extra_record_fields: tags,child_run_ids,app_path
+#           # runs: watermark older than now-max_backfill is skipped LOUD (counted gap). Cap ≤ Loki reject_old_samples_max_age (Grafana Cloud default 7d). Default 24h.
+#           max_backfill: 24h
+#           # runs: drain cap per window; a window exceeding this advances-past with a counted gap (never stalls)
+#           max_pages_per_window: "100"
+#           # runs: per-page decode cap (default 32MiB); an oversize page is a loud counted truncation.
+#           max_response_bytes: "33554432"
+#           # cap on discovered/used sessions (projects) per poll (loud truncation when hit).
+#           max_sessions: "1000"
+#           # runs: page size for runs/query (server ceiling 100)
+#           page_size: "100"
+#           # runs: when true, only emit root runs (one log per trace); reduces volume for trace-level correlation
+#           root_only: "false"
+#           # runs: optional single run_type filter (e.g. chain, llm, tool); empty = all types
+#           run_type: chain
+#           # filter-bounded session auto-discovery via GET /sessions (alternative to session_ids for the runs loop; also scopes the sessions loop).
+#           session_filter: eq(name, "my-project")
+#           # runs: static scope (csv of project UUIDs). EITHER this OR session_filter is REQUIRED — never firehose all projects.
+#           session_ids: <project-uuid-1>,<project-uuid-2>
+#           # runs: auto-discovery session cache TTL (re-queries /sessions after this interval)
+#           session_refresh: 5m
+#           # runs: exclude the still-running/late tail — runs within settle of now may still be mutating
+#           settle: 10m
+#           # runs: trailing query span pulled per poll (Window==0 ⇒ snapshot-scheduled)
+#           window: 1h
+#       sessions:
+#         enabled: true
+#         cadence: 1m
+#         metric_prefix: langsmith
+#         settings:
+#           # sessions: emit numeric feedback_stats gauges (score averages by feedback key)
+#           emit_feedback: "true"
+#           # sessions: optional allow-list of feedback keys to emit (csv, content-free operational names); empty = all numeric keys
+#           feedback_keys: correctness,helpfulness
+#           # cap on discovered/used sessions (projects) per poll (loud truncation when hit).
+#           max_sessions: "1000"
+#           # sessions: page size for the sessions list endpoint (offset/limit pagination)
+#           page_limit: "100"
+#           # filter-bounded session auto-discovery via GET /sessions (alternative to session_ids for the runs loop; also scopes the sessions loop).
+#           session_filter: eq(name, "my-project")
+#           # sessions: per-session label value — "id" (default, bounded) or "name" (human-readable but potentially high-cardinality)
+#           session_label_value: id
+#           # sessions: rolling aggregate window [now-stats_window, now] (snapshot; not time-bucketed)
+#           stats_window: 1h
+#           # sessions: use approximate (cheaper) backend stats computation
+#           use_approx_stats: "false"
+# >>> END generated source examples <<<

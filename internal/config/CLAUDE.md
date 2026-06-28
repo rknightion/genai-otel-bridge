@@ -39,13 +39,21 @@ field paths (keyed `"StructName.FieldName"`) and `Defaults` overrides a tagged s
 profile flips `ha.coordinator`/`ha.checkpoint` to `dynamodb` and force-includes the `ha.dynamodb` block
 (omitted from the chart) at its defaults — the optional `region`/`endpoint`/`key_prefix` are left out
 (empty/env defaults), matching how the chart omits optional `helm:"omit"` blocks. The output is a BARE
-config doc (no `config:` wrapper) the ECS module injects verbatim as `GENAI_OTEL_BRIDGE_CONFIG`. The zero
-`Profile` is byte-identical to the old path, so `values.yaml` is unaffected
-(`TestRenderTypeProfile_ZeroProfileMatchesRenderType` guards this). Three package-`config` gates:
-`TestECSConfigExampleUpToDate` (byte-compare drift), `TestECSConfigLoadsAgainstSchema` (LoadBytes
-round-trip), and `TestECSProfileDefaultsMatchLoad` — which ties the profile's hard-coded dynamodb default
-STRINGS to the `defaultDynamoDB*` consts `Load` actually applies (the consts are the single source of
-truth; `helmgen` can't import `config`, so the test closes the gap).
+config doc (no `config:` wrapper) the ECS module injects verbatim as `GENAI_OTEL_BRIDGE_CONFIG`, followed
+by a **commented all-loops/both-vendor example block** (the SAME `ExampleSource()` set as values.yaml's
+examples region) with its `${VAR}` env-refs **neutralized to `<VAR>`** (`neutralizeEnvRefs`). The
+neutralization is load-bearing: the whole ECS file is parsed by `config.LoadBytes`, which resolves
+`${VAR}` even inside `#` comments (the documented secret-substitution gotcha), so a live
+`${LANGSMITH_API_KEY}` in the commented block would force that env var on a Portkey-only default deploy.
+The active config stays minimal (one Portkey source/analytics loop) — the only shape that starts with
+just credentials; `groups`/`logs_export`/LangSmith need real per-deployment settings, so they live in the
+commented block. The zero `Profile` is byte-identical to the old path, so `values.yaml` is unaffected
+(`TestRenderTypeProfile_ZeroProfileMatchesRenderType` guards this). Gates: `TestECSConfigExampleUpToDate`
+(byte-compare drift; EXTERNAL `package config_test` because it imports the source packages for the
+examples — like `TestHelmGeneratedExamplesUpToDate`), plus internal `TestECSConfigLoadsAgainstSchema`
+(LoadBytes round-trip) and `TestECSProfileDefaultsMatchLoad` — which ties the profile's hard-coded
+dynamodb default STRINGS to the `defaultDynamoDB*` consts `Load` actually applies (the consts are the
+single source of truth; `helmgen` can't import `config`, so the test closes the gap).
 
 ## Secret substitution (§4.1 — subtle, don't simplify)
 

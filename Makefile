@@ -10,6 +10,8 @@ K3D_VERSION           ?= v5.9.0
 K3S_IMAGE             ?= rancher/k3s:v1.35.1-k3s1
 IMAGE                 ?= genai-otel-bridge:dev
 E2E_HELPER_IMAGE      ?= genai-otel-bridge-e2e-helper:dev
+GO_LICENSES_VERSION   ?= v1.6.0
+SYFT_VERSION          ?= v1.18.1
 
 TOOLS_DIR := $(CURDIR)/.tools
 export PATH := $(TOOLS_DIR):$(PATH)
@@ -19,6 +21,7 @@ export PATH := $(TOOLS_DIR):$(PATH)
         ci ci-build ci-vet ci-lint ci-lint-acceptance ci-test ci-race ci-acceptance ci-envtest \
         forbidden-words spdx-check helm-lint tf-validate install-hooks gen-dashboard \
         ci-e2e image image-local helm-package k3d-up k3d-down k3d-e2e \
+        notices sbom tools-licensing tools-sbom \
         publish
 
 # ── legacy (kept for local muscle memory) ─────────────────────────────────────
@@ -142,6 +145,29 @@ k3d-e2e: tools-e2e image-local
 	IMAGE=$(IMAGE) E2E_HELPER_IMAGE=$(E2E_HELPER_IMAGE) K3S_IMAGE=$(K3S_IMAGE) bash scripts/k3d-e2e.sh all
 
 ci-e2e: helm-package k3d-e2e
+
+# ── third-party license notices + SBOM (RELEASE ARTIFACTS; not committed/gated) ────
+# THIRD_PARTY_NOTICES.md and the SBOMs change on every dependency bump, so they are
+# regenerated at release time rather than committed: the image build bakes notices into
+# /licenses/, and publish.yml attaches notices + both SBOMs to the GitHub Release. They are
+# deliberately NOT in `make gate` — committing+gating a deps-derived file would block hosted-
+# Renovate automerge (it can't self-regenerate it). These targets are for manual/local + CI use.
+tools-licensing:
+	@mkdir -p $(TOOLS_DIR)
+	@{ test -x $(TOOLS_DIR)/go-licenses && $(TOOLS_DIR)/go-licenses --help >/dev/null 2>&1; } || \
+	  GOBIN=$(TOOLS_DIR) $(GO) install github.com/google/go-licenses@$(GO_LICENSES_VERSION)
+tools-sbom:
+	@mkdir -p $(TOOLS_DIR)
+	@{ test -x $(TOOLS_DIR)/syft && $(TOOLS_DIR)/syft version >/dev/null 2>&1; } || \
+	  GOBIN=$(TOOLS_DIR) $(GO) install github.com/anchore/syft/cmd/syft@$(SYFT_VERSION)
+
+# Regenerate THIRD_PARTY_NOTICES.md (LICENSE + NOTICE texts) from the binary's import graph.
+notices: tools-licensing
+	GO_LICENSES=$(TOOLS_DIR)/go-licenses bash scripts/notices.sh
+# Generate SPDX + CycloneDX SBOMs into dist/sbom/. Scans the built binary by default;
+# override SBOM_TARGET (e.g. an image ref) to scan something else.
+sbom: tools-sbom build
+	SYFT=$(TOOLS_DIR)/syft bash scripts/sbom.sh
 
 # ── publish (image + chart -> OCI registry) ───────────────────────────────────
 # Drives scripts/publish.sh. RELEASE_TAG=vX.Y.Z -> release tags; else :main build.

@@ -27,7 +27,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # `gh release upload` attaches the SBOMs + third-party notices to the release
       packages: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -56,3 +56,15 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           GIT_SHA: ${{ github.sha }}
           SETUP_BUILDX: "0"   # buildx already configured by docker/setup-buildx-action
+      # Attach the third-party notices + SBOMs (SPDX 2.3 + CycloneDX 1.6, both JSON) to the
+      # GitHub Release. These are release artifacts (regenerated per build), not committed files.
+      - name: Attach SBOMs + third-party notices to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          make notices sbom
+          gh release upload "${{ inputs.release_tag }}" \
+            THIRD_PARTY_NOTICES.md \
+            dist/sbom/genai-otel-bridge.spdx.json \
+            dist/sbom/genai-otel-bridge.cdx.json \
+            --clobber

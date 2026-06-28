@@ -7,6 +7,11 @@
 *.test
 *.out
 
+# Generated license/SBOM artifacts (release-time: baked into the image at /licenses/ and
+# attached to the GitHub Release — never committed; they churn on every dependency bump).
+# SBOMs land in /dist/sbom/, already covered by /dist/ above.
+/THIRD_PARTY_NOTICES.md
+
 # Pinned CI tooling (installed by `make tools` / `make tools-e2e`)
 /.tools/
 

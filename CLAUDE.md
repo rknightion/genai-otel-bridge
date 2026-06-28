@@ -115,6 +115,11 @@ multi-arch image + Helm chart to GHCR. There is no manual `make changelog` / `gi
 
 - **Version is single-source:** image tag = chart `version` = `appVersion` = release version (also
   enforced by `scripts/publish.sh`, which derives all three from the tag at publish time).
+- **License notices + SBOMs are release artifacts (not committed/gated).** `publish.yml` also runs
+  `make notices` + `make sbom` and attaches `THIRD_PARTY_NOTICES.md` + SPDX-2.3/CycloneDX-1.6 SBOMs
+  to the GitHub Release; the image bakes notices into `/licenses/`. Generated from the real import
+  graph (`go-licenses`/`syft`), they churn on every dep bump, so they are deliberately kept out of
+  `make gate` to preserve Renovate automerge. See `LICENSING.md`.
 - **Merging the release PR:** release-please opens it with `GITHUB_TOKEN`, so CI does not auto-run on it
   (GitHub's recursion guard) — merge it as a repo admin (branch protection `enforce_admins=false` lets
   admins bypass); its content was already validated when the underlying commits landed. To make release

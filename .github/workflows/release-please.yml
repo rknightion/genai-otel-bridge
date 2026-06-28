@@ -40,7 +40,7 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     uses: ./.github/workflows/publish.yml
     permissions:
-      contents: read
+      contents: write   # publish.yml attaches SBOMs + third-party notices to the GitHub Release
       packages: write
     with:
       release_tag: ${{ needs.release-please.outputs.tag_name }}

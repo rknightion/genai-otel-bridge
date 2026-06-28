@@ -114,6 +114,33 @@ jobs:
       - run: go test ./internal/coordinate/dynamodb/... ./internal/checkpoint/dynamodb/...
       - run: go test -tags acceptance ./internal/app/ -run TestDynamoDB
 
+  # Test coverage -> Codacy. Deliberately NOT in ci-success's `needs`: coverage reporting is
+  # informational, so a Codacy outage — or a fork PR with no secret — must never block merges or
+  # Renovate automerge. Runs the unit-test scope with coverage instrumentation (a separate build
+  # from the gate's `test` leg) and uploads via the pinned official reporter action (no curl|bash).
+  coverage:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    env:
+      CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
+          cache: true
+      - run: make coverage
+      - name: Upload coverage to Codacy
+        if: ${{ env.CODACY_PROJECT_TOKEN != '' }}   # skip on fork PRs (secret unavailable)
+        uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1.3.0
+        with:
+          project-token: ${{ env.CODACY_PROJECT_TOKEN }}
+          coverage-reports: coverage.out
+          force-coverage-parser: go
+
   # Single required status check. Branch protection on `main` requires ONLY this job, so the gate's
   # matrix legs (and e2e / secret-scan) can be added or renamed without re-touching protection.
   # It fails if any dependency failed or was cancelled; a legitimately skipped job (e.g. e2e on a

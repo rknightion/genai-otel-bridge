@@ -16,7 +16,7 @@ SYFT_VERSION          ?= v1.18.1
 TOOLS_DIR := $(CURDIR)/.tools
 export PATH := $(TOOLS_DIR):$(PATH)
 
-.PHONY: build test vet lint gate generate generate-check \
+.PHONY: build test coverage vet lint gate generate generate-check \
         tools tools-e2e \
         ci ci-build ci-vet ci-lint ci-lint-acceptance ci-test ci-race ci-acceptance ci-envtest \
         forbidden-words spdx-check helm-lint tf-validate install-hooks gen-dashboard \
@@ -29,6 +29,11 @@ build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o bin/genai-otel-bridge ./cmd/genai-otel-bridge
 test:
 	$(GO) test ./...
+# coverage: profile over the unit-test scope (same packages as `ci-test`; the acceptance/envtest/
+# dynamodb integration suites are build-tagged or need services, so they're out of the profile).
+# Uploaded to Codacy by the ci.yml `coverage` job. Locally: `go tool cover -html=coverage.out`.
+coverage:
+	$(GO) test -covermode=atomic -coverprofile=coverage.out ./...
 vet:
 	$(GO) vet ./...
 lint: tools

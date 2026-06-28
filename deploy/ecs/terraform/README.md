@@ -26,11 +26,16 @@ locals {
   bridge_region     = "eu-west-1"
 }
 
+# This is a reusable module with NO provider block of its own — configure the aws provider in your
+# root module (the module inherits it). That's what lets it compose with count/for_each.
+provider "aws" {
+  region = local.bridge_region
+}
+
 module "genai_otel_bridge" {
   source = "github.com/rknightion/genai-otel-bridge//deploy/ecs/terraform"
 
   name       = local.bridge_name
-  region     = local.bridge_region
   vpc_id     = "vpc-0abc123"
   subnet_ids = ["subnet-0aaa", "subnet-0bbb"]  # >= 2 AZs for active/standby spread
 
@@ -90,7 +95,7 @@ ha:
   checkpoint: dynamodb
   dynamodb:
     table: genai-otel-bridge-ha   # must match var.name + "-ha" (this module's table name)
-    region: eu-west-1             # must match var.region
+    region: eu-west-1             # match the caller's aws provider region
     # Optional overrides (defaults shown):
     # lock_name: genai-otel-bridge-leader
     # lease_duration: 15s
@@ -174,7 +179,6 @@ the security group rules:
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `name` | string | `"genai-otel-bridge"` | Name prefix for all resources |
-| `region` | string | — | AWS region |
 | `vpc_id` | string | — | VPC ID |
 | `subnet_ids` | list(string) | — | Subnet IDs (>= 2 AZs) |
 | `image` | string | `ghcr.io/rknightion/genai-otel-bridge:latest` | Container image |

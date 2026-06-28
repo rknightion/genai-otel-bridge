@@ -15,11 +15,9 @@
 #
 # Variable names verified against terraform-aws-modules GitHub sources (2026-06-28).
 
-# ── Provider ─────────────────────────────────────────────────────────────────────────────────────
-
-provider "aws" {
-  region = var.region
-}
+# Provider: this is a REUSABLE module — it deliberately declares NO `provider "aws"` block. The CALLER
+# configures the aws provider (region/profile/assume-role); the module inherits the default provider.
+# This is what lets the module be used with count/for_each and by multi-region/multi-account callers.
 
 # ── DynamoDB table (lock + checkpoint) ───────────────────────────────────────────────────────────
 #

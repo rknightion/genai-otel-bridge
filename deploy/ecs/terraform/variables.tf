@@ -4,11 +4,6 @@ variable "name" {
   default     = "genai-otel-bridge"
 }
 
-variable "region" {
-  description = "AWS region to deploy into."
-  type        = string
-}
-
 variable "vpc_id" {
   description = "VPC ID in which the ECS service and security group are created."
   type        = string
@@ -91,7 +86,7 @@ variable "config_yaml" {
         checkpoint: dynamodb
         dynamodb:
           table: <var.name>-ha   # the table this module creates
-          region: <var.region>
+          region: <your AWS region>   # match the caller's aws provider region
     All other config keys follow the schema in internal/config/config.go.
     Secrets should be referenced as $${ENV_VAR_NAME} (resolved from the injected Secrets Manager secrets).
   EOT

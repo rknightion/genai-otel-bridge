@@ -35,6 +35,7 @@ provider "aws" {
 # Checkpoint items carry no TTL attribute and are the durable state of record.
 
 module "table" {
+  # checkov:skip=CKV_TF_1: registry module version-pinned (~>) + .terraform.lock.hcl; commit-hash pinning is not idiomatic for terraform-aws-modules
   source  = "terraform-aws-modules/dynamodb-table/aws"
   version = "~> 4.0"
 
@@ -124,6 +125,7 @@ data "aws_iam_policy_document" "task" {
 #   egress blocks is the correct approach; the module cannot achieve this.
 
 resource "aws_security_group" "this" {
+  # checkov:skip=CKV2_AWS_5: attached to the ECS service via module.service security_group_ids; checkov can't see it without --download-external-modules
   name        = "${var.name}-egress"
   description = "genai-otel-bridge ECS task: default-deny ingress, egress allow-list (DNS + HTTPS)"
   vpc_id      = var.vpc_id
@@ -166,6 +168,7 @@ resource "aws_security_group" "this" {
 # Verified input names: cluster_name, tags (from master/variables.tf).
 
 module "cluster" {
+  # checkov:skip=CKV_TF_1: registry module version-pinned (~>) + lock file; commit-hash pinning is not idiomatic for terraform-aws-modules
   source  = "terraform-aws-modules/ecs/aws"
   version = "~> 7.0"
 
@@ -231,6 +234,7 @@ locals {
 }
 
 module "service" {
+  # checkov:skip=CKV_TF_1: registry module version-pinned (~>) + lock file; commit-hash pinning is not idiomatic for terraform-aws-modules
   source  = "terraform-aws-modules/ecs/aws//modules/service"
   version = "~> 7.0"
 

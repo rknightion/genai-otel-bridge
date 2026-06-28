@@ -98,16 +98,24 @@ forbidden-words:
 	@if [ -f scripts/forbidden-words.sh ]; then bash scripts/forbidden-words.sh; else echo "forbidden-words: skipped (guard not present in this repo)"; fi
 spdx-check:
 	bash scripts/spdx-check.sh
-# tf-validate: validates the ECS Terraform module (fmt -check, init -backend=false, validate).
-# Self-skips gracefully when neither terraform nor tofu is installed, mirroring forbidden-words.
-tf-validate: ## validate the ECS Terraform module (self-skips if terraform/tofu absent)
-	@if command -v terraform >/dev/null 2>&1; then TF=terraform; \
-	elif command -v tofu >/dev/null 2>&1; then TF=tofu; \
-	else echo "tf-validate: no terraform/tofu found, skipping"; exit 0; fi; \
-	echo "tf-validate: using $$TF"; \
+# tf-validate: validate + lint + security-scan the ECS Terraform module.
+# OpenTofu-first (tofu native), falling back to terraform. tflint (correctness/hygiene) and checkov
+# (AWS security posture) each self-skip when not installed — mirroring forbidden-words — so a bare
+# `make gate` stays green without the IaC toolchain. CI installs all three (ci.yml hygiene leg).
+tf-validate: ## validate + lint + scan the ECS Terraform module (tofu-first; self-skips absent tools)
+	@if command -v tofu >/dev/null 2>&1; then TF=tofu; \
+	elif command -v terraform >/dev/null 2>&1; then TF=terraform; \
+	else echo "tf-validate: no tofu/terraform found, skipping"; exit 0; fi; \
+	echo "tf-validate: $$TF fmt + validate"; \
 	$$TF -chdir=deploy/ecs/terraform fmt -check -recursive && \
 	$$TF -chdir=deploy/ecs/terraform init -backend=false -input=false >/dev/null && \
 	$$TF -chdir=deploy/ecs/terraform validate
+	@if command -v tflint >/dev/null 2>&1; then \
+		echo "tf-validate: tflint"; tflint --chdir=deploy/ecs/terraform; \
+	else echo "tf-validate: tflint not found, skipping"; fi
+	@if command -v checkov >/dev/null 2>&1; then \
+		echo "tf-validate: checkov"; checkov -d deploy/ecs/terraform --framework terraform --quiet --compact; \
+	else echo "tf-validate: checkov not found, skipping"; fi
 helm-lint: tools-e2e
 	$(TOOLS_DIR)/helm lint deploy/helm
 

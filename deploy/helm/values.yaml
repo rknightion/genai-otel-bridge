@@ -151,9 +151,9 @@ config:
     # Deployment environment label (e.g. dev, staging, prod).
     deployment_environment: ${ENV}
   ha:
-    # lease: use a k8s Lease for leader election (production multi-replica). none: disable HA (single-replica dev/test).
+    # lease: use a k8s Lease for leader election (production multi-replica). none: disable HA (single-replica dev/test). dynamodb: DynamoDB lock (ECS/AWS).
     coordinator: lease
-    # configmap: durable watermark in a k8s ConfigMap (required with coordinator=lease). file: local file (dev only).
+    # configmap: durable watermark in a k8s ConfigMap (required with coordinator=lease). file: local file (dev only). dynamodb: DynamoDB item (ECS/AWS).
     checkpoint: configmap
   queue:
     # Per-loop in-memory queue depth (batches). At ~1 batch/min this is ~4h of backlog before the

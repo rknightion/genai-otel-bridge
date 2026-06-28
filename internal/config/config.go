@@ -217,10 +217,24 @@ func (ic IdentityConfig) ProductIdentity() map[string]string {
 }
 
 type HAConfig struct {
-	// lease: use a k8s Lease for leader election (production multi-replica). none: disable HA (single-replica dev/test).
-	Coordinator string `yaml:"coordinator" helm:"default=lease"` // lease | none
-	// configmap: durable watermark in a k8s ConfigMap (required with coordinator=lease). file: local file (dev only).
-	Checkpoint string `yaml:"checkpoint" helm:"default=configmap"` // configmap | file
+	// lease: use a k8s Lease for leader election (production multi-replica). none: disable HA (single-replica dev/test). dynamodb: DynamoDB lock (ECS/AWS).
+	Coordinator string `yaml:"coordinator" helm:"default=lease"` // lease | none | dynamodb
+	// configmap: durable watermark in a k8s ConfigMap (required with coordinator=lease). file: local file (dev only). dynamodb: DynamoDB item (ECS/AWS).
+	Checkpoint string `yaml:"checkpoint" helm:"default=configmap"` // configmap | file | dynamodb
+	// DynamoDB-backed HA (ECS). Required when coordinator|checkpoint == dynamodb. ECS-only ⇒ helm:"omit".
+	DynamoDB DynamoDBHAConfig `yaml:"dynamodb" helm:"omit"`
+}
+
+// DynamoDBHAConfig configures the DynamoDB lock + checkpoint backends (ECS deployment target).
+type DynamoDBHAConfig struct {
+	Table         string   `yaml:"table" helm:"omit"`          // required; the lock+checkpoint table
+	Region        string   `yaml:"region" helm:"omit"`         // default: AWS_REGION env (resolved by the SDK)
+	Endpoint      string   `yaml:"endpoint" helm:"omit"`       // optional: dynamodb-local / VPC endpoint override
+	LockName      string   `yaml:"lock_name" helm:"omit"`      // default: genai-otel-bridge-leader
+	KeyPrefix     string   `yaml:"key_prefix" helm:"omit"`     // optional: prepended to every pk (shared-table isolation)
+	LeaseDuration Duration `yaml:"lease_duration" helm:"omit"` // default 15s
+	RenewDeadline Duration `yaml:"renew_deadline" helm:"omit"` // default 10s
+	RetryPeriod   Duration `yaml:"retry_period" helm:"omit"`   // default 2s
 }
 type QueueConfig struct {
 	// Per-loop in-memory queue depth (batches). At ~1 batch/min this is ~4h of backlog before the
@@ -359,6 +373,20 @@ func Load(path string) (*Config, error) {
 			cfg.Selfobs.Profiling.Pull.Addr = ":6060" // dedicated pprof listener (NOT the public health port)
 		}
 	}
+	if cfg.HA.Coordinator == "dynamodb" || cfg.HA.Checkpoint == "dynamodb" {
+		if cfg.HA.DynamoDB.LockName == "" {
+			cfg.HA.DynamoDB.LockName = "genai-otel-bridge-leader"
+		}
+		if cfg.HA.DynamoDB.LeaseDuration == 0 {
+			cfg.HA.DynamoDB.LeaseDuration = Duration(15 * time.Second)
+		}
+		if cfg.HA.DynamoDB.RenewDeadline == 0 {
+			cfg.HA.DynamoDB.RenewDeadline = Duration(10 * time.Second)
+		}
+		if cfg.HA.DynamoDB.RetryPeriod == 0 {
+			cfg.HA.DynamoDB.RetryPeriod = Duration(2 * time.Second)
+		}
+	}
 	return &cfg, nil
 }
 
@@ -456,14 +484,32 @@ func (c *Config) Validate(known map[string]struct{}) error {
 	default:
 		errs = append(errs, fmt.Errorf("log.level must be debug|info|warn|error (empty ⇒ info), got %q", c.Log.Level))
 	}
-	if c.HA.Coordinator != "lease" && c.HA.Coordinator != "none" {
-		errs = append(errs, fmt.Errorf("ha.coordinator must be lease|none, got %q", c.HA.Coordinator))
+	switch c.HA.Coordinator {
+	case "lease", "none", "dynamodb":
+	default:
+		errs = append(errs, fmt.Errorf("ha.coordinator must be lease|none|dynamodb, got %q", c.HA.Coordinator))
 	}
-	if c.HA.Checkpoint != "configmap" && c.HA.Checkpoint != "file" {
-		errs = append(errs, fmt.Errorf("ha.checkpoint must be configmap|file, got %q", c.HA.Checkpoint))
+	switch c.HA.Checkpoint {
+	case "configmap", "file", "dynamodb":
+	default:
+		errs = append(errs, fmt.Errorf("ha.checkpoint must be configmap|file|dynamodb, got %q", c.HA.Checkpoint))
 	}
 	if c.HA.Coordinator == "lease" && c.HA.Checkpoint == "file" { // [CP-H7/H11]
 		errs = append(errs, errors.New("ha.checkpoint=file is unsafe with ha.coordinator=lease (per-pod, not shared across replicas → restart loses the watermark; use configmap)"))
+	}
+	if c.HA.Coordinator == "dynamodb" && c.HA.Checkpoint != "dynamodb" {
+		errs = append(errs, errors.New("ha.coordinator=dynamodb requires ha.checkpoint=dynamodb (they share the table)"))
+	}
+	if (c.HA.Coordinator == "dynamodb" || c.HA.Checkpoint == "dynamodb") && c.HA.DynamoDB.Table == "" {
+		errs = append(errs, errors.New("ha.dynamodb.table is required when coordinator|checkpoint is dynamodb"))
+	}
+	if c.HA.Coordinator == "dynamodb" {
+		if c.HA.DynamoDB.LeaseDuration <= c.HA.DynamoDB.RenewDeadline {
+			errs = append(errs, errors.New("ha.dynamodb.lease_duration must be > renew_deadline"))
+		}
+		if c.HA.DynamoDB.RetryPeriod <= 0 {
+			errs = append(errs, errors.New("ha.dynamodb.retry_period must be > 0"))
+		}
 	}
 	errs = append(errs, validateEmitEndpoint("emit.telemetry.otlp", c.Emit.Telemetry.OTLP)...) // [CP-M7]
 	// [round3 MEDIUM-1] the optional self-telemetry endpoint carries the same instance_id:token Basic

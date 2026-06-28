@@ -11,6 +11,13 @@ to downstream slowness.
 > tests, hardened Helm chart, configurable content governance, and durability tuning (metrics
 > `max_backfill` 90m ≤ Mimir 2h OOO; logs 24h ≤ Loki 7d; too-old honesty path built+tested both planes).
 > Every Portkey + LangSmith settings knob is surfaced in `values.yaml` at its default with a comment.
+> **ECS deployment target (branch `feat/ecs-dynamodb-support`, PR):** runs production-grade on AWS ECS
+> as well as Kubernetes — **DynamoDB-for-both** HA behind the frozen seams (`ha.coordinator=dynamodb` +
+> `ha.checkpoint=dynamodb` + the `ha.dynamodb.*` block; one table backs the CAS lock + the checkpoint),
+> a reusable Terraform module in `deploy/ecs/terraform/` (Fargate default, EC2 via `launch_type`), a
+> `-healthcheck` binary mode, and a `dynamodb-local` CI gate (`tf-validate` + `dynamodb-backends` job).
+> See `ARCHITECTURE.md` decision ledger #17. (This work uses a branch+PR by exception to the usual
+> direct-to-main convention — it's a big OSS seam change.)
 > **In flight (3 lanes):** in-cluster cleartext-emit opt-out (`emit.*.otlp.allow_insecure`, CP-M7);
 > Portkey `groups` cost/metadata flags (live-probe confirmed cost=**cents**, metadata dim field=
 > `metadata_value`); config-driven indexed/stream-label opt-in (`governance.allow_label_keys`).
@@ -45,8 +52,8 @@ bounded queue, epoch-fenced checkpoint) → `emit.Emitter` (deterministic OTLP e
 - `source/` (+ `portkey/`) — Source/Loop interface + registry + cardinality Guard.
 - `emit/` (+ `otlp/`) — Emitter seam, reject taxonomy, hand-rolled deterministic OTLP protobuf.
 - `schedule/` — per-loop tick→collect→enqueue→emit driver; the watermark-advance state machine.
-- `checkpoint/` (+ `configmap/`, `file/`) — durable watermark store + monotonic/epoch write fence.
-- `coordinate/` (+ `lease/`) — leader election; single-active-replica.
+- `checkpoint/` (+ `configmap/`, `file/`, `dynamodb/`) — durable watermark store + monotonic/epoch write fence (`dynamodb/` = the ECS backend; RMW + `CheckMonotonic`, RFC3339Nano time).
+- `coordinate/` (+ `lease/`, `dynamodb/`) — leader election; single-active-replica (`dynamodb/` = the ECS backend; CAS lock + monotonic `fence` epoch).
 - `httpx/` — hardened outbound client (SSRF egress guard, cross-host redirect block).
 - `config/` — YAML config model, secret substitution, validation.
 - `selfobs/` — the integrator's own metrics + health endpoints (distinct resource identity).

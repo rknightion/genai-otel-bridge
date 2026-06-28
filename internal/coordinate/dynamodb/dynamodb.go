@@ -46,12 +46,143 @@ func New(db UpdateAPI, table, pk, identity string, lease, renewDeadline, retry t
 }
 
 func (c *Coordinator) Run(ctx context.Context, onElected func(leaderCtx context.Context)) error {
-	return errors.New("not implemented") // filled in Lane A
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		fence, acquired, err := c.acquire(ctx)
+		if err != nil {
+			slog.Warn("dynamodb coordinator: acquire error", "err", err)
+		}
+		if !acquired {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(c.retry):
+				continue
+			}
+		}
+		c.lead(ctx, fence, onElected)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 }
 
-var _ = slog.Info
-var _ = strconv.Itoa
-var _ = fmt.Sprintf
-var _ = aws.String
-var _ ddbtypes.AttributeValue
+func numAttr(m map[string]ddbtypes.AttributeValue, k string) (int64, error) {
+	v, ok := m[k].(*ddbtypes.AttributeValueMemberN)
+	if !ok {
+		return 0, fmt.Errorf("dynamodb: attribute %q missing or not a number", k)
+	}
+	return strconv.ParseInt(v.Value, 10, 64)
+}
+
+func nstr(n int64) *ddbtypes.AttributeValueMemberN {
+	return &ddbtypes.AttributeValueMemberN{Value: strconv.FormatInt(n, 10)}
+}
+
+func sstr(s string) *ddbtypes.AttributeValueMemberS {
+	return &ddbtypes.AttributeValueMemberS{Value: s}
+}
+
+// setNow injects a deterministic clock (test-only). The renew/retry TIMERS still use real time — the
+// integration tests use generous real-time margins; this only makes the expiresAtMs computation testable.
+func (c *Coordinator) setNow(f Clock) { c.now = f }
+
+// acquire takes an empty/expired lock with a conditional UpdateItem, bumping `fence` (the epoch) by 1.
+func (c *Coordinator) acquire(ctx context.Context) (fence int64, acquired bool, err error) {
+	now := c.now()
+	exp := now.Add(c.lease).UnixMilli()
+	ttl := now.Add(c.lease).Add(time.Hour).Unix() // cosmetic janitor; correctness uses expiresAtMs
+	out, err := c.db.UpdateItem(ctx, &awsddb.UpdateItemInput{
+		TableName:                aws.String(c.table),
+		Key:                      map[string]ddbtypes.AttributeValue{"pk": sstr(c.pk)},
+		ConditionExpression:      aws.String("attribute_not_exists(pk) OR expiresAtMs < :now"),
+		UpdateExpression:         aws.String("SET holder = :me, expiresAtMs = :exp, #ttl = :ttl ADD fence :one"),
+		ExpressionAttributeNames: map[string]string{"#ttl": "ttl"},
+		ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
+			":now": nstr(now.UnixMilli()), ":me": sstr(c.identity),
+			":exp": nstr(exp), ":ttl": nstr(ttl), ":one": nstr(1),
+		},
+		ReturnValues: ddbtypes.ReturnValueUpdatedNew,
+	})
+	if err != nil {
+		var ccf *ddbtypes.ConditionalCheckFailedException
+		if errors.As(err, &ccf) {
+			return 0, false, nil // held by a live leader
+		}
+		return 0, false, err // transient
+	}
+	fence, err = numAttr(out.Attributes, "fence")
+	if err != nil {
+		return 0, false, err
+	}
+	return fence, true, nil
+}
+
+// renew extends the lease iff we still hold it (holder + fence match). It never bumps `fence`.
+func (c *Coordinator) renew(ctx context.Context, fence int64) (bool, error) {
+	now := c.now()
+	exp := now.Add(c.lease).UnixMilli()
+	ttl := now.Add(c.lease).Add(time.Hour).Unix()
+	_, err := c.db.UpdateItem(ctx, &awsddb.UpdateItemInput{
+		TableName:                aws.String(c.table),
+		Key:                      map[string]ddbtypes.AttributeValue{"pk": sstr(c.pk)},
+		ConditionExpression:      aws.String("holder = :me AND fence = :fence"),
+		UpdateExpression:         aws.String("SET expiresAtMs = :exp, #ttl = :ttl"),
+		ExpressionAttributeNames: map[string]string{"#ttl": "ttl"},
+		ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
+			":me": sstr(c.identity), ":fence": nstr(fence), ":exp": nstr(exp), ":ttl": nstr(ttl),
+		},
+	})
+	if err != nil {
+		var ccf *ddbtypes.ConditionalCheckFailedException
+		if errors.As(err, &ccf) {
+			return false, nil // lost: holder/fence changed
+		}
+		return false, err // transient
+	}
+	return true, nil
+}
+
+// lead runs the leadership term: spawn onElected, renew on a ticker, cancel + drain-barrier on loss.
+func (c *Coordinator) lead(ctx context.Context, fence int64, onElected func(context.Context)) {
+	leaderCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); onElected(coordinate.WithEpoch(leaderCtx, fence)) }()
+
+	ticker := time.NewTicker(c.retry)
+	defer ticker.Stop()
+	lastRenew := c.now()
+	for {
+		select {
+		case <-ctx.Done():
+			cancel()
+			<-done // [round3 HIGH-1 parity] barrier on onElected drain before returning
+			return
+		case <-done:
+			return // scheduler exited on its own
+		case <-ticker.C:
+			ok, err := c.renew(leaderCtx, fence)
+			switch {
+			case err == nil && ok:
+				lastRenew = c.now()
+			case err == nil && !ok:
+				slog.Info("dynamodb coordinator: leadership lost (lock taken)", "identity", c.identity)
+				cancel()
+				<-done
+				return
+			default: // transient error
+				if c.now().Sub(lastRenew) >= c.renewDeadline {
+					slog.Warn("dynamodb coordinator: renew deadline exceeded; stepping down", "err", err)
+					cancel()
+					<-done
+					return
+				}
+			}
+		}
+	}
+}
+
 var _ coordinate.Coordinator = (*Coordinator)(nil)

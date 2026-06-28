@@ -6,9 +6,9 @@ as the Kubernetes/Helm deployment.
 
 Built on [terraform-aws-modules](https://registry.terraform.io/namespaces/terraform-aws-modules):
 - `terraform-aws-modules/dynamodb-table/aws ~> 4.0` — lock + checkpoint table
-- `terraform-aws-modules/security-group/aws ~> 5.0` — default-deny egress security group
-- `terraform-aws-modules/ecs/aws ~> 5.0` — ECS cluster
-- `terraform-aws-modules/ecs/aws//modules/service ~> 5.0` — ECS service (2 tasks active/standby)
+- `aws_security_group` (raw resource) — default-deny egress security group
+- `terraform-aws-modules/ecs/aws ~> 7.0` — ECS cluster
+- `terraform-aws-modules/ecs/aws//modules/service ~> 7.0` — ECS service (2 tasks active/standby)
 
 One multi-arch image (`amd64` + `arm64`/Graviton) runs on both ECS and Kubernetes — no separate build.
 
@@ -17,26 +17,58 @@ One multi-arch image (`amd64` + `arm64`/Graviton) runs on both ECS and Kubernete
 ## Quick-start usage
 
 ```hcl
+locals {
+  # The module always creates the table as "${var.name}-ha".
+  # Use this local (not module.genai_otel_bridge.table_name) inside the module block itself
+  # to avoid a self-referential dependency cycle.
+  bridge_name       = "genai-otel-bridge"
+  bridge_table_name = "${local.bridge_name}-ha"
+  bridge_region     = "eu-west-1"
+}
+
 module "genai_otel_bridge" {
   source = "github.com/rknightion/genai-otel-bridge//deploy/ecs/terraform"
 
-  name       = "genai-otel-bridge"
-  region     = "eu-west-1"
+  name       = local.bridge_name
+  region     = local.bridge_region
   vpc_id     = "vpc-0abc123"
   subnet_ids = ["subnet-0aaa", "subnet-0bbb"]  # >= 2 AZs for active/standby spread
 
-  # config_yaml is the rendered app config. The ha.* block must point at the table this module creates.
-  # Use templatefile() or heredoc; secret values go in secret_arns (never inline here).
-  config_yaml = templatefile("${path.module}/config.yaml.tpl", {
-    table_name = module.genai_otel_bridge.table_name
-    region     = "eu-west-1"
-    otlp_endpoint = var.otlp_endpoint
-  })
+  # config_yaml is the rendered app config injected as GENAI_OTEL_BRIDGE_CONFIG env var.
+  # The ha.* block must point at the table this module creates (always "${name}-ha").
+  # Secret values go in secret_arns (never inline here); reference them as ${MY_API_KEY} in config.
+  # NOTE on $: ${...} is Terraform interpolation (used here to inject the table/region locals);
+  # $${...} is escaped so the LITERAL ${VAR} reaches the binary, which resolves it from the
+  # Secrets-Manager-injected env vars at load time. The structure below mirrors the chart's config:
+  # block (deploy/helm/values.yaml) — see internal/config/config.go for the full schema.
+  config_yaml = <<-EOT
+    ha:
+      coordinator: dynamodb
+      checkpoint: dynamodb
+      dynamodb:
+        table: ${local.bridge_table_name}
+        region: ${local.bridge_region}
+    emit:
+      telemetry:
+        otlp:
+          endpoint: https://your-otlp-gateway/otlp
+          instance_id: "123456"
+          token: $${GC_OTLP_TOKEN}
+    identity:
+      service_namespace: genai-otel-bridge
+      deployment_environment: prod
+    sources:
+      - type: portkey
+        enabled: true
+        base_url: https://api.portkey.ai/v1
+        auth:
+          value: $${PORTKEY_API_KEY}
+  EOT
 
-  # Secrets Manager ARNs — injected as env vars; reference them in config_yaml as ${MY_API_KEY}.
+  # Secrets Manager ARNs — injected as env vars; reference them in config_yaml as $${MY_ENV_NAME}.
   secret_arns = {
-    PORTKEY_API_KEY   = aws_secretsmanager_secret.portkey.arn
-    LANGSMITH_API_KEY = aws_secretsmanager_secret.langsmith.arn
+    GC_OTLP_TOKEN   = aws_secretsmanager_secret.gc_token.arn
+    PORTKEY_API_KEY = aws_secretsmanager_secret.portkey.arn
   }
 
   tags = { env = "prod", team = "platform" }
@@ -109,7 +141,7 @@ needed). Override `var.image` to point at:
 launch_type = "EC2"
 ```
 
-**Fargate stopTimeout note:** The module sets `stopTimeout = 120` s (Fargate's maximum). This gives
+**Fargate stopTimeout note:** The module sets `stopTimeout = 120` s (camelCase, as required by the container-definition schema). This gives
 the active leader up to 120 s after SIGTERM to finish the in-flight emit and write the final
 checkpoint before SIGKILL. The DynamoDB lock is deliberately NOT released on shutdown (it expires
 naturally, matching the Kubernetes coordinator's `ReleaseOnCancel=false` behaviour). The standby task

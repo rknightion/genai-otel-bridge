@@ -30,5 +30,5 @@ output "service_id" {
 
 output "security_group_id" {
   description = "ID of the egress-only security group attached to the ECS tasks."
-  value       = module.sg.security_group_id
+  value       = aws_security_group.this.id
 }

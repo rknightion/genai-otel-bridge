@@ -4,10 +4,11 @@
 # task + execution IAM roles (least-privilege), and a default-deny egress security group.
 #
 # Uses terraform-aws-modules where they add value:
-#   dynamodb-table ~> 4.0  (on-demand, PITR, SSE, TTL) — requires AWS provider >= 5.98 (→ v6.x)
-#   security-group ~> 5.0  (egress allow-list, default-deny ingress)
+#   dynamodb-table ~> 4.0  (on-demand, PITR, SSE, no TTL) — requires AWS provider >= 5.98 (→ v6.x)
 #   ecs/aws        ~> 7.0  (cluster module — v7 requires AWS provider >= 6.34, compatible with v6.x)
 #   ecs/aws//modules/service ~> 7.0  (service submodule — v7 is still a two-module composition)
+# Security group uses a raw aws_security_group resource with inline egress blocks (not the sg module)
+# to ensure Terraform removes the AWS implicit allow-all egress and achieves true default-deny.
 #
 # Note: ECS module v5 (plan L-5) is incompatible with AWS provider v6 (which dynamodb-table ~> 4.0
 # requires). We use ECS v7 which targets AWS provider v6. All service variable names are identical.
@@ -22,10 +23,16 @@ provider "aws" {
 
 # ── DynamoDB table (lock + checkpoint) ───────────────────────────────────────────────────────────
 #
-# Single table, pk (String) hash key only, on-demand billing, PITR on, SSE, TTL.
+# Single table, pk (String) hash key only, on-demand billing, PITR on, SSE, no TTL.
 # Verified input names: name, hash_key, billing_mode, attributes, ttl_enabled,
 # ttl_attribute_name, point_in_time_recovery_enabled, server_side_encryption_enabled,
 # server_side_encryption_kms_key_arn, tags (all from terraform-aws-modules/dynamodb-table/aws master).
+#
+# TTL is deliberately DISABLED. The lock item must never be auto-deleted: TTL deletion would reset
+# the leader fence below the durable checkpoint epoch after a long outage, leaving the coordinator
+# permanently stuck. The lock is never auto-expired — it is renewed while the leader is alive and
+# acquired by the standby when the lease expires naturally (parity with the Kubernetes Lease model).
+# Checkpoint items carry no TTL attribute and are the durable state of record.
 
 module "table" {
   source  = "terraform-aws-modules/dynamodb-table/aws"
@@ -39,8 +46,7 @@ module "table" {
     { name = "pk", type = "S" }
   ]
 
-  ttl_enabled        = true
-  ttl_attribute_name = "ttl"
+  ttl_enabled = false
 
   point_in_time_recovery_enabled = true
 
@@ -55,8 +61,10 @@ module "table" {
 # The task role is what the application process uses. Grants:
 #   - DynamoDB: GetItem + PutItem + UpdateItem on the single HA table (lock + checkpoint).
 #     DeleteItem is intentionally excluded — the coordinator never deletes the lock item
-#     (it expires via TTL; see §3.3 of the design spec — no-release-needed shutdown model).
+#     (it expires naturally — §3.3 of the design spec — no-release-needed shutdown model).
 #   - SecretsManager: GetSecretValue on the caller-supplied secret ARNs (one per API key).
+#   - KMS: Decrypt + GenerateDataKey on the caller-supplied CMK (only when kms_key_arn != null).
+#     Required when DynamoDB SSE uses a customer-managed key; omitted for the AWS-owned default key.
 # The execution role (ECS agent role) is managed by the service module (create_task_exec_iam_role).
 
 data "aws_iam_policy_document" "task" {
@@ -80,6 +88,19 @@ data "aws_iam_policy_document" "task" {
       resources = values(var.secret_arns)
     }
   }
+
+  dynamic "statement" {
+    for_each = var.kms_key_arn != null ? [1] : []
+    content {
+      sid    = "KMSDecrypt"
+      effect = "Allow"
+      actions = [
+        "kms:Decrypt",
+        "kms:GenerateDataKey",
+      ]
+      resources = [var.kms_key_arn]
+    }
+  }
 }
 
 # ── Security group — default-deny ingress, egress allow-list ─────────────────────────────────────
@@ -91,50 +112,52 @@ data "aws_iam_policy_document" "task" {
 # to those services) and a NAT gateway for vendor API egress. The broad 0.0.0.0/0 rules here are
 # a conservative default that works in every VPC topology.
 #
-# Ingress: the module creates no ingress rules (default-deny). The container serves health on
-# 127.0.0.1 only (ECS container health check is in-task); no inbound from the VPC is needed.
+# Ingress: no ingress blocks — default-deny. The health check is in-task (container healthCheck CMD);
+# no inbound from the VPC is needed.
 #
-# Verified input names for terraform-aws-modules/security-group/aws v5.x:
-#   name, vpc_id, egress_with_cidr_blocks (list(map(string))), tags.
-# Note: v6 (released 2026-06-03) renamed these to egress_rules — pin ~> 5.0 to keep v4/v5 API.
+# Why raw aws_security_group (not terraform-aws-modules/security-group/aws):
+#   The terraform-aws-modules/security-group/aws ~> 5.0 module manages rules via separate
+#   aws_security_group_rule resources and does NOT set the inline egress block, so AWS's implicit
+#   "allow all egress" rule (0.0.0.0/0 -1) is left in place. True default-deny egress requires
+#   inline egress {} blocks on the aws_security_group resource itself — Terraform removes the
+#   implicit AWS allow-all only when it owns the inline rules. A raw resource with explicit inline
+#   egress blocks is the correct approach; the module cannot achieve this.
 
-module "sg" {
-  source  = "terraform-aws-modules/security-group/aws"
-  version = "~> 5.0"
-
+resource "aws_security_group" "this" {
   name        = "${var.name}-egress"
   description = "genai-otel-bridge ECS task: default-deny ingress, egress allow-list (DNS + HTTPS)"
   vpc_id      = var.vpc_id
 
-  # No ingress rules — the health check is in-task (container healthCheck CMD); no VPC inbound needed.
-  ingress_with_cidr_blocks = []
+  # Egress allow-list mirroring the Helm NetworkPolicy.
+  # Inline blocks here cause Terraform to own the egress rules, removing AWS's implicit allow-all.
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS: OTLP endpoint + vendor APIs (Portkey/LangSmith) + DynamoDB public endpoint"
+  }
 
-  # Egress allow-list mirroring the Helm NetworkPolicy:
-  egress_with_cidr_blocks = [
-    {
-      from_port   = 443
-      to_port     = 443
-      protocol    = "tcp"
-      cidr_blocks = "0.0.0.0/0"
-      description = "HTTPS: OTLP endpoint + vendor APIs (Portkey/LangSmith) + DynamoDB public endpoint"
-    },
-    {
-      from_port   = 53
-      to_port     = 53
-      protocol    = "udp"
-      cidr_blocks = "0.0.0.0/0"
-      description = "DNS UDP"
-    },
-    {
-      from_port   = 53
-      to_port     = 53
-      protocol    = "tcp"
-      cidr_blocks = "0.0.0.0/0"
-      description = "DNS TCP (fallback for large responses)"
-    },
-  ]
+  egress {
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "DNS UDP"
+  }
 
-  tags = var.tags
+  egress {
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "DNS TCP (fallback for large responses)"
+  }
+
+  # No ingress blocks — default-deny ingress. The container health check is in-task;
+  # no inbound from the VPC is needed.
+
+  tags = merge(var.tags, { Name = "${var.name}-egress" })
 }
 
 # ── ECS cluster ───────────────────────────────────────────────────────────────────────────────────
@@ -167,8 +190,9 @@ module "cluster" {
 #     http://127.0.0.1:<health-port>/healthz and exits 0 (healthy) or 1 (unhealthy).
 #   - enable_autoscaling=false: this is a fixed-size active/standby poller, not a capacity-scaled
 #     service. Autoscaling would add tasks beyond the 2-task active/standby model for no benefit.
-#   - create_tasks_iam_role=false: we supply tasks_iam_role_statements directly so the module
-#     creates the role from our least-privilege policy document (avoids a separate aws_iam_role).
+#   - tasks_iam_role_statements: the module creates the task IAM role (create_tasks_iam_role=true,
+#     the module default) and injects our least-privilege policy document into the module-managed
+#     role. This avoids a separate aws_iam_role resource.
 #
 # Verified input names (from v7.5.0/modules/service/variables.tf, 2026-06-28):
 #   name, cluster_arn, desired_count, launch_type, cpu, memory, container_definitions,
@@ -176,9 +200,10 @@ module "cluster" {
 #   enable_autoscaling, deployment_minimum_healthy_percent, deployment_maximum_percent,
 #   capacity_provider_strategy, tags.
 #
-# Container definition fields verified: image, cpu, memory, essential, environment (list of
-#   {name, value}), secrets (list of {name, valueFrom}), stop_timeout, healthCheck (object with
-#   command, interval, retries, startPeriod, timeout), readonlyRootFilesystem, user.
+# Container definition fields verified (all camelCase per sub-module schema): image, cpu, memory,
+#   essential, environment (list of {name, value}), secrets (list of {name, valueFrom}),
+#   stopTimeout, healthCheck (object with command, interval, retries, startPeriod, timeout),
+#   readonlyRootFilesystem, user.
 
 locals {
   # MEM_LIMIT in bytes = var.memory MiB. Feeds the GOMEMLIMIT env var via the existing 80%-of-limit
@@ -225,7 +250,7 @@ module "service" {
   # awsvpc is required for Fargate and best-practice for EC2 (one ENI per task, SG per task).
   network_mode       = "awsvpc"
   subnet_ids         = var.subnet_ids
-  security_group_ids = [module.sg.security_group_id]
+  security_group_ids = [aws_security_group.this.id]
 
   # Rolling update bounds: always keep at least 1 task running (the standby) so there is never a
   # complete outage during a deployment. maximum_percent=200 allows a surge to 4 tasks briefly.
@@ -235,8 +260,9 @@ module "service" {
   # Autoscaling is disabled — this is a fixed active/standby pair, not a capacity-scaled service.
   enable_autoscaling = false
 
-  # Task IAM role — least-privilege statements (verified: tasks_iam_role_statements takes a list
-  # of policy statement objects; the module creates the role + inline policy from them).
+  # Task IAM role — the module creates the role by default (create_tasks_iam_role=true, the
+  # module default). tasks_iam_role_statements injects our least-privilege policy document into
+  # the module-managed role (verified: the variable accepts a list of policy statement objects).
   tasks_iam_role_statements = jsondecode(data.aws_iam_policy_document.task.json)["Statement"]
 
   container_definitions = {
@@ -246,9 +272,15 @@ module "service" {
       memory    = var.memory
       essential = true
 
-      # MEM_LIMIT: injected as a plain env var (value known at plan time from var.memory).
-      # The binary reads this at startup to set GOMEMLIMIT = 80% of the limit.
+      # Environment variables injected at plan time (static values).
+      # GENAI_OTEL_BRIDGE_CONFIG: the full YAML config (non-secret structure; secret values arrive
+      #   via the Secrets Manager `secrets` injection below as ${ENV_VAR_NAME} placeholders).
+      # MEM_LIMIT: feeds GOMEMLIMIT = 80% of the limit (mirrors the Helm downward-API mechanism).
       environment = [
+        {
+          name  = "GENAI_OTEL_BRIDGE_CONFIG"
+          value = var.config_yaml
+        },
         {
           name  = "MEM_LIMIT"
           value = tostring(local.mem_limit_bytes)
@@ -263,7 +295,8 @@ module "service" {
       # complete the in-flight emit + final checkpoint Save before SIGKILL. The DynamoDB lock is
       # NOT released on shutdown (no-release model — §5 design spec); the lock expires naturally
       # and the standby acquires within ~lease_duration. On EC2 there is no 120 s cap.
-      stop_timeout = 120
+      # Key is camelCase (stopTimeout) as required by the container-definition sub-module schema.
+      stopTimeout = 120
 
       # Container health check — distroless has no shell; use the binary's own -healthcheck mode.
       # The binary GETs http://127.0.0.1:8080/healthz and exits 0 (healthy) or 1 (unhealthy).

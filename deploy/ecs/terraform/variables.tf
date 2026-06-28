@@ -80,17 +80,32 @@ variable "kms_key_arn" {
 
 variable "config_yaml" {
   description = <<-EOT
-    The rendered genai-otel-bridge YAML config. Must set:
-      ha:
-        coordinator: dynamodb
-        checkpoint: dynamodb
-        dynamodb:
-          table: <var.name>-ha   # the table this module creates
-          region: <your AWS region>   # match the caller's aws provider region
-    All other config keys follow the schema in internal/config/config.go.
-    Secrets should be referenced as $${ENV_VAR_NAME} (resolved from the injected Secrets Manager secrets).
+    The rendered genai-otel-bridge YAML config injected as GENAI_OTEL_BRIDGE_CONFIG.
+
+    Leave null (the default) to CONSUME the module's bundled, schema-generated config.example.yaml —
+    the same file `make generate` produces from internal/config/config.go (drift-gated in CI), with
+    ha.dynamodb.table auto-rewritten to "<var.name>-ha" to match the table this module creates. That
+    default runs one Portkey source (analytics loop) with DynamoDB-backed HA; $${ENV} resolves from
+    var.deployment_environment and the Grafana Cloud / Portkey secrets come from var.secret_arns.
+
+    Override it ONLY to run a different config (e.g. extra sources/loops). When you do, set:
+      ha: { coordinator: dynamodb, checkpoint: dynamodb, dynamodb: { table: <var.name>-ha } }
+    All other keys follow the schema in internal/config/config.go; reference secrets as $${ENV_VAR_NAME}.
   EOT
   type        = string
+  default     = null
+}
+
+variable "deployment_environment" {
+  description = "Value injected as the ENV container env var, resolving the $${ENV} ref in the config (identity.deployment_environment and source_instance). Used by the bundled default config; harmless if your config_yaml has no such ref."
+  type        = string
+  default     = "ecs"
+}
+
+variable "aws_region" {
+  description = "AWS region injected as the AWS_REGION container env var so the DynamoDB SDK client resolves the region deterministically (the bundled default config omits ha.dynamodb.region and relies on AWS_REGION). Leave null to rely on the task's ambient region resolution (Fargate metadata)."
+  type        = string
+  default     = null
 }
 
 variable "tags" {

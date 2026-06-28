@@ -207,6 +207,17 @@ module "cluster" {
 #   readonlyRootFilesystem, user.
 
 locals {
+  # Effective config: the caller's config_yaml, or — when null — the module's bundled, schema-generated
+  # config.example.yaml (the SAME file `make generate` produces, drift-gated in CI). The generated file
+  # carries the generic table name "genai-otel-bridge-ha" (it's name-agnostic); rewrite it to the table
+  # THIS module actually creates ("<var.name>-ha"). The token is unique to the table line (lock_name is
+  # "…-leader", service_namespace is "genai-otel-bridge" with no "-ha"), so the replace is unambiguous.
+  effective_config = var.config_yaml != null ? var.config_yaml : replace(
+    file("${path.module}/config.example.yaml"),
+    "table: genai-otel-bridge-ha",
+    "table: ${var.name}-ha",
+  )
+
   # MEM_LIMIT in bytes = var.memory MiB. Feeds the GOMEMLIMIT env var via the existing 80%-of-limit
   # logic in the binary (same mechanism as the Helm downward-API resourceFieldRef: limits.memory).
   mem_limit_bytes = var.memory * 1024 * 1024
@@ -278,16 +289,26 @@ module "service" {
       # GENAI_OTEL_BRIDGE_CONFIG: the full YAML config (non-secret structure; secret values arrive
       #   via the Secrets Manager `secrets` injection below as ${ENV_VAR_NAME} placeholders).
       # MEM_LIMIT: feeds GOMEMLIMIT = 80% of the limit (mirrors the Helm downward-API mechanism).
-      environment = [
+      # ENV: resolves ${ENV} in the config (identity.deployment_environment, source_instance).
+      # AWS_REGION (only when var.aws_region is set): lets the DynamoDB SDK resolve the region when the
+      #   config omits ha.dynamodb.region (the bundled default does).
+      environment = concat([
         {
           name  = "GENAI_OTEL_BRIDGE_CONFIG"
-          value = var.config_yaml
+          value = local.effective_config
         },
         {
           name  = "MEM_LIMIT"
           value = tostring(local.mem_limit_bytes)
         },
-      ]
+        {
+          name  = "ENV"
+          value = var.deployment_environment
+        },
+        ], var.aws_region != null ? [{
+          name  = "AWS_REGION"
+          value = var.aws_region
+      }] : [])
 
       # Secrets from Secrets Manager — injected as env vars via the ECS secrets mechanism.
       # Never appear in plaintext in the task definition or CloudWatch logs.

@@ -32,3 +32,8 @@ output "security_group_id" {
   description = "ID of the egress-only security group attached to the ECS tasks."
   value       = aws_security_group.this.id
 }
+
+output "effective_config_yaml" {
+  description = "The config actually injected as GENAI_OTEL_BRIDGE_CONFIG — either var.config_yaml or the bundled generated config.example.yaml with the table rewritten to <name>-ha. Contains $${ENV}-style placeholders, no secret values. Useful to verify what the tasks run."
+  value       = local.effective_config
+}

@@ -90,19 +90,21 @@ func sstr(s string) *ddbtypes.AttributeValueMemberS {
 func (c *Coordinator) setNow(f Clock) { c.now = f }
 
 // acquire takes an empty/expired lock with a conditional UpdateItem, bumping `fence` (the epoch) by 1.
+// The lock item is intentionally NOT given a DynamoDB TTL: auto-deletion of the lock would reset `fence`
+// to 1 on the next acquire, below a surviving checkpoint's epoch, permanently fencing all writes after a
+// long full outage. Expiry is by the `expiresAtMs` comparison only; the item persists (parity with the
+// K8s Lease, which is never auto-deleted either).
 func (c *Coordinator) acquire(ctx context.Context) (fence int64, acquired bool, err error) {
 	now := c.now()
 	exp := now.Add(c.lease).UnixMilli()
-	ttl := now.Add(c.lease).Add(time.Hour).Unix() // cosmetic janitor; correctness uses expiresAtMs
 	out, err := c.db.UpdateItem(ctx, &awsddb.UpdateItemInput{
-		TableName:                aws.String(c.table),
-		Key:                      map[string]ddbtypes.AttributeValue{"pk": sstr(c.pk)},
-		ConditionExpression:      aws.String("attribute_not_exists(pk) OR expiresAtMs < :now"),
-		UpdateExpression:         aws.String("SET holder = :me, expiresAtMs = :exp, #ttl = :ttl ADD fence :one"),
-		ExpressionAttributeNames: map[string]string{"#ttl": "ttl"},
+		TableName:           aws.String(c.table),
+		Key:                 map[string]ddbtypes.AttributeValue{"pk": sstr(c.pk)},
+		ConditionExpression: aws.String("attribute_not_exists(pk) OR expiresAtMs < :now"),
+		UpdateExpression:    aws.String("SET holder = :me, expiresAtMs = :exp ADD fence :one"),
 		ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
 			":now": nstr(now.UnixMilli()), ":me": sstr(c.identity),
-			":exp": nstr(exp), ":ttl": nstr(ttl), ":one": nstr(1),
+			":exp": nstr(exp), ":one": nstr(1),
 		},
 		ReturnValues: ddbtypes.ReturnValueUpdatedNew,
 	})
@@ -124,15 +126,13 @@ func (c *Coordinator) acquire(ctx context.Context) (fence int64, acquired bool, 
 func (c *Coordinator) renew(ctx context.Context, fence int64) (bool, error) {
 	now := c.now()
 	exp := now.Add(c.lease).UnixMilli()
-	ttl := now.Add(c.lease).Add(time.Hour).Unix()
 	_, err := c.db.UpdateItem(ctx, &awsddb.UpdateItemInput{
-		TableName:                aws.String(c.table),
-		Key:                      map[string]ddbtypes.AttributeValue{"pk": sstr(c.pk)},
-		ConditionExpression:      aws.String("holder = :me AND fence = :fence"),
-		UpdateExpression:         aws.String("SET expiresAtMs = :exp, #ttl = :ttl"),
-		ExpressionAttributeNames: map[string]string{"#ttl": "ttl"},
+		TableName:           aws.String(c.table),
+		Key:                 map[string]ddbtypes.AttributeValue{"pk": sstr(c.pk)},
+		ConditionExpression: aws.String("holder = :me AND fence = :fence"),
+		UpdateExpression:    aws.String("SET expiresAtMs = :exp"),
 		ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
-			":me": sstr(c.identity), ":fence": nstr(fence), ":exp": nstr(exp), ":ttl": nstr(ttl),
+			":me": sstr(c.identity), ":fence": nstr(fence), ":exp": nstr(exp),
 		},
 	})
 	if err != nil {

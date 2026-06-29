@@ -55,9 +55,12 @@ module "table" {
   tags = var.tags
 }
 
-# ── IAM — task role (least-privilege) ────────────────────────────────────────────────────────────
+# ── IAM — task role policy statements (least-privilege) ──────────────────────────────────────────
 #
-# The task role is what the application process uses. Grants:
+# The task role is what the application process uses. We build the policy as a native HCL list of
+# statement objects — the exact schema the service module's `tasks_iam_role_statements` expects
+# (lowercase sid/effect/actions/resources, the rest optional) — and inject it into the module-managed
+# role. Grants:
 #   - DynamoDB: GetItem + PutItem + UpdateItem on the single HA table (lock + checkpoint).
 #     DeleteItem is intentionally excluded — the coordinator never deletes the lock item
 #     (it expires naturally — §3.3 of the design spec — no-release-needed shutdown model).
@@ -65,41 +68,43 @@ module "table" {
 #   - KMS: Decrypt + GenerateDataKey on the caller-supplied CMK (only when kms_key_arn != null).
 #     Required when DynamoDB SSE uses a customer-managed key; omitted for the AWS-owned default key.
 # The execution role (ECS agent role) is managed by the service module (create_task_exec_iam_role).
+#
+# Built as a literal list — NOT via jsondecode(aws_iam_policy_document.json) — on purpose. The DynamoDB
+# table ARN (and the Secrets Manager ARNs) are created in this SAME apply, so a policy-document data
+# source that references them is deferred to apply: its `.json` is unknown at plan, and a jsondecode of
+# an unknown string yields a wholly-unknown value. That unknown propagates into the service module's
+# `count = local.create_tasks_iam_role && (var.tasks_iam_role_statements != null ...) ? 1 : 0`, which
+# OpenTofu rejects ("count ... cannot be determined until apply"). A literal list keeps the list itself
+# known at plan (known length, non-null) — only the nested resource ARNs stay unknown, which is fine —
+# so the module's count resolves and the deploy converges in a single apply.
 
-data "aws_iam_policy_document" "task" {
-  statement {
-    sid    = "DynamoHA"
-    effect = "Allow"
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
-    ]
-    resources = [module.table.dynamodb_table_arn]
-  }
-
-  dynamic "statement" {
-    for_each = length(var.secret_arns) > 0 ? [1] : []
-    content {
-      sid       = "SecretsRead"
-      effect    = "Allow"
-      actions   = ["secretsmanager:GetSecretValue"]
-      resources = values(var.secret_arns)
-    }
-  }
-
-  dynamic "statement" {
-    for_each = var.kms_key_arn != null ? [1] : []
-    content {
-      sid    = "KMSDecrypt"
-      effect = "Allow"
-      actions = [
-        "kms:Decrypt",
-        "kms:GenerateDataKey",
-      ]
-      resources = [var.kms_key_arn]
-    }
-  }
+locals {
+  task_iam_statements = concat(
+    [
+      {
+        sid       = "DynamoHA"
+        effect    = "Allow"
+        actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+        resources = [module.table.dynamodb_table_arn]
+      },
+    ],
+    length(var.secret_arns) > 0 ? [
+      {
+        sid       = "SecretsRead"
+        effect    = "Allow"
+        actions   = ["secretsmanager:GetSecretValue"]
+        resources = values(var.secret_arns)
+      },
+    ] : [],
+    var.kms_key_arn != null ? [
+      {
+        sid       = "KMSDecrypt"
+        effect    = "Allow"
+        actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        resources = [var.kms_key_arn]
+      },
+    ] : [],
+  )
 }
 
 # ── Security group — default-deny ingress, egress allow-list ─────────────────────────────────────
@@ -276,7 +281,7 @@ module "service" {
   # Task IAM role — the module creates the role by default (create_tasks_iam_role=true, the
   # module default). tasks_iam_role_statements injects our least-privilege policy document into
   # the module-managed role (verified: the variable accepts a list of policy statement objects).
-  tasks_iam_role_statements = jsondecode(data.aws_iam_policy_document.task.json)["Statement"]
+  tasks_iam_role_statements = local.task_iam_statements
 
   container_definitions = {
     (var.name) = {

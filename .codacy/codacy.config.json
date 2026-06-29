@@ -6008,6 +6008,8 @@
   "exclude": [
     "**/*_test.go",
     "docs/**",
-    "test/**"
+    "test/**",
+    "vendor/**",
+    "**/generated/**"
   ]
 }

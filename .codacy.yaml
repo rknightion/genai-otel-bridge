@@ -7,7 +7,15 @@
 # test/** + *_test.go — Go test/e2e harness: deliberately exercises cleartext HTTP,
 #                  exec.Command and http:// URLs, so SAST flags there are false positives.
 #                  Production Go retains full security-pattern coverage.
+# vendor/**      — vendored third-party dependencies (not first-party code). None today;
+#                  listed to match the rknightion exclude convention and future-proof `go mod vendor`.
+# **/generated/** — any generated-output directories. Generated Go artifacts today are
+#                  *_generated_test.go files, already covered by the **/*_test.go rule above;
+#                  this catches any future generated/ output trees. NB the internal/**/gen/
+#                  packages are hand-written code generators (real source) — intentionally NOT excluded.
 exclude_paths:
   - "docs/**"
   - "test/**"
   - "**/*_test.go"
+  - "vendor/**"
+  - "**/generated/**"

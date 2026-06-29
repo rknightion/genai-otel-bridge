@@ -42,7 +42,10 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     uses: ./.github/workflows/publish.yml
     permissions:
-      contents: write   # publish.yml attaches SBOMs + third-party notices to the GitHub Release
+      contents: write        # attach SBOMs + third-party notices + chart to the GitHub Release
       packages: write
+      id-token: write         # cosign keyless signing + provenance attestation
+      attestations: write
+      security-events: write  # Trivy SARIF upload
     with:
       release_tag: ${{ needs.release-please.outputs.tag_name }}

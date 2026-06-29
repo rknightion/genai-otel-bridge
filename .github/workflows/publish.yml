@@ -1,9 +1,8 @@
-# Reusable publish: build the multi-arch image + Helm chart for a given release tag and push to GHCR.
-#   image: ghcr.io/<owner>/genai-otel-bridge:<vX.Y.Z> + :latest
-#   chart: oci://ghcr.io/<owner>/charts/genai-otel-bridge  (version X.Y.Z)
-# Called by release-please.yml when a release is created (the tag-push event can't drive this — tags
-# created with GITHUB_TOKEN do not trigger workflows). Also dispatchable by hand for a re-publish.
-# Auth uses the workflow's GITHUB_TOKEN (packages: write). Packages inherit the repo's visibility.
+# Publish the multi-arch image + Helm chart to GHCR via the shared rknightion
+# container-publish reusable (native amd64+arm64 matrix, cosign signing, provenance,
+# syft SPDX+CycloneDX SBOM, Trivy, OCI Helm chart publish). Called by release-please.yml
+# when a release is created (release_tag set). Also workflow_dispatch-able: leave
+# release_tag empty for an edge (:main) test build, or set it to re-publish a tag.
 name: publish
 
 on:
@@ -11,60 +10,59 @@ on:
     inputs:
       release_tag:
         description: "Release tag to publish, e.g. v1.2.3"
-        required: true
+        required: false
         type: string
+        default: ""
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to publish, e.g. v1.2.3"
-        required: true
+        description: "Release tag (vX.Y.Z) to publish; empty = edge (:main) test build"
+        required: false
         type: string
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  image:
     permissions:
-      contents: write   # `gh release upload` attaches the SBOMs + third-party notices to the release
+      contents: write        # SBOMs + chart attached to the release (when release_tag set)
       packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+    uses: rknightion/.github/.github/workflows/container-publish.yml@main
+    with:
+      release-tag: ${{ inputs.release_tag }}
+      helm-chart-path: deploy/helm
+
+  # go-licenses third-party notices (Go-specific; migrates to the shared binaries
+  # reusable later). Releases only.
+  notices:
+    if: inputs.release_tag != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
-          ref: ${{ inputs.release_tag }}   # build exactly the tagged commit
+          egress-policy: audit
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.release_tag }}
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: false
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      - name: Log in to GHCR
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-      - name: Publish image + chart
-        run: HELM=helm bash scripts/publish.sh
-        env:
-          REGISTRY: ghcr.io/${{ github.repository_owner }}
-          IMAGE_REPO: genai-otel-bridge
-          CHART_REPO: charts
-          REGISTRY_USER: ${{ github.actor }}
-          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          GIT_SHA: ${{ github.sha }}
-          SETUP_BUILDX: "0"   # buildx already configured by docker/setup-buildx-action
-      # Attach the third-party notices + SBOMs (SPDX 2.3 + CycloneDX 1.6, both JSON) to the
-      # GitHub Release. These are release artifacts (regenerated per build), not committed files.
-      - name: Attach SBOMs + third-party notices to the release
+      - name: Generate + attach third-party notices
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          make notices sbom
-          gh release upload "${{ inputs.release_tag }}" \
-            THIRD_PARTY_NOTICES.md \
-            dist/sbom/genai-otel-bridge.spdx.json \
-            dist/sbom/genai-otel-bridge.cdx.json \
-            --clobber
+          make notices
+          gh release upload "${RELEASE_TAG}" THIRD_PARTY_NOTICES.md --clobber

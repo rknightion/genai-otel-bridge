@@ -13,7 +13,7 @@
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
   "labels": ["dependencies"],
-  "description": "chore(deps) keeps dep bumps out of the release CHANGELOG (release-please hides chore); see CLAUDE.md release ritual. No schedule — PRs open as soon as a release clears minimumReleaseAge; non-major bumps automerge once CI is green. The repo is public, so GitHub-native auto-merge (platformAutomerge) gates on the `ci-success` required status check set by main's branch protection (enforce_admins=false, so admin direct-to-main pushes bypass it; the Renovate bot does not); majors still open a PR for manual merge.",
+  "description": "chore(deps) keeps dep bumps out of the release CHANGELOG (release-please hides chore); see CLAUDE.md release ritual. No schedule — PRs open as soon as a release clears minimumReleaseAge; all bumps (including majors) automerge once CI is green. The repo is public, so GitHub-native auto-merge (platformAutomerge) gates on the `ci-success` required status check set by main's branch protection (enforce_admins=false, so admin direct-to-main pushes bypass it; the Renovate bot does not). Strong CI/test coverage makes the green pipeline a sufficient guard for major bumps too.",
   "automerge": true,
   "platformAutomerge": true,
   "automergeStrategy": "squash",
@@ -32,11 +32,6 @@
     "schedule": ["at any time"]
   },
   "packageRules": [
-    {
-      "description": "Major bumps can carry behavioural breaks the test suite won't catch (k8s libs, action majors) — open a PR but require a manual merge. Everything else automerges on green CI.",
-      "matchUpdateTypes": ["major"],
-      "automerge": false
-    },
     {
       "description": "Batch all non-major Go module bumps into one PR — most are transitive churn not worth a PR each.",
       "matchManagers": ["gomod"],

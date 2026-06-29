@@ -33,6 +33,8 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          # PAT (not GITHUB_TOKEN): bot-authored release PRs need a non-default-token author for CI to run without manual approval
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
   # Build + push the image and chart for the freshly-created tag. Same run as the merge that created it.
   publish:

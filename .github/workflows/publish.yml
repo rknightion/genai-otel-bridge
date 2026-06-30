@@ -1,11 +1,15 @@
 # Publish the multi-arch image + Helm chart to GHCR via the shared rknightion
 # container-publish reusable (native amd64+arm64 matrix, cosign signing, provenance,
-# syft SPDX+CycloneDX SBOM, Trivy, OCI Helm chart publish). Called by release-please.yml
-# when a release is created (release_tag set). Also workflow_dispatch-able: leave
-# release_tag empty for an edge (:main) test build, or set it to re-publish a tag.
+# syft SPDX+CycloneDX SBOM, Trivy, OCI Helm chart publish). Triggers: push to main
+# publishes the edge :main image + main-snapshot chart (release_tag empty); called by
+# release-please.yml when a release is created (release_tag set); also
+# workflow_dispatch-able: leave release_tag empty for an edge (:main) test build, or
+# set it to re-publish a tag.
 name: publish
 
 on:
+  push:
+    branches: [main]
   workflow_call:
     inputs:
       release_tag:

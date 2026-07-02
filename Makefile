@@ -1,4 +1,11 @@
 GO ?= go
+# Force module mode for ALL go tooling (build/test/vet/lint/generate). A local, gitignored `vendor/`
+# dir would otherwise flip Go into -mod=vendor, which goes stale on every dependency bump (the
+# "inconsistent vendoring" error) and diverges from CI — CI has no vendor/ tree so it runs module mode.
+# Pinning -mod=readonly makes `make gate` behave EXACTLY like CI and ignore any stale local vendor/.
+# Override via env (e.g. GOFLAGS=-mod=mod) if you ever need to.
+GOFLAGS ?= -mod=readonly
+export GOFLAGS
 LDFLAGS := -X github.com/rknightion/genai-otel-bridge/internal/version.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # ── pinned tool versions (override via env; majors are load-bearing) ──────────
@@ -36,8 +43,12 @@ coverage:
 	$(GO) test -covermode=atomic -coverprofile=coverage.out ./...
 vet:
 	$(GO) vet ./...
+## lint mirrors CI's two lint legs (ci.yml runs `make ci-lint ci-lint-acceptance`): the plain build AND
+## the acceptance-tagged build, so `make gate` catches exactly what CI does — including issues that only
+## surface in acceptance-tagged files (and vice-versa).
 lint: tools
 	$(TOOLS_DIR)/golangci-lint run
+	$(TOOLS_DIR)/golangci-lint run --build-tags acceptance
 gate: vet test lint forbidden-words spdx-check tf-validate
 	$(GO) build ./...
 

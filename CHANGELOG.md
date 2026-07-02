@@ -1,6 +1,48 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [3.1.0](https://github.com/rknightion/genai-otel-bridge/compare/v3.0.1...v3.1.0) (2026-07-02)
+
+
+### Features
+
+* AWS ECS deployment target (DynamoDB-backed HA) ([#13](https://github.com/rknightion/genai-otel-bridge/issues/13)) ([f6f0d61](https://github.com/rknightion/genai-otel-bridge/commit/f6f0d61df6e3179ae6f7ea88e77fa9cb4538c4fc))
+* generate drift-guarded telemetry catalogue into docs/telemetry.md ([cfd4ad4](https://github.com/rknightion/genai-otel-bridge/commit/cfd4ad46ab3f3843a8e94673295bb09c8ea553b5))
+* third-party license notices + SBOMs as release artifacts ([f8cf300](https://github.com/rknightion/genai-otel-bridge/commit/f8cf300a3d47e7a1fe862fbb2cf3c7170b37fcb3))
+
+
+### Bug Fixes
+
+* **deps:** update go modules (non-major) ([#22](https://github.com/rknightion/genai-otel-bridge/issues/22)) ([dd2f4b4](https://github.com/rknightion/genai-otel-bridge/commit/dd2f4b455cf0b315203c9eb47e42fbdc796ff62a))
+* **deps:** update kubernetes libraries ([#6](https://github.com/rknightion/genai-otel-bridge/issues/6)) ([71166a3](https://github.com/rknightion/genai-otel-bridge/commit/71166a34d4e8c9cfab655048056a0b19d8020670))
+* **ecs:** build task IAM policy as a literal list, not jsondecode of a deferred data source ([60243f2](https://github.com/rknightion/genai-otel-bridge/commit/60243f26f1074ef567c8045de2430d5f70fbea0e))
+
+
+### Documentation
+
+* fix config-accuracy errors found in final review ([62ac033](https://github.com/rknightion/genai-otel-bridge/commit/62ac03333c0e9ff8860f6b626253b86ff13fe465))
+* scaffold zensical site + dispatch workflow for m7kni.io hub ([2736648](https://github.com/rknightion/genai-otel-bridge/commit/2736648ebe67a628cf8b969964c0f307b67b1633))
+* write full user-documentation page set ([79c83a9](https://github.com/rknightion/genai-otel-bridge/commit/79c83a9e01d61c6014e752c786dea3d652f76416))
+
+
+### Build & CI
+
+* add hadolint + trivy Docker security scans ([2c8dc84](https://github.com/rknightion/genai-otel-bridge/commit/2c8dc840536ecf13c64a44b18a4a249498328c74))
+* add Snyk -&gt; Snyk Cloud monitor (SCA/SAST/IaC/container) ([5113e36](https://github.com/rknightion/genai-otel-bridge/commit/5113e36029c7ac8c96ad94d0f954ec05d74ed2a7))
+* adopt shared rknightion/.github reusable security workflows ([25fbdb3](https://github.com/rknightion/genai-otel-bridge/commit/25fbdb3a9a413707bc35ef164534c384f658927c))
+* auto-assign maintainer on new issues (notify by email) ([a919c0f](https://github.com/rknightion/genai-otel-bridge/commit/a919c0f0c2c3828a531974c5b5837b39eb117c61))
+* build + publish edge :main image + snapshot chart on push to main ([3cbf760](https://github.com/rknightion/genai-otel-bridge/commit/3cbf7605a19a8dd9cecbdbe9f25640ee2cc3de21))
+* bump shared rknightion reusables to v1.3.1 ([ecaab65](https://github.com/rknightion/genai-otel-bridge/commit/ecaab6537b543bc7789f7d3048fcb79bc71fa922))
+* **codacy:** add local analysis config + Cloud file exclusions ([2959c88](https://github.com/rknightion/genai-otel-bridge/commit/2959c883a012f7e85b45c6f3a2ddd45544d3c5b0))
+* open Renovate PRs by counting internal checks as success ([91c65f2](https://github.com/rknightion/genai-otel-bridge/commit/91c65f20591297eda192535a8efe9f3f4797ce22))
+* open the release-please PR under a PAT so CI runs without manual approval ([f85574d](https://github.com/rknightion/genai-otel-bridge/commit/f85574d00933cf442ff2f62e46a5dff606f4646f))
+* pin shared rknightion reusables to v1.0.0 ([ba573e7](https://github.com/rknightion/genai-otel-bridge/commit/ba573e748a7b7afae7bec9e159a3d8a9fe278403))
+* publish image + Helm chart via shared container-publish reusable ([5e59ce5](https://github.com/rknightion/genai-otel-bridge/commit/5e59ce5098a2981baac7b79d2822846aa7646a3a))
+* reference rknightion/.github reusables [@main](https://github.com/main) (unpin from digest) ([302ec29](https://github.com/rknightion/genai-otel-bridge/commit/302ec2923f9a1e811b3025ab74f0b080628e61f4))
+* report Go test coverage to Codacy ([a90ede4](https://github.com/rknightion/genai-otel-bridge/commit/a90ede4d506b77b3acba4687b0966cd4fff4489e))
+* resolve actionlint/shellcheck + zizmor workflow findings ([437450d](https://github.com/rknightion/genai-otel-bridge/commit/437450d475907481212110fc57a9228bd2f1921a))
+* use Codacy account token for coverage upload ([2b02c4d](https://github.com/rknightion/genai-otel-bridge/commit/2b02c4da016f1e39cb2696a1dcce71e30ea12536))
+
 ## [3.0.1](https://github.com/rknightion/genai-otel-bridge/compare/v3.0.0...v3.0.1) (2026-06-26)
 
 

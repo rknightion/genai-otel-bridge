@@ -140,6 +140,7 @@ func TestDeriveLatencyAvg(t *testing.T) {
 	}
 	if avg == nil {
 		t.Fatalf("no {quantile=\"avg\"} latency sample emitted; got %d samples", len(got))
+		return // unreachable after Fatalf, but proves avg non-nil to staticcheck (SA5011 false positive)
 	}
 	if avg.Name != "portkey_api_latency_seconds" || avg.Value != 0.25 {
 		t.Fatalf("avg sample wrong: name=%s value=%v (want portkey_api_latency_seconds, 0.25)", avg.Name, avg.Value)

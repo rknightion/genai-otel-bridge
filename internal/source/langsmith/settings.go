@@ -32,6 +32,57 @@ func defaultSessionsSettings() sessionsDefaults {
 	}
 }
 
+// usageDefaults holds the package-canonical defaults for the `usage` (platform cost-driver) loop —
+// single source of truth shared by New and ExampleSource. Cadence/window default to 10m (platform cost
+// moves slowly + the per-project span calls warrant a slower poll); span counts default ON (disable via
+// emit_span_counts=false).
+type usageDefaults struct {
+	StatsWindow       time.Duration
+	SessionLabelValue string
+	PageLimit         int
+	MaxSessions       int
+	EmitSpanCounts    bool
+}
+
+func defaultUsageSettings() usageDefaults {
+	return usageDefaults{
+		StatsWindow: 10 * time.Minute, SessionLabelValue: "id",
+		PageLimit: 100, MaxSessions: 1000, EmitSpanCounts: true,
+	}
+}
+
+// applyUsageSettings overlays the decoupled per-loop `settings` map onto the usage config. Mirrors
+// applySettings: unknown key ⇒ warn (forward-compatible); malformed known value ⇒ hard error.
+func applyUsageSettings(cfg *usageConfig, s map[string]string) error {
+	for k, v := range s {
+		var err error
+		switch k {
+		case "stats_window":
+			cfg.StatsWindow, err = time.ParseDuration(v)
+		case "session_filter":
+			cfg.SessionFilter = v
+		case "session_label_value":
+			cfg.SessionLabelValue = v
+		case "page_limit":
+			if cfg.PageLimit, err = strconv.Atoi(v); err == nil && cfg.PageLimit <= 0 {
+				err = fmt.Errorf("must be > 0")
+			}
+		case "max_sessions":
+			if cfg.MaxSessions, err = strconv.Atoi(v); err == nil && cfg.MaxSessions <= 0 {
+				err = fmt.Errorf("must be > 0")
+			}
+		case "emit_span_counts":
+			cfg.EmitSpanCounts, err = strconv.ParseBool(v)
+		default:
+			slog.Warn("langsmith usage: ignoring unknown setting key", "key", k, "source_instance", cfg.SourceInstance)
+		}
+		if err != nil {
+			return fmt.Errorf("langsmith usage: setting %q=%q: %w", k, v, err)
+		}
+	}
+	return nil
+}
+
 // applySettings overlays the decoupled per-loop `settings` map (config.LoopConfig.Settings) onto cfg,
 // parsing the LangSmith-specific knobs. The carrier is vendor-neutral string values (so no LangSmith
 // field name leaks into internal/config); this package owns the key names and their types. An UNKNOWN
@@ -118,6 +169,7 @@ func humanDur(d time.Duration) string {
 func ExampleSource() config.SourceConfig {
 	d := defaultRunsSettings()
 	sd := defaultSessionsSettings()
+	ud := defaultUsageSettings()
 	return config.SourceConfig{
 		Type:           "langsmith",
 		Enabled:        true, // shown enabled as a copy-ready example; the chart default source stays portkey
@@ -172,21 +224,39 @@ func ExampleSource() config.SourceConfig {
 					"extra_indexed_fields": "",
 				},
 			},
+			// PLATFORM cost-driver metrics (NOT LLM/token cost): traces ingested (billable unit) + spans
+			// (storage driver) per project, tagged with retention_tier (the billing multiplier). Enabled by
+			// DEFAULT (disable with enabled: false). Aggregate-now snapshot; the $ conversion is a dashboard
+			// concern. stats_window defaults to the 10m cadence so windows tile (sum_over_time ≈ period total).
+			"usage": {
+				Enabled:      true,
+				Cadence:      config.Duration(ud.StatsWindow),
+				MetricPrefix: "langsmith",
+				Settings: map[string]string{
+					"stats_window":        humanDur(ud.StatsWindow),
+					"session_filter":      `eq(name, "my-project")`,
+					"session_label_value": ud.SessionLabelValue,
+					"page_limit":          fmt.Sprintf("%d", ud.PageLimit),
+					"max_sessions":        fmt.Sprintf("%d", ud.MaxSessions),
+					"emit_span_counts":    fmt.Sprintf("%v", ud.EmitSpanCounts),
+				},
+			},
 		},
 	}
 }
 
-// ExampleSettingsComments returns one explanatory one-liner per settings key across both LangSmith
-// loops (sessions + runs). Shared keys (max_sessions, session_filter, extra_record_fields) carry a
-// single comment that covers both loops. The helmgen renderer attaches these as YAML head-comments on
-// each settings entry in the chart example block so operators see the intent inline.
+// ExampleSettingsComments returns one explanatory one-liner per settings key across the LangSmith
+// loops (sessions + runs + usage). Shared-by-name keys (max_sessions, session_filter, stats_window,
+// page_limit, session_label_value) carry a single comment covering every loop that uses them. The
+// helmgen renderer attaches these as YAML head-comments on each settings entry in the chart example
+// block so operators see the intent inline.
 func ExampleSettingsComments() map[string]string {
 	return map[string]string{
 		// sessions loop knobs
-		"stats_window":        "sessions: rolling aggregate window [now-stats_window, now] (snapshot; not time-bucketed)",
+		"stats_window":        "sessions + usage: rolling aggregate window [now-stats_window, now] (snapshot; not time-bucketed). For usage, defaults to the cadence so windows tile (sum_over_time ≈ period total).",
 		"use_approx_stats":    "sessions: use approximate (cheaper) backend stats computation",
-		"session_label_value": "sessions: per-session label value — \"id\" (default, bounded) or \"name\" (human-readable but potentially high-cardinality)",
-		"page_limit":          "sessions: page size for the sessions list endpoint (offset/limit pagination)",
+		"session_label_value": "sessions + usage: per-session label value — \"id\" (default, bounded) or \"name\" (human-readable but potentially high-cardinality)",
+		"page_limit":          "sessions + usage: page size for the /sessions list endpoint (offset/limit pagination)",
 		"emit_feedback":       "sessions: emit numeric feedback_stats gauges (score averages by feedback key)",
 		"feedback_keys":       "sessions: optional allow-list of feedback keys to emit (csv, content-free operational names); empty = all numeric keys",
 		// runs loop knobs
@@ -200,6 +270,8 @@ func ExampleSettingsComments() map[string]string {
 		"max_response_bytes":   "runs: per-page decode cap (default 32MiB); an oversize page is a loud counted truncation.",
 		"root_only":            "runs: when true, only emit root runs (one log per trace); reduces volume for trace-level correlation",
 		"run_type":             "runs: optional single run_type filter (e.g. chain, llm, tool); empty = all types",
+		// usage (platform cost-driver) loop knobs
+		"emit_span_counts": "usage: also emit per-project SPAN counts (langsmith_usage_spans, the storage driver) via one runs/stats call per project per poll; default true. Set false to emit only trace counts (zero extra calls). Bound the fan-out with session_filter/max_sessions.",
 		// shared keys (both loops)
 		"session_filter":       "filter-bounded session auto-discovery via GET /sessions (alternative to session_ids for the runs loop; also scopes the sessions loop).",
 		"max_sessions":         "cap on discovered/used sessions (projects) per poll (loud truncation when hit).",

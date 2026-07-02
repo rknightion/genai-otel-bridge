@@ -281,14 +281,31 @@ sources:
 #           feedback_keys: correctness,helpfulness
 #           # cap on discovered/used sessions (projects) per poll (loud truncation when hit).
 #           max_sessions: "1000"
-#           # sessions: page size for the sessions list endpoint (offset/limit pagination)
+#           # sessions + usage: page size for the /sessions list endpoint (offset/limit pagination)
 #           page_limit: "100"
 #           # filter-bounded session auto-discovery via GET /sessions (alternative to session_ids for the runs loop; also scopes the sessions loop).
 #           session_filter: eq(name, "my-project")
-#           # sessions: per-session label value — "id" (default, bounded) or "name" (human-readable but potentially high-cardinality)
+#           # sessions + usage: per-session label value — "id" (default, bounded) or "name" (human-readable but potentially high-cardinality)
 #           session_label_value: id
-#           # sessions: rolling aggregate window [now-stats_window, now] (snapshot; not time-bucketed)
+#           # sessions + usage: rolling aggregate window [now-stats_window, now] (snapshot; not time-bucketed). For usage, defaults to the cadence so windows tile (sum_over_time ≈ period total).
 #           stats_window: 1h
 #           # sessions: use approximate (cheaper) backend stats computation
 #           use_approx_stats: "false"
+#       usage:
+#         enabled: true
+#         cadence: 10m
+#         metric_prefix: langsmith
+#         settings:
+#           # usage: also emit per-project SPAN counts (langsmith_usage_spans, the storage driver) via one runs/stats call per project per poll; default true. Set false to emit only trace counts (zero extra calls). Bound the fan-out with session_filter/max_sessions.
+#           emit_span_counts: "true"
+#           # cap on discovered/used sessions (projects) per poll (loud truncation when hit).
+#           max_sessions: "1000"
+#           # sessions + usage: page size for the /sessions list endpoint (offset/limit pagination)
+#           page_limit: "100"
+#           # filter-bounded session auto-discovery via GET /sessions (alternative to session_ids for the runs loop; also scopes the sessions loop).
+#           session_filter: eq(name, "my-project")
+#           # sessions + usage: per-session label value — "id" (default, bounded) or "name" (human-readable but potentially high-cardinality)
+#           session_label_value: id
+#           # sessions + usage: rolling aggregate window [now-stats_window, now] (snapshot; not time-bucketed). For usage, defaults to the cadence so windows tile (sum_over_time ≈ period total).
+#           stats_window: 10m
 # >>> END generated source examples <<<

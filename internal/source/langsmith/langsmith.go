@@ -75,9 +75,11 @@ func Register(reg *source.Registry) { reg.Register("langsmith", New) }
 func New(sc config.SourceConfig, deps source.Deps) (source.Source, error) {
 	sessCfg, hasS := sc.Loops["sessions"]
 	runsCfg, hasR := sc.Loops["runs"]
+	usageCfg, hasU := sc.Loops["usage"]
 	enS := hasS && sessCfg.Enabled
 	enR := hasR && runsCfg.Enabled
-	if !enS && !enR {
+	enU := hasU && usageCfg.Enabled
+	if !enS && !enR && !enU {
 		return &sessionsSource{}, nil // nothing enabled
 	}
 	hc := newClient(sc, deps)
@@ -112,6 +114,27 @@ func New(sc config.SourceConfig, deps source.Deps) (source.Source, error) {
 		if err != nil {
 			return nil, err
 		}
+		loops = append(loops, lp)
+	}
+	if enU {
+		ud := defaultUsageSettings()
+		ucfg := usageConfig{
+			BaseURL: sc.BaseURL, AuthHeader: sc.Auth.Header, AuthValue: sc.Auth.Value,
+			SourceInstance: sc.SourceInstance, Prefix: usageCfg.MetricPrefix,
+			Cadence:         time.Duration(usageCfg.Cadence),
+			StatsWindow:     ud.StatsWindow,
+			SessionLabelKey: "session", SessionLabelValue: ud.SessionLabelValue,
+			PageLimit: ud.PageLimit, MaxSessions: ud.MaxSessions, EmitSpanCounts: ud.EmitSpanCounts,
+		}
+		if err := applyUsageSettings(&ucfg, usageCfg.Settings); err != nil {
+			return nil, err
+		}
+		lp, err := newUsageLoop(ucfg, hc)
+		if err != nil {
+			return nil, err
+		}
+		lp.onAuthError = deps.OnAuthError
+		lp.onGraphSkipped = deps.OnGraphSkipped
 		loops = append(loops, lp)
 	}
 	return &sessionsSource{loops: loops}, nil

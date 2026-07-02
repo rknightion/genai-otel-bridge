@@ -8,9 +8,11 @@ package langsmith
 //   - quantile: sessions latency / first-token percentile gauges ({quantile} label)
 //   - session / feedback_key: sessions per-session dimension + numeric-feedback gauges
 //   - run_type / status: runs logs indexed attrs (Loki stream-label candidates)
+//   - retention_tier: usage (platform cost-driver) loop — trace retention tier (longlived|shortlived|
+//     unknown); the LangSmith billing multiplier. Low-cardinality enum.
 //
 // All are content-free operational identifiers; none is a message body or injected PII. (`quantile` is
 // also emitted by portkey; the composition root dedupes the union.)
 func AllowedLabelKeys() []string {
-	return []string{"quantile", "session", "feedback_key", "run_type", "status"}
+	return []string{"quantile", "session", "feedback_key", "run_type", "status", "retention_tier"}
 }

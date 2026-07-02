@@ -51,5 +51,17 @@ func Signals() []signal.Signal {
 			DependsOn:  "loops.runs.enabled=true",
 			Attributes: []string{"run_type", "status"},
 		},
+		{
+			Plane: signal.PlaneProduct, Type: signal.KindMetric, Source: "langsmith",
+			Name: "{loops.usage.metric_prefix}_usage_traces", Instrument: "gauge", Unit: "1",
+			Description: "PLATFORM cost driver: traces (root runs) ingested per project = the LangSmith billing unit; one series per retention_tier",
+			DependsOn:   "loops.usage.enabled=true", Attributes: []string{"session", "retention_tier"},
+		},
+		{
+			Plane: signal.PlaneProduct, Type: signal.KindMetric, Source: "langsmith",
+			Name: "{loops.usage.metric_prefix}_usage_spans", Instrument: "gauge", Unit: "1",
+			Description: "PLATFORM cost driver: spans (all runs) ingested per project = the storage/volume driver; one series per retention_tier",
+			DependsOn:   "loops.usage settings.emit_span_counts=true", Attributes: []string{"session", "retention_tier"},
+		},
 	}
 }

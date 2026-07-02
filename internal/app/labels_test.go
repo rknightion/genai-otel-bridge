@@ -23,10 +23,11 @@ import (
 // (trace_tier was intentionally dropped from the langsmith runs indexed set — NULL at scale, reclaims a
 // Loki stream-label slot; see followup.md — so it is no longer in the union.)
 // (token_type added 2026-06-23 — analytics tokens prompt/completion split, see portkey derive.go.)
+// (retention_tier added 2026-07-02 — langsmith usage/platform-cost loop trace-retention tier, see langsmith usage_derive.go.)
 func TestLabelAllowListUnionMatchesHistorical(t *testing.T) {
 	historical := []string{
 		"quantile", "token_type", "session", "feedback_key", "ai_model", "ai_org", "response_status_code",
-		"metadata_key", "metadata_value", "run_type", "status", "prompt", "api_key_use_case",
+		"metadata_key", "metadata_value", "run_type", "status", "prompt", "api_key_use_case", "retention_tier",
 	}
 	union := dedupe(append(append([]string{}, portkey.AllowedLabelKeys()...), langsmith.AllowedLabelKeys()...))
 	slices.Sort(union)

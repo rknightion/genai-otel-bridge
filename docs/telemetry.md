@@ -46,6 +46,8 @@ cannot drift from what the binary actually emits.
 | `{loops.sessions.metric_prefix}_runs` | gauge | 1 | session | loops.sessions.enabled=true | per-session run count (aggregate-now snapshot) |
 | `{loops.sessions.metric_prefix}_streaming_rate` | gauge | 1 | session | loops.sessions.enabled=true | per-session streaming rate (ratio) |
 | `{loops.sessions.metric_prefix}_tokens` | gauge | 1 | session | loops.sessions.enabled=true | per-session total token count |
+| `{loops.usage.metric_prefix}_usage_spans` | gauge | 1 | session, retention_tier | loops.usage settings.emit_span_counts=true | PLATFORM cost driver: spans (all runs) ingested per project = the storage/volume driver; one series per retention_tier |
+| `{loops.usage.metric_prefix}_usage_traces` | gauge | 1 | session, retention_tier | loops.usage.enabled=true | PLATFORM cost driver: traces (root runs) ingested per project = the LangSmith billing unit; one series per retention_tier |
 
 #### Logs
 

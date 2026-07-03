@@ -43,6 +43,14 @@ fixed and guarded:
   error strings (`ext-review-7`) — defence against proxies echoing auth.
 - OTLP is hand-encoded with `protowire` (wraps `ResourceMetrics` as request field 1) to avoid
   `collector/*` imports.
+- **200 `partial_success` (#80, `partial_success.go`).** A 2xx is success and the batch advances, but a
+  spec-compliant backend can still reject PART of it via a `partial_success` body
+  (`rejected_data_points`/`rejected_log_records`). GC signals rejects via a 4xx body (`classify()`); no
+  confirmed backend emits the 200-partial form, but the in-cluster-Alloy topology could. `post()` decodes
+  it from the RAW (pre-redaction) bytes and, when `rejected>0`, fires `Config.OnPartialReject(plane,n,msg)`
+  — the loop-agnostic emitter owns no metrics/logging, so the composition root wires that callback to
+  `selfobs.ObserveEmitPartialReject` (`emit_partial_success_rejected_total{plane}`) + a rate-limited warn.
+  Advance semantics are unchanged; this only restores operational honesty for a form the taxonomy can't see.
 
 Tests: error-taxonomy table tests, `httptest.Server` integration (auth, retry/backoff, 4xx
 classification, secret redaction), determinism under map shuffle.

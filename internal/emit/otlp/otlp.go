@@ -42,6 +42,11 @@ type Config struct {
 	// request duration [#60]. It lets selfobs record emit-leg latency (the emit client is outside the
 	// httpx observer chokepoint). nil ⇒ no-op; the emitter stays decoupled from selfobs.
 	Observer func(plane string, statusCode int, err error, d time.Duration)
+	// OnPartialReject, if set, fires when a 2xx OTLP response carries a partial_success body that rejected
+	// N items (rejected_data_points / rejected_log_records > 0) [#80]. plane is "metrics"/"logs", rejected
+	// the count, msg the (redacted) gateway error_message. Lets selfobs count an alertable counter + a
+	// rate-limited warn WITHOUT the loop-agnostic emitter importing selfobs/schedule. nil ⇒ no-op.
+	OnPartialReject func(plane string, rejected int64, msg string)
 }
 
 type Emitter struct {
@@ -191,15 +196,32 @@ func (e *Emitter) post(ctx context.Context, url string, gz []byte) error {
 	var lastStatus int
 	var lastErr error
 	for {
-		status, respBody, retryAfter, err := e.doOnce(ctx, url, gz)
-		respBody = e.redactSecrets(respBody) // [ext-review-7] never let an echoed credential reach an error string
+		status, rawBody, retryAfter, err := e.doOnce(ctx, url, gz)
+		respBody := e.redactSecrets(rawBody) // [ext-review-7] never let an echoed credential reach an error string
 		lastStatus, lastErr = status, err
 		switch {
 		case err == nil && status >= 200 && status < 300:
 			// Any 2xx is success per OTLP/HTTP. Grafana Cloud returns 200 for /v1/metrics but 204 No
 			// Content for /v1/logs — accepting only 200 misclassified every successful logs POST as a
-			// retryable failure, so the logs loop never advanced (caught by the live soak). A 200 may carry
-			// a partial-success body; we treat the whole batch as accepted (unchanged pre-existing behaviour).
+			// retryable failure, so the logs loop never advanced (caught by the live soak).
+			// [#80] A spec-compliant backend can still reject PART of an accepted batch via a 200 +
+			// partial_success body (rejected_data_points / rejected_log_records). GC Mimir/Loki signal
+			// rejects via a 4xx body (handled by classify() above) and no confirmed backend emits the
+			// 200-partial form, but the in-cluster-Alloy topology could — so decode it and surface an
+			// alertable count + rate-limited warn (via OnPartialReject) rather than counting the rejected
+			// items as delivered. This does NOT change the advance semantics (the batch still advances,
+			// same as before); it only restores operational honesty for a form the reject taxonomy can't
+			// see. Decode from the RAW (pre-redaction) bytes so byte offsets are intact; redact only the
+			// extracted message.
+			if e.cfg.OnPartialReject != nil {
+				if n, msg := decodePartialSuccess([]byte(rawBody)); n > 0 {
+					plane := "metrics"
+					if url == e.logsURL {
+						plane = "logs"
+					}
+					e.cfg.OnPartialReject(plane, n, e.redactSecrets(msg))
+				}
+			}
 			return nil
 		case status >= 400 && status < 500 && status != 429:
 			// [ext-review-12] Any non-429 4xx is a terminal request-level reject — 400/413 (classified

@@ -238,8 +238,11 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
   bug, must not silently advance). The advance is still **monotonic** (§4.4).
 - **Partial accept (Cdx-C3/A1).** Do not assume all-or-nothing OTLP accept (Mimir can ingest some
   samples and reject one). Emit at **per-bucket granularity** (one bucket's samples per export unit)
-  so the advance/skip decision is per-bucket; on a partial reject, the accepted samples are durable
-  and the rejected bucket is skipped-with-gap, never re-pulled into a loop.
+  so the advance/skip decision is per-bucket; on a **4xx-body** partial reject (the form GC actually
+  emits), the accepted samples are durable and the rejected bucket is skipped-with-gap, never re-pulled
+  into a loop. The spec-canonical **200 + `partial_success`** form ([#80]) is separate: the batch is
+  already accepted so advance is unchanged, but the rejected count is decoded and counted
+  (`emit_partial_success_rejected_total{plane}` + rate-limited warn) so it is never silently lost.
 - **Payload bounds & chunking (Cdx-C12/A8).** Bound each OTLP export by **max bytes**
   (`queue.max_batch_bytes` → `otlp.Config.MaxBytes`, proactive-split-then-reactive-split-on-413),
   independent of `queue.max_batches`. The implemented bound is bytes-only — there is no general
@@ -348,7 +351,12 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   `bad-encoding`/malformed 400 → skip + alert (a real bug; must not silently advance). §4.5.
 - **F10 Partial OTLP accept (Cdx-C3/A1)** → per-bucket emit granularity (§4.5): accepted samples are
   durable, the rejected bucket is skipped-with-gap; never re-pull a partially-accepted bucket into a
-  reject loop. Do not rely on all-or-nothing OTLP accept.
+  reject loop. Do not rely on all-or-nothing OTLP accept. **Two signalling forms:** (a) a **4xx-body**
+  reject (the form GC Mimir/Loki actually emit) is parsed by `classify()` and drives the advance/skip
+  decision above — this is the covered path; (b) a spec-canonical **200 + `partial_success`** body
+  (`rejected_data_points`/`rejected_log_records`, [#80]) does NOT change advance semantics (the batch is
+  already accepted), so it is decoded separately and surfaced via `emit_partial_success_rejected_total`
+  {plane} + a rate-limited warn — the only alertable signal for a form the reject taxonomy can't see.
 
 ### HA / leader-election edge cases
 - **F11 Split-brain / two leaders briefly** (lease renewal race, clock skew) → two replicas emit the
@@ -756,7 +764,7 @@ dispositioned below, tagged `Cdx-*` in the body so Codex can re-verify the fix.*
 |---|---|---|---|
 | Cdx-C1 | "gap-free/duplicate-free" overstated | ✅ | Conditional idempotency engineered; language tightened. §9, §3.3, ARCH §3, README |
 | Cdx-C2 | 400 "don't advance" = poison pill | ✅ | Advance-past + `samples_skipped_total`, monotonic. §4.5, F9, OP2 |
-| Cdx-C3 | partial-accept granularity | ✅ | Per-bucket emit granularity; advance-with-gap. §4.5, F10/F39 |
+| Cdx-C3 | partial-accept granularity | ✅ | Per-bucket emit granularity + advance-with-gap for 4xx-body rejects (§4.5, F10/F39); the 200+`partial_success` form counted via `emit_partial_success_rejected_total` (#80) |
 | Cdx-C4 | `loopID` checkpoint identity too weak | ✅ | Key = `source_instance/loop/schema-fingerprint`. §4.4, F37 |
 | Cdx-C5 | grouped analytics not prod-designed | ✅ | PoC-proven, then BUILT as the snapshot `groupsLoop`. OP5b, RP1 |
 | Cdx-C6 | source iface too pure for logs lifecycle | ↩ | Export-lifecycle variant spec'd for logs loop. RP2 |

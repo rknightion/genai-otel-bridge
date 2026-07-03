@@ -15,6 +15,7 @@ import (
 // code), distinct from the hand-encoded emitter used for republished external series.
 type Metrics struct {
 	emitted, emittedLogs, skipped, emitErr, guardDropped, revised, newLabel, capped, srcGraphUnavail, authErr metric.Int64Counter
+	partialRejected                                                                                           metric.Int64Counter
 	lastSuccess, windowLag, queueDepth, loopDegraded                                                          metric.Float64Gauge
 	upstreamDur, revisedAge, emitDur                                                                          metric.Float64Histogram
 }
@@ -54,6 +55,7 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	m.capped = mk("samples_capped_total", "samples suppressed by the DPM cap (coalesced last-write-wins per series-minute)")
 	m.srcGraphUnavail = mk("source_graph_unavailable_total", "configured source graph skipped on a poll due to a 404 (capability detection / permission / absence) — steady increments ⇒ permanently absent, intermittent ⇒ flapping")
 	m.authErr = mk("auth_errors_total", "upstream source API responded 401/403 — a credential failure (wrong/expired key, missing scope) distinct from a slow/erroring endpoint; alert on rate(...) > 0")
+	m.partialRejected = mk("emit_partial_success_rejected_total", "data points or log records the gateway rejected via an OTLP 200 partial_success response (rejected_data_points/rejected_log_records) — bypasses the 4xx reject taxonomy (emit returned success), so this is its only alertable signal; alert on rate(...) > 0")
 	m.lastSuccess = mg("last_success_timestamp_seconds", "unix time of last successful emit", "s")
 	m.windowLag = mg("window_lag_seconds", "now minus the watermark frontier", "s")
 	m.queueDepth = mg("queue_depth", "per-loop queue depth", "1")
@@ -171,6 +173,16 @@ func (m *Metrics) ObserveEmitRequest(plane string, statusCode int, err error, d 
 		attribute.String("plane", plane),
 		attribute.String("status_class", class),
 	))
+}
+
+// ObserveEmitPartialReject counts data points / log records the gateway rejected via an OTLP 200
+// partial_success response (rejected_data_points / rejected_log_records), bucketed by {plane}. [#80]
+// Wired from the emitter via an injected callback at the composition root (mirroring ObserveEmitRequest),
+// so the loop-agnostic emitter stays decoupled from selfobs. The runner's per-loop skip/emit counters
+// never see this reject (the emit POST returned 2xx success), so this is the ONLY alertable signal for it.
+func (m *Metrics) ObserveEmitPartialReject(plane string, rejected int64) {
+	m.partialRejected.Add(context.Background(), rejected, metric.WithAttributes(
+		attribute.String("plane", plane)))
 }
 
 // ObserveUpstreamRequest records one outbound upstream-API request: its duration bucketed by

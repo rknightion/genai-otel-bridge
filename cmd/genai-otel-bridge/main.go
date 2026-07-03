@@ -241,6 +241,7 @@ func main() {
 		tpShutdown = shutdown
 	}
 
+	partialRejectLim := logging.NewLimiter(time.Minute) // [#80] rate-limit the partial-success WARN (per-plane)
 	em := otlp.New(otlp.Config{
 		Endpoint: cfg.Emit.Telemetry.OTLP.Endpoint, InstanceID: cfg.Emit.Telemetry.OTLP.InstanceID,
 		Token: cfg.Emit.Telemetry.OTLP.Token, MaxBytes: cfg.Queue.MaxBatchBytes,
@@ -250,6 +251,16 @@ func main() {
 		// [#60] Emit-leg latency into selfobs (the emit client is outside the httpx observer chokepoint).
 		Observer: func(plane string, statusCode int, err error, d time.Duration) {
 			metrics.ObserveEmitRequest(plane, statusCode, err, d)
+		},
+		// [#80] A 200 + partial_success response silently drops N items past the reject taxonomy. Count
+		// them into an alertable self-metric AND emit a rate-limited WARN (a persistent partial-reject
+		// would otherwise log every emit) — the loop-agnostic emitter owns neither, so it calls back here.
+		OnPartialReject: func(plane string, rejected int64, msg string) {
+			metrics.ObserveEmitPartialReject(plane, rejected)
+			if partialRejectLim.Allow("partial:" + plane) {
+				slog.Warn("OTLP gateway rejected part of an emit batch via a 200 partial_success response; the rejected data was NOT delivered (alert on genai_otel_bridge_emit_partial_success_rejected_total)",
+					"plane", plane, "rejected", rejected, "gateway_message", msg)
+			}
 		},
 	})
 

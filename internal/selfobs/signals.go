@@ -28,6 +28,7 @@ func Signals() []signal.Signal {
 		selfMetric("samples_capped_total", "counter", "1", "samples suppressed by the DPM cap (coalesced last-write-wins per series-minute)", "loop", "reason"),
 		selfMetric("source_graph_unavailable_total", "counter", "1", "configured source graph skipped on a poll due to a 404 (capability/permission/absence)", "loop", "graph"),
 		selfMetric("auth_errors_total", "counter", "1", "upstream source API responded 401/403 — a credential failure", "loop", "source"),
+		selfMetric("emit_partial_success_rejected_total", "counter", "1", "data points or log records the gateway rejected via an OTLP 200 partial_success response (rejected_data_points/rejected_log_records)", "plane"),
 		selfMetric("last_success_timestamp_seconds", "gauge", "s", "unix time of last successful emit", "loop"),
 		selfMetric("window_lag_seconds", "gauge", "s", "now minus the watermark frontier", "loop"),
 		selfMetric("queue_depth", "gauge", "1", "per-loop queue depth", "loop"),

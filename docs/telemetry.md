@@ -67,6 +67,7 @@ cannot drift from what the binary actually emits.
 | `genai_otel_bridge_bucket_revised_after_settle_age_seconds` | histogram | s | loop | — | age (now − bucketEnd) of a settled bucket observed to change after bucket_settle |
 | `genai_otel_bridge_bucket_revised_after_settle_total` | counter | 1 | loop | — | settled buckets observed to change value after settle (late arrival beyond bucket_settle) |
 | `genai_otel_bridge_emit_errors_total` | counter | 1 | loop, kind | — | emit errors by kind |
+| `genai_otel_bridge_emit_partial_success_rejected_total` | counter | 1 | plane | — | data points or log records the gateway rejected via an OTLP 200 partial_success response (rejected_data_points/rejected_log_records) |
 | `genai_otel_bridge_emit_request_duration_seconds` | histogram | s | plane, status_class | — | outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs) |
 | `genai_otel_bridge_emitted_logs_total` | counter | 1 | loop | — | log records emitted (logs-export loop) |
 | `genai_otel_bridge_emitted_total` | counter | 1 | loop | — | samples emitted |

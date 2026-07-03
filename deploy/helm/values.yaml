@@ -446,10 +446,14 @@ profiling:
 # ServiceAccount/Role) to remove them, leaving the namespace clean.
 cleanup:
   enabled: true
-  # retainCheckpoint: keep the checkpoint ConfigMap on uninstall so a later reinstall RESUMES the
-  # watermark instead of re-bootstrapping (the durable-state-survives-uninstall pattern, like Helm not
-  # deleting PVCs). The lease is always removed regardless — it is pure ephemeral coordination state.
-  # When true, the cleanup hook also drops the configmap-delete grant from its Role (tighter scope).
+  # retainCheckpoint: keep the durable HA state on uninstall so a later reinstall RESUMES the watermark
+  # instead of re-bootstrapping (the durable-state-survives-uninstall pattern, like Helm not deleting
+  # PVCs). This retains BOTH the checkpoint ConfigMap AND the leader-election Lease: the Lease's
+  # LeaseTransitions field is the durable epoch fence that the checkpoint watermark is written against,
+  # so keeping the checkpoint but dropping the Lease would reset the epoch to 0 and permanently fence
+  # (stall) the resumed watermark. Retaining both keeps the epoch domain monotonic across the reinstall.
+  # When false (default) both objects are deleted. When true, the cleanup hook also drops the
+  # configmap-delete grant from its Role (tighter scope).
   retainCheckpoint: false
 
 # ── AWS / External Secrets Operator (ESO) ──────────────────────────────────────

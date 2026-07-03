@@ -150,6 +150,38 @@ func TestEmitClassifies400(t *testing.T) {
 	}
 }
 
+// TestEmitDoesNotFollowRedirects [#29] — the emit leg carries the actual data, so it must NOT follow
+// redirects: Go's default policy rewrites a 301/302/303 POST into a body-less GET, and a 2xx from the
+// redirect target would otherwise be recorded as a successful emit → the watermark advances past a
+// window whose payload never reached the gateway (permanent silent data loss). The emitter must surface
+// the 3xx as a loud, non-nil, non-advancing error, and the redirect target must never receive a request.
+func TestEmitDoesNotFollowRedirects(t *testing.T) {
+	for _, code := range []int{301, 302, 303, 307, 308} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			var methods []string
+			var followed atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				methods = append(methods, r.Method)
+				if r.URL.Path == "/final" {
+					followed.Store(true) // the redirect was followed — must never happen
+					w.WriteHeader(200)
+					return
+				}
+				w.Header().Set("Location", "/final")
+				w.WriteHeader(code)
+			}))
+			defer srv.Close()
+			err := testEmitter(t, srv.URL).Emit(context.Background(), oneBatch())
+			if err == nil {
+				t.Fatalf("status %d: Emit returned nil — a redirect was silently treated as success", code)
+			}
+			if followed.Load() {
+				t.Fatalf("status %d: emit client followed the redirect to /final (methods=%v)", code, methods)
+			}
+		})
+	}
+}
+
 func TestEmitNeverLeaksToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(400); w.Write([]byte("bad")) }))
 	defer srv.Close()

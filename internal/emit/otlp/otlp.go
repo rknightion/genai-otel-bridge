@@ -63,7 +63,20 @@ func New(cfg Config) *Emitter {
 		url:     base + "/v1/metrics",
 		logsURL: base + "/v1/logs",
 		auth:    auth,
-		hc:      &http.Client{Timeout: 30 * time.Second},
+		// [#29] The emit leg carries the actual telemetry payload, so it must NOT follow redirects.
+		// Go's default policy follows up to 10 redirects and rewrites a 301/302/303 POST into a body-less
+		// GET; a 2xx from the redirect target would then be classified as a successful emit and the
+		// epoch-fenced watermark would advance past a window whose bytes never reached the gateway
+		// (permanent silent data loss — the exact hazard the operational-honesty rule forbids).
+		// ErrUseLastResponse surfaces the 3xx as its own status code, which post() classifies as a
+		// non-retryable RetryableError → no advance, alertable via emit_errors_total. (The vendor-pull
+		// httpx client already blocks cross-host redirects; this closes the same gap on the emit leg.)
+		hc: &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 

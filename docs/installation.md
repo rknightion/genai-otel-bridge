@@ -106,7 +106,7 @@ Override `image:` to point at your registry and tag:
 
 ```bash
 helm install genai-otel-bridge ./deploy/helm \
-  --set image=ghcr.io/rknightion/genai-otel-bridge:v1.0.0 \
+  --set image=ghcr.io/rknightion/genai-otel-bridge:1.0.0 \
   -f my-values.yaml
 ```
 

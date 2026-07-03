@@ -115,8 +115,14 @@ the next semver and updates `CHANGELOG.md` + `deploy/helm/Chart.yaml` (`version`
 GitHub Release (notes = that version's changelog section), and triggers `publish.yml` to push the
 multi-arch image + Helm chart to GHCR. There is no manual `make changelog` / `git tag` step.
 
-- **Version is single-source:** image tag = chart `version` = `appVersion` = release version (also
-  enforced by `scripts/publish.sh`, which derives all three from the tag at publish time).
+- **Version is single-source:** chart `version` = `appVersion` = release version (also enforced by
+  `scripts/publish.sh`'s local/manual publish path, which derives all three from the tag).
+- **Tag scheme (no `v` prefix on published artifacts):** the git tag / GitHub Release is `vX.Y.Z`, but
+  `publish.yml`'s shared `container-publish.yml` reusable tags the image via `docker/metadata-action`
+  with `{{version}}`, which strips the leading `v` — published image tags are `ghcr.io/rknightion/
+  genai-otel-bridge:X.Y.Z` (+ `:X.Y`, `:X`, `:latest`), matching the already-unprefixed chart
+  `version`/`appVersion`. Use the unprefixed form (e.g. `:3.0.1`) in `--set image=...` / registry
+  references — not the `vX.Y.Z` git-tag form.
 - **License notices + SBOMs are release artifacts (not committed/gated).** `publish.yml` also runs
   `make notices` + `make sbom` and attaches `THIRD_PARTY_NOTICES.md` + SPDX-2.3/CycloneDX-1.6 SBOMs
   to the GitHub Release; the image bakes notices into `/licenses/`. Generated from the real import

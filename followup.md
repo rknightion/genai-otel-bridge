@@ -233,8 +233,9 @@ OTel tracing. Declined as a dependency on three grounds:
 - **Cross-vendor dependency bloat.** Its `go.mod` direct-requires OTHER vendor LLM SDKs
   (`anthropics/anthropic-sdk-go`, `sashabaranov/go-openai`, `google.golang.org/genai`) plus its own
   otel v1.43.0 / grpc v1.80.0 / cloud.google.com/go stack — exactly the coupling a vendor-neutral
-  decoupled poller must avoid. (No conflict TODAY with our pins: it indirect-pins protobuf **v1.36.11**
-  = our CP-M1 pin, and has no `k8s.io/*` deps vs our client-go v0.35.6.)
+  decoupled poller must avoid. (Historical note, 2026-06-21: at the time this was evaluated it indirect-
+  pinned protobuf v1.36.11 = our then-CP-M1 pin, and had no `k8s.io/*` deps vs our then client-go
+  v0.35.6 — that protobuf/`k8s.io` pin was since retired 2026-07-03, see the deviations table above.)
 - **It does NOT help the load-bearing control.** Probe proved LangSmith `select` is not an egress
   filter (0.13.5) — content returns regardless; an OpenAPI-gen SDK deserializes content into typed
   fields, so the client-side strip + content-leak gate stays load-bearing either way (arguably the SDK
@@ -362,7 +363,7 @@ metrics** only. (Detail/IDs: `docs/DESIGN.md` §7/§7a; live-API findings alread
 
 | Decision | Why | Revisit when |
 |---|---|---|
-| `k8s.io/*` pinned to **v0.35.6**, not the plan's v0.36.2 | stable client-go v0.36.2 transitively **requires an untagged `google.golang.org/protobuf` pseudo-version** (v1.36.12-pre); v1.36.11 is the newest tag. Keeping the load-bearing protobuf pin **v1.36.11** (gateway-acceptance, CP-M1) + a stable, tagged client-go forces v0.35.6 (leaderelection + ConfigMap RMW APIs are unchanged across these minors). Avoids both an alpha k8s and a pseudo-version → fully reproducible. | a tagged protobuf ≥v1.36.12 ships and a client-go release pins it; then re-pin both to current stable and re-test gateway acceptance. |
+| ~~`k8s.io/*` pinned to **v0.35.6**, not the plan's v0.36.2~~ **RETIRED 2026-07-03** — superseded by Renovate | stable client-go v0.36.2 transitively **requires an untagged `google.golang.org/protobuf` pseudo-version** (v1.36.12-pre); v1.36.11 is the newest tag. Keeping the load-bearing protobuf pin **v1.36.11** (gateway-acceptance, CP-M1) + a stable, tagged client-go forced v0.35.6 (leaderelection + ConfigMap RMW APIs are unchanged across these minors). Avoided both an alpha k8s and a pseudo-version → fully reproducible **at the time**. **Superseded:** Renovate's `kubernetes libraries` group bump `71166a3` (2026-06-26, "fix(deps): update kubernetes libraries (#6)") moved `k8s.io/*` → v0.36.2 and, via MVS, dragged `google.golang.org/protobuf` to the exact pseudo-version this pin existed to avoid (`v1.36.12-0.20260120151049-f2248ac996af`) — the revisit condition ("a tagged protobuf ≥v1.36.12 ships") was never actually met. The bump automerged because full CI — including the `acceptance` job (gateway acceptance, CP-M1) — passed green on that PR, which stands as the re-test the old row called for. Go.mod now reflects the superseded state; this pin is no longer enforced and Renovate will continue to move `k8s.io/*`/protobuf together via the existing `kubernetes libraries` / `grpc + protobuf` groupRules. | n/a — retired. If a future regression is ever traced to a protobuf pseudo-version, revisit by re-pinning both `k8s.io/*` and `google.golang.org/protobuf` to their last known-good tagged versions and re-running `go test -tags acceptance ./internal/app/`. |
 
 **Considered & declined (external review 2026-06-19):**
 

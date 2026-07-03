@@ -240,10 +240,14 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
   samples and reject one). Emit at **per-bucket granularity** (one bucket's samples per export unit)
   so the advance/skip decision is per-bucket; on a partial reject, the accepted samples are durable
   and the rejected bucket is skipped-with-gap, never re-pulled into a loop.
-- **Payload bounds & chunking (Cdx-C12/A8).** Bound each OTLP export by **max bytes and max
-  samples/log-records** (config), independent of `queue.max_batches`; **chunk** large derivations
-  (esp. a 50k-record logs export) into multiple deterministically-ordered exports, streamed (§5). A
-  `413` on a minimal chunk is treated as a non-retryable reject (skip+gap), never an infinite retry.
+- **Payload bounds & chunking (Cdx-C12/A8).** Bound each OTLP export by **max bytes**
+  (`queue.max_batch_bytes` → `otlp.Config.MaxBytes`, proactive-split-then-reactive-split-on-413),
+  independent of `queue.max_batches`. The implemented bound is bytes-only — there is no general
+  samples/log-records **count** bound on the emit-export path itself (a source package may impose its
+  own memory-chunking count knob, e.g. Portkey logs_export's `chunk_max_records`, but that governs
+  chunking within a source's Collect, not this emit-export bound). **Chunk** large derivations (esp. a
+  50k-record logs export) into multiple deterministically-ordered exports, streamed (§5). A `413` on a
+  minimal chunk is treated as a non-retryable reject (skip+gap), never an infinite retry.
 - `Emit` is synchronous from a worker's view; returns error after the retry budget is exhausted.
 
 ### 4.6 Self-observability (`internal/selfobs`)
@@ -625,7 +629,10 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   **outbound field allow/denylist to *all* emitted fields** — labels (incl. `LogRecord.IndexedAttributes`,
   the indexed/cardinality-sensitive log tier) *and* `LogRecord.Body`/`RecordAttributes` — so
   content/identifiers (emails, study/doc ids, slugs, error strings) can't leave via a non-label field.
-  UUID-shape detection is one heuristic within this, not the whole guard.
+  There is no UUID-shape (or other value-pattern) detection anywhere in `internal/source` — an
+  allow-listed key's UUID-valued labels are bounded only by the cardinality budget
+  (`governance.per_metric_cardinality_budget`, default 10k distinct series admitted first per series
+  name), not blocked outright.
 - **Content-leak conformance is a RELEASE GATE for any logs/run-index feature (Cdx-C7/A5):** a test
   asserting forbidden fields are neither requested *nor present in the outbound OTLP/log payload* must
   gate release — not deferred — the moment a loop emits logs or run metadata. (Metrics-only v1 that
@@ -668,8 +675,12 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   bucket (F36); window clamped ≤55m and a wrong bucket-step is rejected (H5/F27).
 - **Emitter determinism (C2/Cdx-H14):** encode the same batch twice with shuffled map order →
   **byte-identical** output, asserted at **full export-payload level** (not just top-level maps —
-  also pagination order, float formatting, omitted-empty fields, resource/scope grouping). Golden-file
-  OTLP protobuf. **Rejection model (OP2/Cdx-C2):** `duplicate-timestamp`/`too-old`/`413` → **advance-past
+  also pagination order, float formatting, omitted-empty fields, resource/scope grouping). This is a
+  **comparative** determinism check (both shuffled encodes run in the same process/version), which
+  proves within-version idempotency — sufficient for the Mimir `(series,ts,value)` contract — but does
+  NOT pin byte stability *across* a version upgrade (no golden-file/checked-in-payload test exists); a
+  re-emit spanning an encoder-changing release could produce a value-identical but byte-different
+  payload undetected. **Rejection model (OP2/Cdx-C2):** `duplicate-timestamp`/`too-old`/`413` → **advance-past
   + `samples_skipped_total`** (monotonic, no retry loop, loop progresses — assert no poison-pill stall);
   `bad-encoding` → skip + alert; 500 retried next cadence not inline; retry on 429/502/503/504; auth redacted.
 - **Codex-required tests (Cdx §12):** fake gateway that **accepts some + rejects one** sample, assert

@@ -37,7 +37,8 @@ fixed and guarded:
 
 - `Encode` **rejects `Delta` temporality** (GC gateway is Cumulative-only).
 - Payload splitting (CP-C11): proactive (encoded > `MaxBytes`) and reactive (on 413), recursive midpoint
-  split. A single-sample 413 → `RejectError` (malformed, not oversized).
+  split. A single-sample 413 → `RejectError{Reason: ReasonPayloadTooLarge}`, which `AdvancesPast()==true`
+  — advance-past with a counted gap, same as any other oversized-payload reject, never a halt.
 - `redactSecrets` strips token/instance_id/base64 Basic creds from response bodies before they enter
   error strings (`ext-review-7`) — defence against proxies echoing auth.
 - OTLP is hand-encoded with `protowire` (wraps `ResourceMetrics` as request field 1) to avoid

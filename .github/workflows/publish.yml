@@ -1,10 +1,13 @@
 # Publish the multi-arch image + Helm chart to GHCR via the shared rknightion
 # container-publish reusable (native amd64+arm64 matrix, cosign signing, provenance,
 # syft SPDX+CycloneDX SBOM, Trivy, OCI Helm chart publish). Triggers: push to main
-# publishes the edge :main image + main-snapshot chart (release_tag empty); called by
-# release-please.yml when a release is created (release_tag set); also
-# workflow_dispatch-able: leave release_tag empty for an edge (:main) test build, or
-# set it to re-publish a tag.
+# publishes the edge :main image + main-snapshot chart (release_tag empty), GATED on
+# ci.yml's `ci-success` check for that same commit (see wait-for-ci below — a red
+# ci-success must never let a broken build reach the edge tag / snapshot chart that
+# dev EKS ArgoCD tracks); called by release-please.yml when a release is created
+# (release_tag set, ungated — release-please only merges once ci-success is already
+# green, so latency is unchanged); also workflow_dispatch-able: leave release_tag
+# empty for an edge (:main) test build, or set it to re-publish a tag.
 name: publish
 
 on:
@@ -29,7 +32,49 @@ permissions:
   contents: read
 
 jobs:
+  # Gate the edge (:main) publish path on CI actually being green for this exact commit.
+  # Only runs on the `push` trigger (github.sha there is guaranteed to be the pushed commit,
+  # unlike workflow_run's head_sha, which can race ahead on rapid pushes); the workflow_call
+  # (release) and workflow_dispatch (manual) paths skip it, so this job's result is `skipped`
+  # there and `image` proceeds immediately — release publishing latency is unaffected.
+  wait-for-ci:
+    name: wait-for-ci-success
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - name: Poll the ci-success check for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for the ci-success check on ${SHA}..."
+          for i in $(seq 1 90); do
+            conclusion=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" \
+              --jq '[.check_runs[] | select(.name=="ci-success")] | last | .conclusion // empty')
+            status=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" \
+              --jq '[.check_runs[] | select(.name=="ci-success")] | last | .status // empty')
+            if [ "${status}" = "completed" ]; then
+              echo "ci-success conclusion: ${conclusion}"
+              if [ "${conclusion}" = "success" ]; then
+                exit 0
+              fi
+              echo "ci-success did not succeed (conclusion=${conclusion}) — refusing to publish"
+              exit 1
+            fi
+            echo "ci-success not yet completed (status=${status:-not started}); sleeping 30s (${i}/90)"
+            sleep 30
+          done
+          echo "Timed out waiting for ci-success to complete"
+          exit 1
+
   image:
+    needs: [wait-for-ci]
+    if: always() && (needs.wait-for-ci.result == 'success' || needs.wait-for-ci.result == 'skipped')
     permissions:
       contents: write        # SBOMs + chart attached to the release (when release_tag set)
       packages: write

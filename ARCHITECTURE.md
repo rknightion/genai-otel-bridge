@@ -242,7 +242,9 @@ stage — the one place policy is enforced centrally, so a source bug cannot lea
 **outbound field allow/deny-list applied to *every* emitted field** — `Sample.Labels`,
 `LogRecord.IndexedAttributes`, **and** `LogRecord.Body`/`RecordAttributes` — so content or sensitive
 identifiers (emails, study/document ids, slugs, error strings) cannot leave via a non-label field.
-UUID-shape detection is one heuristic *within* this, not the whole guard.
+There is no UUID-shape (or other value-pattern) detection — an allow-listed key's UUID-valued labels
+are limited only by the cardinality budget, not blocked outright; see Cdx-H6's disposition (DESIGN.md
+§7a) for why allowlist + budget was chosen over a shape heuristic.
 
 ---
 

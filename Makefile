@@ -49,7 +49,7 @@ vet:
 lint: tools
 	$(TOOLS_DIR)/golangci-lint run
 	$(TOOLS_DIR)/golangci-lint run --build-tags acceptance
-gate: vet test lint forbidden-words spdx-check tf-validate
+gate: vet test lint forbidden-words spdx-check tf-validate helm-lint
 	$(GO) build ./...
 
 # ── code generation ───────────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ tf-validate: ## validate + lint + scan the ECS Terraform module (tofu-first; sel
 helm-lint: tools-e2e
 	$(TOOLS_DIR)/helm lint deploy/helm
 
-ci: ci-build ci-vet ci-lint ci-lint-acceptance ci-test ci-race ci-acceptance ci-envtest forbidden-words spdx-check helm-lint
+ci: ci-build ci-vet ci-lint ci-lint-acceptance ci-test ci-race ci-acceptance ci-envtest forbidden-words spdx-check helm-lint tf-validate
 
 # ── Docker gate (image + k3d e2e) ─────────────────────────────────────────────
 image:

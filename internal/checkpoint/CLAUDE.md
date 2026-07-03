@@ -8,15 +8,17 @@ type Checkpointer interface {
     Load(ctx context.Context, key model.CheckpointKey) (model.Watermark, error)
     Save(ctx context.Context, key model.CheckpointKey, w model.Watermark) error
 }
-func CheckMonotonic(stored, incoming model.Watermark) error // accept iff epoch >= stored AND Time strictly advances
+func CheckMonotonic(stored, incoming model.Watermark) error // accept iff epoch >= stored AND (Time strictly advances OR Time is unchanged but Cursor changed)
 ```
 
 ## The write fence is the load-bearing single-emit mechanism (Cdx-C14)
 
 The Lease only *reduces* overlap — it is **not** a write fence. Double-emit is prevented by:
-`CheckMonotonic` (rejects `incoming.Time ≤ stored.Time` or `incoming.Epoch < stored.Epoch`) +
-scheduler re-checking `leaderCtx` before Emit/Save + leader-ctx cancellation aborting in-flight work.
-A demoted leader cannot move the frontier backward or double-advance.
+`CheckMonotonic` (rejects `incoming.Epoch < stored.Epoch`, rejects `incoming.Time` before `stored.Time`,
+and rejects an unchanged `Time` UNLESS `Cursor` also changed — the cursor relaxation lets the logs-export
+job state machine persist in-flight progress across ticks at a non-advancing `Time` without tripping the
+fence) + scheduler re-checking `leaderCtx` before Emit/Save + leader-ctx cancellation aborting in-flight
+work. A demoted leader cannot move the frontier backward or double-advance.
 
 ## Backends
 

@@ -54,7 +54,7 @@
       "groupName": "kubernetes libraries"
     },
     {
-      "description": "gRPC + protobuf are tightly coupled.",
+      "description": "gRPC + protobuf are tightly coupled. Deliberately NOT restricted to tagged-only protobuf releases: an untagged google.golang.org/protobuf pseudo-version dragged in transitively by a k8s.io/* bump is accepted as long as the full CI suite — including the `acceptance` job, which re-validates the gateway/emit encode path (CP-M1) — passes green on that bump's PR before automerge. See followup.md's build-decision ledger (the retired \"k8s.io/* pinned to v0.35.6\" row, 2026-07-03) for the full history and the re-pin fallback if a regression is ever traced to a pseudo-version.",
       "matchManagers": ["gomod"],
       "matchPackageNames": ["google.golang.org/grpc", "google.golang.org/protobuf"],
       "groupName": "grpc + protobuf"

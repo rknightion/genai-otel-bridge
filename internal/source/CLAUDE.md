@@ -14,14 +14,14 @@ type Loop interface {
 }
 type SeriesDeclarer interface { SeriesNames() []string }       // optional capability (ownership check)
 type IndexedKeyDeclarer interface { IndexedKeys() []string }   // optional: logs loops, Loki stream-label budget
-type Constructor func(config.SourceConfig) (Source, error)
+type Constructor func(config.SourceConfig, Deps) (Source, error)
 ```
 
 ## Adding a new source
 
 1. New package `internal/source/<vendor>/`.
 2. Implement `Source` + one or more `Loop`s; optionally `SeriesDeclarer`.
-3. Expose `func Register(reg *source.Registry)` and `func New(cfg config.SourceConfig) (source.Source, error)`.
+3. Expose `func Register(reg *source.Registry)` and `func New(cfg config.SourceConfig, deps source.Deps) (source.Source, error)`.
 4. Wire `Register` into the composition root (`internal/app`). Build via `Registry.Build`.
 5. Validate at construction (unknown graph/option → fail fast, don't silently no-op).
 

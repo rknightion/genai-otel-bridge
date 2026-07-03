@@ -30,7 +30,7 @@ to downstream slowness.
 ## Build / test / lint gate
 
 ```bash
-make gate     # vet + test + lint + forbidden-words + spdx-check + build ./...  — the green bar before any commit
+make gate     # vet + test + lint + forbidden-words + spdx-check + tf-validate + helm-lint + build ./...  — the green bar before any commit
 make build    # -> bin/genai-otel-bridge, version stamped via git describe ldflags
 make test     # go test ./...
 make lint     # golangci-lint run  (config is .golangci.yml, v2 schema)
@@ -96,7 +96,10 @@ F1–F47 failure handling, review dispositions). Read these before changing a se
   release-please-generated `CHANGELOG.md`; only `feat`/`fix`/breaking bump the version, `chore`/`style`/
   `test` are hidden from the changelog. See the Release section below.
 - **Gate extras:** `make gate` runs `forbidden-words` (a content/decoupling guard — self-skips where its
-  script isn't present) and `spdx-check` (every `.go` carries the AGPL-3.0-only SPDX header).
+  script isn't present), `spdx-check` (every `.go` carries the AGPL-3.0-only SPDX header), `tf-validate`
+  (ECS Terraform fmt/validate/tflint/checkov — self-skips absent tools), and `helm-lint` (self-installs
+  `helm` via `tools-e2e`) — matching every leg of ci.yml's hygiene job, so a local green gate implies a
+  green hygiene leg too.
 - **Strict TDD.** Failing test → minimal code → green. Table-driven where it fits; `httptest.Server`
   fakes for HTTP; injectable clocks (`SetLoopClockForTest`) for determinism. No live network in tests.
 - **`*_review_test.go`** files encode specific adversarial-review findings (tagged like `[ext-review-14]`,

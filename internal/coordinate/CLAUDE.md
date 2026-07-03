@@ -27,9 +27,13 @@ delete the checkpoint objects. This is the single-replica analogue of the dynamo
 in `ARCHITECTURE.md` ledger #17.
 - **Mechanism:** `coordinate.NoopWithEpoch(e)` stamps `max(1, e)`, so constructing the Noop with a
   baseline ≥ the surviving stored epoch lets writes succeed. Single-replica has exactly one writer, so a
-  higher epoch carries no cross-writer risk. (`buildHA` cannot read the stored epoch — checkpoint keys
-  aren't known until the source graph is built — so it currently WARNs loudly at startup instead of
-  auto-adopting the stored epoch; full auto-heal would wire the max-stored-epoch read through `app`.)
+  higher epoch carries no cross-writer risk.
+- **Auto-heal (wired):** `buildHA` still can't read the stored epoch (checkpoint keys aren't known until
+  the source graph is built) so it emits the loud startup WARN, but `app.Build` now completes the heal:
+  after the loops are built it `Load`s each loop's `CheckpointKey`, takes the max stored `Epoch`, and when
+  the coordinator is a `Noop` re-constructs it via `NoopWithEpoch(maxStored)` — so an HA→`none` downgrade
+  over an epoch ≥ 2 checkpoint advances instead of spinning fenced. A read error is non-fatal (logged,
+  skipped; the WARN already flags the hazard) and a fresh store keeps the effective epoch 1 (no sentinel).
 - Do **not** stamp a maximal sentinel epoch to dodge the fence: it re-creates the trap in the
   `none → lease` direction (a fresh lease's low epoch would then be fenced forever).
 

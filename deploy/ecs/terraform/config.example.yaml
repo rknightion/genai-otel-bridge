@@ -36,6 +36,7 @@ identity:
   deployment_environment: ${ENV}
 ha:
   # lease: use a k8s Lease for leader election (production multi-replica). none: disable HA (single-replica dev/test). dynamodb: DynamoDB lock (ECS/AWS).
+  # Downgrading an HA (lease/dynamodb) deployment to none over the SAME durable checkpoint is safe: the bridge reads the stored leader epoch at startup and adopts it, so watermark writes are not permanently fenced (auto-heal, #45).
   coordinator: dynamodb
   # configmap: durable watermark in a k8s ConfigMap (required with coordinator=lease). file: local file (dev only). dynamodb: DynamoDB item (ECS/AWS).
   checkpoint: dynamodb

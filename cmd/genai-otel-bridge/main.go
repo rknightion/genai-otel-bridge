@@ -385,7 +385,9 @@ func buildHA(ctx context.Context, cfg *config.Config, ns, identity, cpFile strin
 		// epoch ≥ 2 permanently fences Noop's writes (Noop stamps epoch 1), spinning the loop re-emitting
 		// the same window forever until the checkpoint objects are manually deleted. We cannot read the
 		// stored epoch here (checkpoint keys aren't known until the source graph is built), so warn loudly
-		// rather than fail: a fresh single-replica deployment on this backend is legitimate (epoch ≤ 1).
+		// rather than fail. app.Build then completes the auto-heal: it reads the max stored epoch across the
+		// built loops and re-constructs the Noop via NoopWithEpoch, so writes aren't fenced after an HA→none
+		// downgrade; a fresh single-replica deployment on this backend stays legitimate (effective epoch 1).
 		if cfg.HA.Checkpoint == "configmap" || cfg.HA.Checkpoint == "dynamodb" {
 			slog.Warn("ha.coordinator=none over a durable checkpoint: if this store was previously advanced by an HA (lease/dynamodb) deployment (epoch ≥ 2), watermark writes will be permanently fenced (checkpoint_fenced) and the loops will re-emit the same window at full cadence. Recovery is manual: delete the checkpoint objects. See internal/coordinate migration note (#45).",
 				"checkpoint", cfg.HA.Checkpoint)

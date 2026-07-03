@@ -44,7 +44,7 @@ func authErrorHook(m schedule.Metrics, lim *logging.Limiter) func(loop, src stri
 
 // Build assembles the runtime. Deps (cp/coord/emitter/metrics) are injected so cmd supplies the
 // real OTLP/k8s/selfobs implementations and tests supply fakes.
-func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, coord coordinate.Coordinator, em emit.Emitter, m schedule.Metrics, deps source.Deps) (*App, error) {
+func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, coord coordinate.Coordinator, em emit.Emitter, m schedule.Metrics, deps source.Deps) (*App, error) {
 	reg := source.NewRegistry()
 	portkey.Register(reg)
 	langsmith.Register(reg)
@@ -187,6 +187,37 @@ func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, co
 			Runner: runner, Loop: l.loop, Cadence: time.Duration(l.cfg.Cadence), MaxBackfill: time.Duration(l.cfg.MaxBackfill),
 			Window: time.Duration(l.cfg.Window), MaxCatchupPerTick: cfg.Governance.MaxCatchupPerTick,
 		})
+	}
+	// [#45] Auto-heal the ha.coordinator=none migration trap. buildHA constructs the single-replica Noop
+	// with a constant baseline epoch because the checkpoint keys aren't known there (the source graph
+	// hadn't been built yet). Now that the loops — hence their CheckpointKeys — exist, read the max epoch
+	// any of their durable watermarks was advanced to and floor the Noop to it. Without this, a downgrade
+	// from an HA (lease/dynamodb) deployment whose checkpoint reached epoch ≥ 2 would have every Noop write
+	// (epoch 1) rejected by the monotonic fence forever (checkpoint_fenced), re-emitting the same window at
+	// full cadence until an operator deletes the checkpoint. Single-replica has exactly one writer, so
+	// adopting a higher epoch carries no cross-writer risk — but do NOT stamp a maximal sentinel: that
+	// re-creates the trap in the none→lease direction (a fresh lease's low epoch would then be fenced). Only
+	// Noop is auto-healed; lease/dynamodb own their own epoch. A per-key Load error is non-fatal (logged and
+	// skipped — buildHA already emits a loud startup WARN for this hazard); startup must never block on it.
+	if noop, ok := coord.(coordinate.Noop); ok {
+		cur := max(int64(1), noop.Epoch)
+		maxStored := cur
+		for _, l := range loops {
+			wm, err := cp.Load(ctx, l.loop.Key())
+			if err != nil {
+				slog.Warn("could not read stored checkpoint epoch for ha.coordinator=none auto-heal; if a prior HA deployment advanced this store, writes may be fenced (#45)",
+					"loop", l.loop.Key().String(), "err", err)
+				continue
+			}
+			if wm.Epoch > maxStored {
+				maxStored = wm.Epoch
+			}
+		}
+		if maxStored > cur {
+			coord = coordinate.NoopWithEpoch(maxStored)
+			slog.Info("ha.coordinator=none adopted the stored checkpoint epoch to avoid permanently fencing watermark writes after an HA→none downgrade (#45)",
+				"epoch", maxStored)
+		}
 	}
 	return &App{sched: schedule.NewScheduler(specs, m), coord: coord, specs: specs}, nil
 }

@@ -261,6 +261,7 @@ func (ic IdentityConfig) ProductIdentity() map[string]string {
 
 type HAConfig struct {
 	// lease: use a k8s Lease for leader election (production multi-replica). none: disable HA (single-replica dev/test). dynamodb: DynamoDB lock (ECS/AWS).
+	// Downgrading an HA (lease/dynamodb) deployment to none over the SAME durable checkpoint is safe: the bridge reads the stored leader epoch at startup and adopts it, so watermark writes are not permanently fenced (auto-heal, #45).
 	Coordinator string `yaml:"coordinator" helm:"default=lease"` // lease | none | dynamodb
 	// configmap: durable watermark in a k8s ConfigMap (required with coordinator=lease). file: local file (dev only). dynamodb: DynamoDB item (ECS/AWS).
 	Checkpoint string `yaml:"checkpoint" helm:"default=configmap"` // configmap | file | dynamodb

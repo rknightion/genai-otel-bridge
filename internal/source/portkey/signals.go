@@ -32,9 +32,10 @@ func Signals() []signal.Signal {
 		m(px+"_users", "gauge", "1", "distinct-user count per bucket", "loops.analytics.graphs includes 'users'"),
 		// groups loop — per-dimension aggregates, name shape <prefix>_<metric>_by_<dim>. ai-models and
 		// metadata dimensions; cost gauge gated by emit_cost; prompt dimension gated by emit_prompts.
-		m(px+"_requests_by_ai_model", "gauge", "1", "request count per AI model (groups ai-models dimension)", "loops.groups.enabled=true", "ai_model"),
-		m(px+"_cost_usd_by_ai_model", "gauge", "USD", "cost per AI model (÷100 from Portkey cents)", "loops.groups settings.emit_cost=true", "ai_model"),
-		m(px+"_requests_by_metadata_value", "gauge", "1", "request count per metadata-dimension value", "loops.groups enabled with a metadata dimension", "metadata_key", "metadata_value"),
+		m(px+"_requests_by_model", "gauge", "1", "request count per AI model (groups ai-models dimension)", "loops.groups.enabled=true", "ai_model"),
+		m(px+"_cost_usd_by_model", "gauge", "USD", "cost per AI model (÷100 from Portkey cents)", "loops.groups settings.emit_cost=true", "ai_model"),
+		m(px+"_requests_by_metadata", "gauge", "1", "request count per metadata-dimension value", "loops.groups enabled with a metadata dimension", "metadata_key", "metadata_value"),
+		m(px+"_cost_usd_by_metadata", "gauge", "USD", "cost per metadata-dimension value (÷100 from Portkey cents)", "loops.groups settings.emit_cost=true with a metadata dimension", "metadata_key", "metadata_value"),
 		m(px+"_requests_by_prompt", "gauge", "1", "request count per saved-prompt id (content-free — the label is a prompt ID, not text)", "loops.groups settings.emit_prompts=true", "prompt"),
 		// logs_export loop — one content-free OTLP log per request.
 		{

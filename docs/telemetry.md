@@ -24,12 +24,13 @@ cannot drift from what the binary actually emits.
 | Name | Kind | Unit | Labels / attributes | Depends on | Description |
 |------|------|------|---------------------|-----------|-------------|
 | `{loops.analytics.metric_prefix}_cost_usd` | gauge | USD | — | loops.analytics.graphs includes 'cost' | request cost per bucket (US dollars) |
-| `{loops.analytics.metric_prefix}_cost_usd_by_ai_model` | gauge | USD | ai_model | loops.groups settings.emit_cost=true | cost per AI model (÷100 from Portkey cents) |
+| `{loops.analytics.metric_prefix}_cost_usd_by_metadata` | gauge | USD | metadata_key, metadata_value | loops.groups settings.emit_cost=true with a metadata dimension | cost per metadata-dimension value (÷100 from Portkey cents) |
+| `{loops.analytics.metric_prefix}_cost_usd_by_model` | gauge | USD | ai_model | loops.groups settings.emit_cost=true | cost per AI model (÷100 from Portkey cents) |
 | `{loops.analytics.metric_prefix}_errors` | gauge | 1 | — | loops.analytics.graphs includes 'errors' | error count per bucket |
 | `{loops.analytics.metric_prefix}_latency_seconds` | gauge | s | quantile | loops.analytics.graphs includes 'latency' | request latency statistic per bucket; one series per quantile (avg/p50/p90/p99) |
 | `{loops.analytics.metric_prefix}_requests` | gauge | 1 | — | loops.analytics.graphs includes 'requests' | request count per bucket |
-| `{loops.analytics.metric_prefix}_requests_by_ai_model` | gauge | 1 | ai_model | loops.groups.enabled=true | request count per AI model (groups ai-models dimension) |
-| `{loops.analytics.metric_prefix}_requests_by_metadata_value` | gauge | 1 | metadata_key, metadata_value | loops.groups enabled with a metadata dimension | request count per metadata-dimension value |
+| `{loops.analytics.metric_prefix}_requests_by_metadata` | gauge | 1 | metadata_key, metadata_value | loops.groups enabled with a metadata dimension | request count per metadata-dimension value |
+| `{loops.analytics.metric_prefix}_requests_by_model` | gauge | 1 | ai_model | loops.groups.enabled=true | request count per AI model (groups ai-models dimension) |
 | `{loops.analytics.metric_prefix}_requests_by_prompt` | gauge | 1 | prompt | loops.groups settings.emit_prompts=true | request count per saved-prompt id (content-free — the label is a prompt ID, not text) |
 | `{loops.analytics.metric_prefix}_tokens` | gauge | 1 | token_type | loops.analytics.graphs includes 'tokens' | token units per bucket; split by token_type (total/input/output) — do NOT bare-sum across token_type |
 | `{loops.analytics.metric_prefix}_users` | gauge | 1 | — | loops.analytics.graphs includes 'users' | distinct-user count per bucket |

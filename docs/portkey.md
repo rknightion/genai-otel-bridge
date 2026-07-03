@@ -60,7 +60,8 @@ distinguishable.
 
 The analytics loop is time-bucketed. A bucket is only emitted once
 `bucket_end ≤ now − bucket_settle` to avoid emitting incomplete (still-updating) buckets.
-The `bucket_settle` setting (default 3 minutes) should be tuned to the measured late-arrival
+The `bucket_settle` setting (default 10 minutes — live-measured; 3 minutes was found insufficient)
+should be tuned to the measured late-arrival
 lag for your workspace. The loop detects post-settle revisions and records
 `genai_otel_bridge_bucket_revised_after_settle_total` so you can tune `bucket_settle` to
 the p95 of observed revision ages rather than guessing.
@@ -79,7 +80,7 @@ sources:
         enabled: true
         cadence: 60s
         window: 55m
-        bucket_settle: 3m
+        bucket_settle: 10m
         max_backfill: 90m
         metric_prefix: portkey_api
         graphs:            # default: requests, cost, tokens, latency, errors
@@ -106,9 +107,10 @@ The groups loop emits metrics whose names follow the pattern `{metric_prefix}_{m
 
 | Metric | Dimension labels | Gated by |
 |--------|-----------------|----------|
-| `portkey_api_requests_by_ai_model` | `ai_model` | groups enabled |
-| `portkey_api_cost_usd_by_ai_model` | `ai_model` | `settings.emit_cost: true` (default) |
-| `portkey_api_requests_by_metadata_value` | `metadata_key`, `metadata_value` | `settings.metadata_keys` configured |
+| `portkey_api_requests_by_model` | `ai_model` | groups enabled |
+| `portkey_api_cost_usd_by_model` | `ai_model` | `settings.emit_cost: true` (default) |
+| `portkey_api_requests_by_metadata` | `metadata_key`, `metadata_value` | `settings.metadata_keys` configured |
+| `portkey_api_cost_usd_by_metadata` | `metadata_key`, `metadata_value` | `settings.metadata_keys` configured + `settings.emit_cost: true` (default) |
 | `portkey_api_requests_by_prompt` | `prompt` | `settings.emit_prompts: true` (default) |
 
 The `prompt` label value is a **saved-prompt ID** (an opaque slug like `pp-my-prompt-abc123`),

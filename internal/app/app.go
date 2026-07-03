@@ -138,6 +138,25 @@ func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, co
 			return nil, err
 		}
 		srcs = append(srcs, src)
+		// #40: loop names are free-form map keys; each source constructs only the fixed names it knows and
+		// silently ignores the rest. A typo'd enabled loop (e.g. `log_export` for `logs_export`) would
+		// otherwise pass Validate (its cadence/window are even checked, feigning validation) and then never
+		// collect — no error, no warning. Reconcile every enabled configured loop name against what the
+		// source actually built and fail fast on an unrecognised one (matching CP-H4's unknown-graph
+		// fail-fast). The known set comes from src.Loops() so no vendor loop-name knowledge leaks here.
+		built := map[string]bool{}
+		var builtNames []string
+		for _, lp := range src.Loops() {
+			if n := lp.Key().Loop; !built[n] {
+				built[n] = true
+				builtNames = append(builtNames, n)
+			}
+		}
+		for lcName, lc := range sc.Loops {
+			if lc.Enabled && !built[lcName] {
+				return nil, fmt.Errorf("source %q (type %q): configured loop %q is enabled but not recognised by the source (built loops: %s) — check for a typo", sc.SourceInstance, sc.Type, lcName, strings.Join(builtNames, ", "))
+			}
+		}
 		for _, lp := range src.Loops() {
 			lcName := lp.Key().Loop
 			lc := sc.Loops[lcName]
@@ -171,7 +190,11 @@ func (a *App) Run(ctx context.Context, health http.Handler, healthAddr string, m
 	// not run probe-less and blind. Cancel the run context on failure and surface the error.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	srv := &http.Server{Addr: healthAddr, Handler: health}
+	// [#72] ReadHeaderTimeout bounds slow-header (Slowloris) clients dribbling request headers to hold
+	// health-server goroutines/FDs open — which would starve liveness/readiness probes and get an
+	// otherwise-healthy leader killed (also satisfies gosec G114). Health responses are tiny and fast,
+	// so a whole-request ReadTimeout is safe too.
+	srv := &http.Server{Addr: healthAddr, Handler: health, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second}
 	srvErr := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

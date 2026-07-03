@@ -159,6 +159,24 @@ func TestBuildAndOneEmitCycle(t *testing.T) {
 	}
 }
 
+// TestBuildRejectsUnknownLoopName (#40): a typo'd enabled loop name (e.g. `log_export` for
+// `logs_export`) passes cfg.Validate (its cadence/window are even checked) but the source never builds
+// it. Build must reconcile configured-enabled loop names against what the source actually constructed
+// and fail fast, so the typo can't silently leave a whole plane never collecting.
+func TestBuildRejectsUnknownLoopName(t *testing.T) {
+	cfg := minimalConfig("http://127.0.0.1:1")
+	cfg.Sources[0].Loops["log_export"] = config.LoopConfig{ // typo of logs_export
+		Enabled: true, Cadence: config.Duration(time.Minute), Window: config.Duration(50 * time.Minute),
+		BucketSettle: config.Duration(3 * time.Minute), BootstrapLookback: config.Duration(50 * time.Minute),
+		MaxBackfill: config.Duration(55 * time.Minute), MetricPrefix: "portkey_api", Graphs: []string{"requests"},
+	}
+	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
+	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	if err == nil || !strings.Contains(err.Error(), "log_export") {
+		t.Fatalf("expected Build to reject the typo'd loop name log_export, got %v", err)
+	}
+}
+
 type noopEmitter struct{}
 
 func (noopEmitter) Emit(context.Context, model.Batch) error { return nil }

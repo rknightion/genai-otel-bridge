@@ -13,7 +13,7 @@ telemetry (Portkey, LangSmith signals). Push each role to the appropriate stack.
 
 ## Layout
 
-```
+```text
 deploy/grafana/
 ├── self-obs/     # genai_otel_bridge_* signals — push to your self-obs stack
 │   ├── folder.yaml

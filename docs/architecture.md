@@ -32,7 +32,7 @@ turns it into clean Grafana-native telemetry.
 
 ## Data flow
 
-```
+```text
 AI-platform APIs          genai-otel-bridge (N replicas, one leader active)
 ┌───────────────┐         ┌──────────────────────────────────────────────┐
 │ LLM gateway   │◄─GET────┤ Source.Loop.Collect(watermark)               │
@@ -68,7 +68,7 @@ Three properties encoded in this picture:
 All vendor-specific code lives inside a source package (`internal/source/<vendor>/`) behind
 the common `source.Loop` interface. The interface crosses a single boundary:
 
-```
+```text
 Source.Loop.Collect(ctx, watermark) → model.Batch
 ```
 

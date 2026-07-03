@@ -21,7 +21,7 @@ Because the APIs are pull-only and rate-limited, `genai-otel-bridge` does the pu
 
 ## Data flow
 
-```
+```text
 Source.Loop.Collect(watermark)
     │  pull bounded time window forward
     ▼

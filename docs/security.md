@@ -130,7 +130,7 @@ The pod's ServiceAccount is bound to a **namespace-scoped Role** (not a ClusterR
 genai-otel-bridge is released under the **GNU Affero General Public License v3.0 only**
 (`AGPL-3.0-only`). Every source file carries the SPDX identifier:
 
-```
+```go
 // SPDX-License-Identifier: AGPL-3.0-only
 ```
 

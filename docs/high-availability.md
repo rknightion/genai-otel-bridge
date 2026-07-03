@@ -32,7 +32,7 @@ from three cooperating mechanisms:
    as an epoch integer. Every checkpoint write carries the epoch; a stale-epoch write is
    rejected by `CheckMonotonic`.
 
-```
+```text
 new leader elected (epoch N+1)
     │
     ▼

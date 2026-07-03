@@ -13,7 +13,7 @@ injected PII. This page explains the three-layer model that enforces that guaran
 
 ## The three layers
 
-```
+```text
 Source loop
     │  produces model.Batch (Samples + LogRecords)
     │
@@ -72,7 +72,7 @@ governance:
 floor — a fixed set of message-body and PII fields that are denied regardless of
 any opt-in:
 
-```
+```text
 gen_ai.*  input.value  output.value  request  response
 inputs    outputs      messages      metadata  portkeyHeaders
 ```

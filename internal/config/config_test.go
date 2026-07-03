@@ -431,6 +431,163 @@ sources:
 	}
 }
 
+// TestValidateRejectsNegativeLoopDurations (#38): config.Duration decodes "-10m" fine; a negative
+// per-loop settle/backfill/lookback must be rejected by name (a negative settle even loosens the M3
+// window check, so it can't be left to that check to catch).
+func TestValidateRejectsNegativeLoopDurations(t *testing.T) {
+	setEnv(t)
+	cases := map[string]func(*LoopConfig){
+		"bucket_settle":      func(l *LoopConfig) { l.BucketSettle = Duration(-10 * time.Minute) },
+		"max_backfill":       func(l *LoopConfig) { l.MaxBackfill = Duration(-time.Hour) },
+		"bootstrap_lookback": func(l *LoopConfig) { l.BootstrapLookback = Duration(-time.Minute) },
+	}
+	for name, mut := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, _ := Load("testdata/valid.yaml")
+			lp := cfg.Sources[0].Loops["analytics"]
+			mut(&lp)
+			cfg.Sources[0].Loops["analytics"] = lp
+			err := cfg.Validate(map[string]struct{}{"portkey": {}})
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("expected negative %s to be rejected by name, got %v", name, err)
+			}
+		})
+	}
+}
+
+// TestValidateRejectsNegativeDynamoDBDurations (#38): lease=-5s <= renew=-10s is false, so the ordering
+// check wrongly "passes" — an explicit non-negativity check must catch it.
+func TestValidateRejectsNegativeDynamoDBDurations(t *testing.T) {
+	setEnv(t)
+	cfg, _ := Load("testdata/valid.yaml")
+	cfg.HA.Coordinator = "dynamodb"
+	cfg.HA.Checkpoint = "dynamodb"
+	cfg.HA.DynamoDB.Table = "t"
+	cfg.HA.DynamoDB.LeaseDuration = Duration(-5 * time.Second)
+	cfg.HA.DynamoDB.RenewDeadline = Duration(-10 * time.Second)
+	cfg.HA.DynamoDB.RetryPeriod = Duration(-2 * time.Second)
+	if err := cfg.Validate(map[string]struct{}{"portkey": {}}); err == nil {
+		t.Fatal("expected negative ha.dynamodb durations to be rejected")
+	}
+}
+
+// TestValidateRejectsRetryPeriodGERenewDeadline (#46): the DynamoDB renew ticker cadence IS
+// retry_period; retry >= renew lets the lock expire between renews → recurring split-brain.
+func TestValidateRejectsRetryPeriodGERenewDeadline(t *testing.T) {
+	setEnv(t)
+	base := func() *Config {
+		cfg, _ := Load("testdata/valid.yaml")
+		cfg.HA.Coordinator = "dynamodb"
+		cfg.HA.Checkpoint = "dynamodb"
+		cfg.HA.DynamoDB.Table = "t"
+		cfg.HA.DynamoDB.LeaseDuration = Duration(15 * time.Second)
+		cfg.HA.DynamoDB.RenewDeadline = Duration(10 * time.Second)
+		return cfg
+	}
+	bad := base()
+	bad.HA.DynamoDB.RetryPeriod = Duration(20 * time.Second)
+	if err := bad.Validate(map[string]struct{}{"portkey": {}}); err == nil || !strings.Contains(err.Error(), "retry_period must be < renew_deadline") {
+		t.Fatalf("expected retry>=renew to be rejected, got %v", err)
+	}
+	ok := base()
+	ok.HA.DynamoDB.RetryPeriod = Duration(2 * time.Second) // the default 15s/10s/2s must still validate
+	if err := ok.Validate(map[string]struct{}{"portkey": {}}); err != nil {
+		t.Fatalf("default retry_period 2s should pass, got %v", err)
+	}
+}
+
+// TestValidateRejectsEmptySelfEndpoint (#41): a present emit.self with an empty otlp.endpoint does NOT
+// fall back to emit.telemetry — it exports to a malformed URL — so require the endpoint explicitly.
+func TestValidateRejectsEmptySelfEndpoint(t *testing.T) {
+	setEnv(t)
+	cfg, _ := Load("testdata/valid.yaml")
+	cfg.Emit.Self = &OTLPTarget{MetricInterval: Duration(2 * time.Minute)} // set a sub-key but no endpoint
+	if err := cfg.Validate(map[string]struct{}{"portkey": {}}); err == nil || !strings.Contains(err.Error(), "emit.self.otlp.endpoint is required") {
+		t.Fatalf("expected empty emit.self.otlp.endpoint to be rejected, got %v", err)
+	}
+	// No emit.self block ⇒ still valid (documented fallback to emit.telemetry).
+	cfg2, _ := Load("testdata/valid.yaml")
+	if err := cfg2.Validate(map[string]struct{}{"portkey": {}}); err != nil {
+		t.Fatalf("no emit.self block should validate, got %v", err)
+	}
+	// Fully specified emit.self ⇒ valid.
+	cfg3, _ := Load("testdata/valid.yaml")
+	cfg3.Emit.Self = &OTLPTarget{OTLP: OTLPConn{Endpoint: "https://otlp.example/otlp", InstanceID: "1", Token: "t"}}
+	if err := cfg3.Validate(map[string]struct{}{"portkey": {}}); err != nil {
+		t.Fatalf("fully specified emit.self should validate, got %v", err)
+	}
+}
+
+// TestValidateRejectsBadRateLimit (#39): a struct-built config (bypassing Load's defaulting) with
+// burst 0 or non-positive rps must be rejected before it reaches rate.NewLimiter.
+func TestValidateRejectsBadRateLimit(t *testing.T) {
+	setEnv(t)
+	cfg, _ := Load("testdata/valid.yaml")
+	s := cfg.Sources[0]
+	s.RateLimit = RateLimitConfig{RPS: 1, Burst: 0}
+	cfg.Sources[0] = s
+	if err := cfg.Validate(map[string]struct{}{"portkey": {}}); err == nil || !strings.Contains(err.Error(), "burst") {
+		t.Fatalf("expected burst 0 to be rejected, got %v", err)
+	}
+	cfg2, _ := Load("testdata/valid.yaml")
+	s2 := cfg2.Sources[0]
+	s2.RateLimit = RateLimitConfig{RPS: -1, Burst: 3}
+	cfg2.Sources[0] = s2
+	if err := cfg2.Validate(map[string]struct{}{"portkey": {}}); err == nil || !strings.Contains(err.Error(), "rps") {
+		t.Fatalf("expected negative rps to be rejected, got %v", err)
+	}
+}
+
+// TestLoadDefaultsRateLimitAndBucketSettle (#39, #52): an omitted rate_limit block must default to
+// rps=1/burst=3 (never burst 0), and an omitted bucket_settle must default to 10m (never settle=0),
+// and the resulting config must validate.
+func TestLoadDefaultsRateLimitAndBucketSettle(t *testing.T) {
+	setEnv(t)
+	const y = `emit:
+  telemetry:
+    otlp:
+      endpoint: ${GC_OTLP_ENDPOINT}
+      instance_id: ${GC_INSTANCE_ID}
+      token: ${GC_OTLP_TOKEN}
+identity:
+  deployment_environment: ${ENV}
+ha:
+  coordinator: none
+  checkpoint: file
+queue:
+  emit_workers: 1
+sources:
+  - type: portkey
+    enabled: true
+    base_url: https://api.portkey.ai/v1
+    source_instance: portkey-${ENV}
+    auth: { header: x-portkey-api-key, value: ${PORTKEY_API_KEY} }
+    loops:
+      analytics:
+        enabled: true
+        cadence: 60s
+        window: 50m
+        bootstrap_lookback: 50m
+        max_backfill: 90m
+        metric_prefix: portkey_api
+        graphs: [requests]
+`
+	cfg, err := LoadBytes([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Sources[0]
+	if s.RateLimit.RPS != 1 || s.RateLimit.Burst != 3 {
+		t.Fatalf("omitted rate_limit should default to rps=1/burst=3, got %+v", s.RateLimit)
+	}
+	if got := time.Duration(s.Loops["analytics"].BucketSettle); got != 10*time.Minute {
+		t.Fatalf("omitted bucket_settle should default to 10m, got %s", got)
+	}
+	if err := cfg.Validate(map[string]struct{}{"portkey": {}}); err != nil {
+		t.Fatalf("defaulted config should validate, got %v", err)
+	}
+}
+
 // TestLoadBytesResolvesEnv covers the file-less config path (the ECS GENAI_OTEL_BRIDGE_CONFIG delivery):
 // LoadBytes parses raw YAML in-memory and resolves ${ENV} secret refs, identically to Load — so no temp
 // file is needed and a read-only root filesystem is fine.

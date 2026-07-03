@@ -40,7 +40,9 @@ type Coordinator struct {
 	now           Clock
 }
 
-// New builds a Coordinator. lease > renewDeadline > 0 and retry > 0 (validated upstream).
+// New builds a Coordinator. lease > renewDeadline > retry > 0 (validated upstream by config.Validate,
+// which rejects retry_period >= renew_deadline — a retry cadence at/above the deadline guarantees a
+// recurring split-brain window — and enforces the full lease > renew_deadline ordering).
 func New(db UpdateAPI, table, pk, identity string, lease, renewDeadline, retry time.Duration) *Coordinator {
 	return &Coordinator{db: db, table: table, pk: pk, identity: identity, lease: lease, renewDeadline: renewDeadline, retry: retry, now: time.Now}
 }

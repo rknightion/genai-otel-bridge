@@ -66,6 +66,23 @@ const (
 	defaultDynamoDBRetryPeriod   = 2 * time.Second
 )
 
+// Rate-limit defaults — applied per source in Load when rps/burst is unset (0). They mirror the
+// RateLimitConfig helm:"default=..." render tags (the chart SSOT). A hand-written or env-injected
+// config that omits the rate_limit block must NOT reach rate.NewLimiter with burst 0 — burst 0 makes
+// x/time/rate reject every Wait(1), so the loop never collects a single sample (issue #39). RPS and
+// Burst default INDEPENDENTLY so `rps: 5` with burst omitted still works.
+const (
+	defaultRateLimitRPS   = 1
+	defaultRateLimitBurst = 3
+)
+
+// defaultBucketSettle is applied per loop in Load when bucket_settle is unset (0). It mirrors the
+// LoopConfig.BucketSettle helm:"default=10m" render tag (live-measured; 3m was insufficient). 0 is not
+// a safe silent default: settle=0 emits a bucket the instant it closes — before late arrivals settle
+// it — breaking the emit-once-after-settle correctness leg (issue #52). Inert for aggregate-now loops
+// (window==0) which ignore settle; a time-bucketed source still fail-fasts on window==0 in its own New.
+const defaultBucketSettle = 10 * time.Minute
+
 // Duration is a time.Duration that yaml.v3 can decode from a human string like "60s" or "50m".
 // yaml.v3 does not natively decode duration strings into time.Duration, so we wrap it.
 type Duration time.Duration
@@ -408,6 +425,23 @@ func LoadBytes(raw []byte) (*Config, error) {
 			cfg.HA.DynamoDB.RetryPeriod = Duration(defaultDynamoDBRetryPeriod)
 		}
 	}
+	for si := range cfg.Sources {
+		// #39: default rps/burst independently so an omitted rate_limit block (or a partial one) never
+		// reaches rate.NewLimiter with burst 0. Mirrors the RateLimitConfig helm render tags.
+		if cfg.Sources[si].RateLimit.RPS == 0 {
+			cfg.Sources[si].RateLimit.RPS = defaultRateLimitRPS
+		}
+		if cfg.Sources[si].RateLimit.Burst == 0 {
+			cfg.Sources[si].RateLimit.Burst = defaultRateLimitBurst
+		}
+		// #52: bucket_settle unset (0) breaks emit-once-after-settle. Apply the field's documented default.
+		for ln, lp := range cfg.Sources[si].Loops {
+			if lp.BucketSettle == 0 {
+				lp.BucketSettle = Duration(defaultBucketSettle)
+				cfg.Sources[si].Loops[ln] = lp
+			}
+		}
+	}
 	return &cfg, nil
 }
 
@@ -525,21 +559,41 @@ func (c *Config) Validate(known map[string]struct{}) error {
 		errs = append(errs, errors.New("ha.dynamodb.table is required when coordinator|checkpoint is dynamodb"))
 	}
 	if c.HA.Coordinator == "dynamodb" {
+		// #38: negative durations slip past the ordering checks below (e.g. lease=-5s <= renew=-10s is
+		// false, so `lease > renew` wrongly "passes"). Reject them explicitly first.
+		if c.HA.DynamoDB.LeaseDuration < 0 || c.HA.DynamoDB.RenewDeadline < 0 || c.HA.DynamoDB.RetryPeriod < 0 {
+			errs = append(errs, errors.New("ha.dynamodb.lease_duration/renew_deadline/retry_period must each be >= 0"))
+		}
 		if c.HA.DynamoDB.LeaseDuration <= c.HA.DynamoDB.RenewDeadline {
 			errs = append(errs, errors.New("ha.dynamodb.lease_duration must be > renew_deadline"))
 		}
 		if c.HA.DynamoDB.RetryPeriod <= 0 {
 			errs = append(errs, errors.New("ha.dynamodb.retry_period must be > 0"))
 		}
+		// #46: the DynamoDB renew ticker cadence IS retry_period (coordinate/dynamodb renew loop). With
+		// retry_period >= renew_deadline the lock can expire between renew ticks on every term → the
+		// standby takes over while the leader still runs (recurring split-brain + leadership flapping).
+		// client-go enforces the analogous renewDeadline > retryPeriod invariant for the k8s path; the
+		// DynamoDB params are operator-configurable so the same ordering must be validated here.
+		if c.HA.DynamoDB.RetryPeriod >= c.HA.DynamoDB.RenewDeadline {
+			errs = append(errs, errors.New("ha.dynamodb.retry_period must be < renew_deadline (retry_period is the renew cadence; retry >= renew lets the lock expire between renews → recurring split-brain)"))
+		}
 	}
 	errs = append(errs, validateEmitEndpoint("emit.telemetry.otlp", c.Emit.Telemetry.OTLP)...) // [CP-M7]
 	// [round3 MEDIUM-1] the optional self-telemetry endpoint carries the same instance_id:token Basic
 	// auth, so the same cleartext-credential gate applies.
 	if c.Emit.Self != nil {
+		// #41: the documented endpoint fallback to emit.telemetry applies ONLY when the whole emit.self
+		// block is absent (nil). A present emit.self with an empty otlp.endpoint does NOT fall back — it
+		// exports to a malformed URL (http:///v1/metrics) and the entire self-telemetry plane dies
+		// silently. validateEmitEndpoint below no-ops on an empty endpoint, so require it explicitly here.
+		if c.Emit.Self.OTLP.Endpoint == "" {
+			errs = append(errs, errors.New("emit.self.otlp.endpoint is required when the emit.self block is present (remove emit.self to fall back to emit.telemetry)"))
+		}
 		errs = append(errs, validateEmitEndpoint("emit.self.otlp", c.Emit.Self.OTLP)...)
 		// 1DPM: the self-obs PeriodicReader must not push faster than the configured DPM floor
-		// (60s / max_dpm). Unset interval ⇒ provider default (the floor). Guard maxDPM≥1 so a
-		// directly-constructed Config (test path, no Load) can't divide by zero.
+		// (60s / max_dpm). Unset interval ⇒ 60s (always ≥ the floor for max_dpm≥1). Guard maxDPM≥1
+		// so a directly-constructed Config (test path, no Load) can't divide by zero.
 		maxDPM := c.Governance.MaxDPM
 		if maxDPM < 1 {
 			maxDPM = 1
@@ -597,9 +651,32 @@ func (c *Config) Validate(known map[string]struct{}) error {
 		if s.Auth.Header == "" || s.Auth.Value == "" { // [CP-H7]
 			errs = append(errs, fmt.Errorf("source %q: auth.header and auth.value are required", s.SourceInstance))
 		}
+		// #39: burst 0 makes x/time/rate reject every request (Wait(1) > burst) — the loop never
+		// collects. Load defaults an unset (0) rps/burst; a negative or struct-built zero is caught here
+		// before it can reach rate.NewLimiter at construction.
+		if s.RateLimit.RPS <= 0 {
+			errs = append(errs, fmt.Errorf("source %q: rate_limit.rps must be > 0 (unset ⇒ default %d applied in Load), got %v", s.SourceInstance, defaultRateLimitRPS, s.RateLimit.RPS))
+		}
+		if s.RateLimit.Burst < 1 {
+			errs = append(errs, fmt.Errorf("source %q: rate_limit.burst must be >= 1 (burst 0 fails every request; unset ⇒ default %d applied in Load), got %d", s.SourceInstance, defaultRateLimitBurst, s.RateLimit.Burst))
+		}
 		for name, lp := range s.Loops {
 			if !lp.Enabled {
 				continue
+			}
+			// #38: config.Duration decodes negative strings ("-10m") fine, and negative settle/backfill
+			// silently corrupt the collect window / backfill floor (a negative settle even LOOSENS the M3
+			// window check below). Reject any negative per-loop duration up front, naming the field.
+			for _, f := range []struct {
+				name string
+				v    Duration
+			}{
+				{"cadence", lp.Cadence}, {"window", lp.Window}, {"bucket_settle", lp.BucketSettle},
+				{"bootstrap_lookback", lp.BootstrapLookback}, {"max_backfill", lp.MaxBackfill},
+			} {
+				if f.v < 0 {
+					errs = append(errs, fmt.Errorf("%s/%s: %s must be >= 0, got %s", s.SourceInstance, name, f.name, time.Duration(f.v)))
+				}
 			}
 			if time.Duration(lp.Cadence) < minCadence {
 				errs = append(errs, fmt.Errorf("%s/%s: cadence %s < floor %s", s.SourceInstance, name, time.Duration(lp.Cadence), minCadence))

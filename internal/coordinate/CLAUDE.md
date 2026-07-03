@@ -1,6 +1,7 @@
 # internal/coordinate — leader election (single active replica)
 
-`coordinate.go` defines the seam + `Noop`; `lease/` implements it on k8s client-go leader-election.
+`coordinate.go` defines the seam + `Noop`; `lease/` implements it on k8s client-go leader-election;
+`dynamodb/` implements it on a single DynamoDB lock item (ECS deployment target).
 
 ```go
 type Coordinator interface {
@@ -12,7 +13,25 @@ func EpochFromContext(ctx) int64
 
 `onElected` runs only while leader; `leaderCtx` is cancelled on loss. The **lease epoch is passed via
 `leaderCtx`** (so the checkpoint write fence reads it without changing the frozen `onElected`
-signature). `Noop` always leads with epoch 1 (single-replica/dev).
+signature). `Noop` leads with epoch `max(1, Epoch)` (single-replica/dev; the zero value ⇒ 1).
+
+## Migration trap: coordinator → `none` over a surviving checkpoint (#45)
+
+Switching `ha.coordinator` to `none` while keeping a **durable, shared** checkpoint store
+(`configmap`/`dynamodb`) that a prior HA (`lease`/`dynamodb`) deployment advanced to **epoch ≥ 2**
+permanently fences every watermark write: `CheckMonotonic` rejects `incoming.Epoch < stored.Epoch`, the
+fenced `Save` is benign (`ErrStaleWrite`, exempt from the degrade counter), so the loop never backs off —
+it re-collects and re-emits the same window at full cadence forever. It is **alertable, not silent**
+(`checkpoint_fenced` fires and `window_lag` climbs) but does **not self-heal**: recovery is manual —
+delete the checkpoint objects. This is the single-replica analogue of the dynamodb-outage fence hazard
+in `ARCHITECTURE.md` ledger #17.
+- **Mechanism:** `coordinate.NoopWithEpoch(e)` stamps `max(1, e)`, so constructing the Noop with a
+  baseline ≥ the surviving stored epoch lets writes succeed. Single-replica has exactly one writer, so a
+  higher epoch carries no cross-writer risk. (`buildHA` cannot read the stored epoch — checkpoint keys
+  aren't known until the source graph is built — so it currently WARNs loudly at startup instead of
+  auto-adopting the stored epoch; full auto-heal would wire the max-stored-epoch read through `app`.)
+- Do **not** stamp a maximal sentinel epoch to dodge the fence: it re-creates the trap in the
+  `none → lease` direction (a fresh lease's low epoch would then be fenced forever).
 
 ## lease/ gotchas
 
@@ -24,9 +43,36 @@ signature). `Noop` always leads with epoch 1 (single-replica/dev).
   finishes. The fix tracks `elected.Store(true)` inside the callback, closes `leadDone` when it
   finishes, and after `Run()` returns waits on `leadDone` (checking `elected.Load() || IsLeader()`) so
   re-election can't race the old leader's drain. Preserve this — `barrier_test.go` guards it.
-- **`ReleaseOnCancel = false`:** on SIGTERM the lease is *not* released — it expires, letting the leader
-  finish persisting watermarks and the standby take over only after a clean drain.
+- **`ReleaseOnCancel = false`:** on SIGTERM the lease is *not* released — it expires, so a standby
+  doesn't acquire mid-drain. This does **not** mean the old leader keeps working during the grace
+  window: `leaderCtx` is cancelled immediately, in-flight collect/emit is aborted via ctx, queued
+  batches are dropped, and the checkpoint commit path refuses any post-cancel `Save` (see
+  `internal/checkpoint` / `internal/schedule`). Nothing new persists after cancel — the grace window
+  only bounds how long the SIGKILL takes to arrive, it does not let watermarks keep advancing.
 - `epoch()` reads `Lease.Spec.LeaseTransitions` once at election as a coarse monotonic fence (returns 0
   + warns on GET error; never guesses). The real in-flight fence is leaderCtx cancellation.
+- **Leadership-loss exit is asymmetric between backends.** `lease.Coordinator.Run` returns `ctx.Err()`
+  after `le.Run` stops, which is `nil` when leadership was lost (renewal lapse) while the root ctx is
+  still alive — `main`'s `err != nil && ctx.Err() == nil` fatal guard does not fire, so the process logs
+  and exits **0**, relying on the container orchestrator to restart it and rejoin the election. The
+  `dynamodb/` coordinator instead re-enters its own `acquire` loop in-process on leadership loss (no
+  process exit) — see `dynamodb/` below.
 
-RBAC: `coordination.k8s.io/leases` get/create/update in the tool namespace.
+## dynamodb/ gotchas
+
+- **Single lock item, CAS acquire + monotonic `fence` epoch.** `acquire` takes an empty/expired item
+  with a conditional `UpdateItem` and bumps `fence` (the `LeaseTransitions` analogue); `renew` extends
+  `expiresAtMs` only while `holder`+`fence` still match. The item is never given a DynamoDB TTL — expiry
+  is by the `expiresAtMs` comparison only, so a long full outage can't reset `fence` back below a
+  surviving checkpoint's epoch.
+- **In-process re-acquire loop (unlike `lease/`):** `Run` is a `for` loop — on leadership loss (or a
+  failed acquire) it retries every `retry` period without returning, as long as the root ctx is alive.
+  It only returns (with `ctx.Err()`) when the context is cancelled.
+- **Clock-sensitive failover, NOT identical to the K8s Lease path.** `acquire` compares the CANDIDATE's
+  wall clock against an `expiresAtMs` written from the LEADER's wall clock — absolute inter-node clock
+  skew (not just drift) affects failover timing, bounded by roughly `lease_duration - renew cadence`.
+  Depends on NTP-synced hosts. See `ARCHITECTURE.md` decision ledger #17.
+
+RBAC: `coordination.k8s.io/leases` get/create/update in the tool namespace (lease backend). The
+dynamodb backend instead needs `dynamodb:UpdateItem`/`GetItem` on the lock+checkpoint table (IAM, not
+k8s RBAC).

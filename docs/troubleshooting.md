@@ -46,8 +46,8 @@ for one or more loops. `genai_otel_bridge_last_success_timestamp_seconds` is not
   retry budget was exhausted.
 - **Source API slow or unavailable:** `genai_otel_bridge_upstream_request_duration_seconds` shows
   elevated latency or errors. A sustained outage fills the queue and blocks new collection.
-- **Checkpoint save failing:** `genai_otel_bridge_emit_errors_total{kind="checkpoint_*"}` is
-  non-zero. The watermark was emitted but not saved — the loop appears stuck even though data
+- **Checkpoint save failing:** `genai_otel_bridge_emit_errors_total{kind=~"checkpoint_(load|save|fenced)"}`
+  is non-zero. The watermark was emitted but not saved — the loop appears stuck even though data
   is flowing. Check ConfigMap RBAC.
 - **Queue full:** `genai_otel_bridge_queue_depth_ratio > 0` sustained — see
   [Queue backpressure](#queue-backpressure).

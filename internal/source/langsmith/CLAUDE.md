@@ -5,10 +5,11 @@ error/streaming rates, numeric feedback scores) from LangSmith's `GET /api/v1/se
 `langsmith.go` (Config/New/source/loop/fetch/pagination), `derive.go` (pure response→samples + the
 nullable stat fields), `money.go` (number-or-string cost), `testhooks.go` (`SetLoopClockForTest`).
 
-Two loops behind the common interface, sharing ONE httpx client (one rate limiter — the LangSmith
-~10 req/10s budget is tenant-wide): **`sessions`** (metrics, below) and **`runs`** (per-run content-free
-OTLP logs → Loki; see the runs section). `New` builds whichever are enabled; `newClient` +
-`newSessionsLoop` + `newRunsLoop` are the constructors.
+Three loops behind the common interface, sharing ONE httpx client (one rate limiter — the LangSmith
+~10 req/10s budget is tenant-wide): **`sessions`** (metrics, below), **`runs`** (per-run content-free
+OTLP logs → Loki; see the runs section), and **`usage`** (platform cost-driver metrics — traces/spans
+ingested per project, tagged by retention tier; see the usage section). `New` builds whichever are
+enabled; `newClient` + `newSessionsLoop` + `newRunsLoop` + `newUsageLoop` are the constructors.
 
 ## Aggregate-now, NOT time-bucketed (the load-bearing difference vs portkey)
 
@@ -111,7 +112,10 @@ machine + `runsCursor`), `runs_client.go` (`queryRuns` + content-free `select` +
     dropped) `*_token_details`/`*_cost_details`; ⚠ `share_token` is an access token — do NOT opt in.
   - **C — content / free-text** (opt-in = explicit content decision): `inputs`/`outputs`/`messages`/
     `events`/`inputs_preview`/`outputs_preview`/`extra`/`serialized`/`manifest`/`*_s3_urls`/`error`/
-    `name`. (`inputs`/`outputs`/`messages` are hard-denied and CANNOT be opted in; the rest can.)
+    `name`. (`inputs`/`outputs`/`messages` AND `inputs_preview`/`outputs_preview` are hard-denied and
+    CANNOT be opted in — previews are truncated renderings of the actual prompt/response, i.e. LLM content,
+    so they were moved onto the never-subtractable floor `source.AbsoluteNeverDenyKeys` and are rejected
+    fail-fast at config load (#95); `*_s3_urls` are hard-denied via `hardDeniedRunsFields`; the rest can.)
   - INDEXED (Loki stream-label) opt-in IS now offered via `settings.extra_indexed_fields` (csv): routes a
     content-free field into the strip's INDEXED tier (`withExtraIndexedFields`) and the composition root
     auto-allow-lists it in the guard (so a promotion can't be silently dropped). Hard-denied content/floor
@@ -127,7 +131,7 @@ machine + `runsCursor`), `runs_client.go` (`queryRuns` + content-free `select` +
   an unstorable old span loudly.
 - **Decoupled knobs** (`settings`, no `internal/config` change): `session_ids` | `session_filter`
   (one req'd) `max_sessions`(100) `session_refresh`(5m) `window`(1h) `settle`(10m) `max_backfill`(24h)
-  `page_size`(≤100) `max_pages_per_window`(50) `max_response_bytes`(32MiB) `root_only`(false)
+  `page_size`(≤100) `max_pages_per_window`(100) `max_response_bytes`(32MiB) `root_only`(false)
   `run_type`("") `extra_record_fields`(csv, empty — opt-in RECORD fields, see content governance)
   `extra_indexed_fields`(csv, empty — opt-in INDEXED/stream-label fields; auto-allow-listed, GS1-gated).
   `data_source_type` is inert on 0.13.5 (probed) — no knob. **GS1 prereq** (not a code blocker): the
@@ -135,8 +139,30 @@ machine + `runsCursor`), `runs_client.go` (`queryRuns` + content-free `select` +
 - **Content-filtering POLICY is a `followup.md` item** pending the customer's requirements — the loop is
   content-free by default (safe), but whether to strip more/less (or ever emit content) is deferred.
 
+## usage loop (platform cost-driver metrics — `usage.go` + `usage_derive.go`)
+
+A THIRD aggregate-now snapshot loop (landed 2026-07-02), mirroring the sessions loop's shape but
+answering a different question: not LLM/token cost, but the **platform** usage that drives LangSmith's
+own bill (trace/span ingestion + retention tier).
+
+- **Emitted metrics** (`{prefix}_usage_traces`, `{prefix}_usage_spans` — both gauges, per-session/
+  per-project, labelled by the session dimension AND `retention_tier`): `_usage_traces` is the billable
+  unit (root runs, from `session.run_count`); `_usage_spans` is the storage/"excessive spans" driver
+  (all runs, from one `runs/stats` call per project per poll — see `emit_span_counts` below).
+  `retention_tier` is `longlived` (the expensive ~400d tier) / `shortlived` (~14d) / `unknown` (empty
+  `trace_tier`) — the billing multiplier.
+- **Snapshot, not time-bucketed** — same aggregate-now model as `sessions`: no settle/bucket-revision/
+  gap-free backfill; every sample stamped at `now.Truncate(1m)` for 1DPM dedup.
+- **Settings knobs** (`settings`, no `internal/config` change): `stats_window`(10m, defaults to the
+  loop's own cadence so windows tile — `sum_over_time` ≈ period total) `session_filter` (bounds which
+  projects are in scope — same `eq(name, "...")` LangSmith filter-expression grammar as sessions/runs)
+  `session_label_value`("id", default; "name" = human/ephemeral) `page_limit`(100, `/sessions`
+  offset/limit page size) `max_sessions`(1000, hard cap on projects per Collect) `emit_span_counts`
+  (`true` by default — set `false` to emit only trace counts and skip the extra `runs/stats` call per
+  project per poll; bound the fan-out with `session_filter`/`max_sessions`).
+
 ## Chart config surfacing
 
-All `sessions` + `runs` settings knobs are surfaced in the Helm chart example block via
+All `sessions` + `runs` + `usage` settings knobs are surfaced in the Helm chart example block via
 `langsmith.ExampleSource()` + `langsmith.ExampleSettingsComments()` (every key at its package default,
 with per-key head-comments). `make generate` regenerates `deploy/helm/values.yaml`.

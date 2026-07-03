@@ -1,6 +1,7 @@
 # internal/checkpoint — durable watermark store + write fence
 
-`checkpoint.go` defines the seam and the fence; `file/` (dev) and `configmap/` (k8s prod) implement it.
+`checkpoint.go` defines the seam and the fence; `file/` (dev), `configmap/` (k8s prod), and
+`dynamodb/` (ECS deployment target) implement it.
 
 ```go
 type Checkpointer interface {
@@ -29,8 +30,17 @@ A demoted leader cannot move the frontier backward or double-advance.
   RMW loop (M1). Corrupt value → `Load` errors and `Save` refuses to overwrite (CP-C10, never clobber).
   Data keys are sanitized to `[-._a-zA-Z0-9]+` + a 12-char SHA256 suffix of the logical key (collision-
   free, stable across restarts). Total payload bounded < 900 KiB (headroom under the 1 MiB cap).
+- **`dynamodb/`** — single DynamoDB item per checkpoint key (`pk = <keyPrefix>ckpt#<CheckpointKey>`),
+  the ECS backend. `Save` mirrors the ConfigMap RMW exactly: `GetItem` → `CheckMonotonic` → conditional
+  `PutItem` gated on a numeric `version` attribute (optimistic concurrency; retries ≤5 on a condition
+  failure, same shape as the ConfigMap's `resourceVersion` 409 retry). `Watermark.Time` is stored as an
+  RFC3339Nano string (round-trips a zero time). A present-but-non-numeric `version` is treated as item
+  corruption (error); a missing `version` (hand-seeded/migrated item) defaults to 0 and the write
+  upgrades it via `attribute_not_exists(version)` rather than spinning forever on `version = 0`.
 
-RBAC: `configmaps` get/create/update in the tool namespace (for the configmap backend).
+RBAC: `configmaps` get/create/update in the tool namespace (for the configmap backend). The dynamodb
+backend instead needs `dynamodb:GetItem`/`PutItem` on the lock+checkpoint table (IAM, not k8s RBAC) —
+see `deploy/ecs/terraform/README.md`.
 
 Tests: `wm(sec, epoch)` helper; fence cases (forward same-epoch, equal-time reject, backward reject,
 higher-epoch accept, stale-epoch reject); persistence-across-reopen; corruption; injected-409 retry;

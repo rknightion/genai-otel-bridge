@@ -7,17 +7,19 @@ to downstream slowness.
 
 > **Status:** the integrator is feature-complete across **both vendors × both planes** and green.
 > Portkey: `analytics` + `groups` → OTLP metrics, `logs_export` → OTLP logs. LangSmith: `sessions`/eval
-> → OTLP metrics, `runs` → OTLP logs. Plus composition root, binary, HA, checkpointing, acceptance
-> tests, hardened Helm chart, configurable content governance, and durability tuning (metrics
-> `max_backfill` 90m ≤ Mimir 2h OOO; logs 24h ≤ Loki 7d; too-old honesty path built+tested both planes).
-> Every Portkey + LangSmith settings knob is surfaced in `values.yaml` at its default with a comment.
-> **ECS deployment target (branch `feat/ecs-dynamodb-support`, PR):** runs production-grade on AWS ECS
-> as well as Kubernetes — **DynamoDB-for-both** HA behind the frozen seams (`ha.coordinator=dynamodb` +
-> `ha.checkpoint=dynamodb` + the `ha.dynamodb.*` block; one table backs the CAS lock + the checkpoint),
-> a reusable Terraform module in `deploy/ecs/terraform/` (Fargate default, EC2 via `launch_type`), a
-> `-healthcheck` binary mode, and a `dynamodb-local` CI gate (`tf-validate` + `dynamodb-backends` job).
-> See `ARCHITECTURE.md` decision ledger #17. (This work uses a branch+PR by exception to the usual
-> direct-to-main convention — it's a big OSS seam change.)
+> → OTLP metrics, `usage` (platform cost-driver metrics) → OTLP metrics, `runs` → OTLP logs. Plus
+> composition root, binary, HA, checkpointing, acceptance tests, hardened Helm chart, configurable
+> content governance, and durability tuning (metrics `max_backfill` 90m ≤ Mimir 2h OOO; logs 24h ≤
+> Loki 7d; too-old honesty path built+tested both planes). Every Portkey + LangSmith settings knob is
+> surfaced in `values.yaml` at its default with a comment.
+> **ECS deployment target:** runs production-grade on AWS ECS as well as Kubernetes — **DynamoDB-for-both**
+> HA behind the frozen seams (`ha.coordinator=dynamodb` + `ha.checkpoint=dynamodb` + the `ha.dynamodb.*`
+> block; one table backs the CAS lock + the checkpoint), a reusable Terraform module in
+> `deploy/ecs/terraform/` (Fargate default, EC2 via `launch_type`), a `-healthcheck` binary mode, and a
+> `dynamodb-local` CI gate (`tf-validate` + `dynamodb-backends` job). Merged to `main` via PR #13
+> (2026-06-28; squash-merged as commit f6f0d61) plus follow-up commits — this was built on a branch+PR
+> by exception to the usual direct-to-main convention (a big OSS seam change), but the feature itself is
+> shipped, not in flight. See `ARCHITECTURE.md` decision ledger #17.
 > **In flight (3 lanes):** in-cluster cleartext-emit opt-out (`emit.*.otlp.allow_insecure`, CP-M7);
 > Portkey `groups` cost/metadata flags (live-probe confirmed cost=**cents**, metadata dim field=
 > `metadata_value`); config-driven indexed/stream-label opt-in (`governance.allow_label_keys`).
@@ -120,10 +122,11 @@ multi-arch image + Helm chart to GHCR. There is no manual `make changelog` / `gi
   to the GitHub Release; the image bakes notices into `/licenses/`. Generated from the real import
   graph (`go-licenses`/`syft`), they churn on every dep bump, so they are deliberately kept out of
   `make gate` to preserve Renovate automerge. See `LICENSING.md`.
-- **Merging the release PR:** release-please opens it with `GITHUB_TOKEN`, so CI does not auto-run on it
-  (GitHub's recursion guard) — merge it as a repo admin (branch protection `enforce_admins=false` lets
-  admins bypass); its content was already validated when the underlying commits landed. To make release
-  PRs run CI like any other (and drop the bypass), give the action a fine-grained PAT via a `token:` input.
+- **Merging the release PR:** the workflow passes a fine-grained PAT (`token:
+  ${{ secrets.RELEASE_PLEASE_TOKEN }}`) to `googleapis/release-please-action`, so the release PR is
+  PAT-authored, not `GITHUB_TOKEN`-authored — GitHub's recursion guard does not apply, and CI runs on
+  it automatically like any other PR. Merge policy is wait-for-green (the `ci-success` check), same as
+  any other PR; there is no admin-bypass justification here anymore.
 - `config-file` = `release-please-config.json`, `manifest-file` = `.release-please-manifest.json`
   (tracks the last released version). `publish.yml` is also `workflow_dispatch`-able for a manual re-publish.
 - A `forbidden-words` gate (`scripts/forbidden-words.sh`) guards against deployment-specific identifiers

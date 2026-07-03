@@ -4,10 +4,11 @@
 # creates the GitHub Release (notes = that version's changelog section), and triggers the publish below.
 #
 # NB: publish runs HERE, gated on release_created — NOT via the v* tag-push event — because a tag created
-# with GITHUB_TOKEN does not trigger other workflows. Likewise the release PR is opened with GITHUB_TOKEN,
-# so CI does not auto-run on it; merge it as a repo admin (branch protection's enforce_admins=false lets
-# admins bypass) — its content (changelog + version bump) was already validated when the underlying
-# commits landed.
+# with GITHUB_TOKEN does not trigger other workflows. The release PR is opened with a fine-grained PAT
+# (secrets.RELEASE_PLEASE_TOKEN, see the token: input below), so — unlike a GITHUB_TOKEN-authored PR — CI
+# DOES run on it automatically (a PAT identity is a trusted author). Merge it once its checks are green;
+# branch protection still applies (enforce_admins=false lets an admin bypass if needed), and its content
+# (changelog + version bump) was already validated when the underlying commits landed.
 name: release-please
 
 on:

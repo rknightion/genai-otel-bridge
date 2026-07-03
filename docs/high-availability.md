@@ -53,11 +53,20 @@ allowing re-election — ensuring the old leader's drain completes before a new 
 
 ### SIGTERM behaviour
 
-On SIGTERM, the leader **does not release the Lease** — it lets the Lease expire. This ensures
-the leader can finish persisting watermarks before the standby takes over. The standby must
-wait a full `LeaseDuration` before acquiring the Lease, which gives the draining leader time
-to write its final checkpoints. The Helm chart sets `terminationGracePeriod: 300s` to cover
-the emit-retry budget.
+On SIGTERM, the leader **does not release the Lease** — it lets the Lease expire, so a standby
+can't acquire it mid-drain. This does **not** mean the leader keeps working during the grace
+window: `leaderCtx` is cancelled immediately, in-flight collect/emit is aborted, any queued
+batches are dropped, and the checkpoint commit path refuses any write after cancellation. Nothing
+new is persisted after SIGTERM — the grace window only bounds how long the process has before
+SIGKILL, not a drain-to-completion period. The Helm chart sets `terminationGracePeriod: 300s`
+to comfortably exceed the emit-retry budget before the container is killed.
+
+**Leadership lost while running is different from a SIGTERM shutdown.** If the lease-based
+coordinator loses leadership (e.g. a renewal lapse) while the process's root context is still
+alive, `Run` returns a nil error, so the binary logs and exits **0** rather than crash-looping —
+it relies on the container orchestrator to restart it and rejoin the election. The DynamoDB
+coordinator (ECS) instead re-enters its own acquire loop in-process on leadership loss, without
+exiting.
 
 ---
 
@@ -91,11 +100,31 @@ ha:
   checkpoint: file
 ```
 
+**DynamoDB backend (AWS ECS deployment target)** — a single DynamoDB item per checkpoint key.
+`Save` mirrors the ConfigMap RMW: `GetItem` → `CheckMonotonic` → a conditional `PutItem` gated on
+a `version` attribute, retried up to five times on a condition failure. The same table also backs
+the leader lock (`ha.dynamodb.table`, CAS acquire + a monotonic `fence` epoch — the DynamoDB
+analogue of `LeaseTransitions`). Requires `coordinator: dynamodb` (they share the table).
+
+```yaml
+ha:
+  coordinator: dynamodb
+  checkpoint: dynamodb
+  dynamodb:
+    table: genai-otel-bridge-ha
+    region: eu-west-1
+```
+
+See the [Configuration reference](./config-reference.md#ha) for every `ha.dynamodb.*` key and the
+[ECS Terraform module](https://github.com/rknightion/genai-otel-bridge/blob/main/deploy/ecs/terraform/README.md)
+for a full deployment example. Failover timing on this backend depends on inter-node clock
+synchronisation (NTP) — see `ARCHITECTURE.md` decision ledger #17.
+
 ### Checkpoint key
 
 Each loop has a unique `CheckpointKey` that includes:
 
-- `SourceInstance` — the `id:` from the source config (e.g. `portkey-prod-eu`)
+- `SourceInstance` — the `source_instance:` field from the source config (e.g. `portkey-prod-eu`)
 - `Loop` — the loop name (e.g. `analytics`, `runs`)
 - `OutputFingerprint` — a hash of the emitted series set and naming config
 

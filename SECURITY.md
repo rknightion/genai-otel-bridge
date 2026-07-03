@@ -3,12 +3,12 @@
 ## Supported versions
 
 `genai-otel-bridge` follows semantic versioning. Security fixes are applied to the latest
-released `2.x` minor and shipped in a new patch release. Older majors are not maintained.
+released `3.x` minor and shipped in a new patch release. Older majors are not maintained.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 2.x     | :white_check_mark: |
-| < 2.0   | :x:                |
+| 3.x     | :white_check_mark: |
+| < 3.0   | :x:                |
 
 ## Reporting a vulnerability
 

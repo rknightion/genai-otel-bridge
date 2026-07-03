@@ -5,12 +5,13 @@ description: How genai-otel-bridge collects and emits telemetry from the LangSmi
 
 # LangSmith
 
-genai-otel-bridge collects operational telemetry from LangSmith via two independent loops:
-**`sessions`** (per-session aggregate metrics) and **`runs`** (content-free per-run log records).
-Each loop is independently enabled via its own `loops.<name>` config block.
+genai-otel-bridge collects operational telemetry from LangSmith via three independent loops:
+**`sessions`** (per-session aggregate metrics), **`runs`** (content-free per-run log records), and
+**`usage`** (platform cost-driver metrics — trace/span ingestion by retention tier). Each loop is
+independently enabled via its own `loops.<name>` config block.
 
 !!! info "Content-free by design"
-    Neither loop requests or emits prompt inputs, output completions, or message bodies.
+    No loop requests or emits prompt inputs, output completions, or message bodies.
     The `runs` loop drops `inputs`, `outputs`, and `messages` by its default-deny allow-list;
     they cannot be opted in. See [Content Governance](./governance.md).
 
@@ -69,10 +70,10 @@ sources:
       sessions:
         enabled: true
         cadence: 60s
-        window: 1h
         metric_prefix: langsmith
         settings:
-          session_filter: "my-app"
+          stats_window: 1h
+          session_filter: eq(name, "my-project")
           session_label_value: id
           emit_feedback: false
 ```
@@ -123,22 +124,66 @@ loops:
     enabled: true
     cadence: 60s
     settings:
-      session_filter: "my-app"
+      session_filter: eq(name, "my-project")
       max_sessions: 100
       session_refresh: 5m
       window: 1h
       settle: 10m
       max_backfill: 24h
       page_size: 100
-      max_pages_per_window: 50
+      max_pages_per_window: 100
       root_only: false
 ```
 
 ---
 
+## Usage loop
+
+The usage loop is a snapshot loop (same aggregate-now model as `sessions`) that emits **platform**
+cost-driver metrics — not LLM/token cost, but the trace/span ingestion volume that drives LangSmith's
+own bill. It polls the same `/sessions` endpoint as `sessions` plus, by default, one `runs/stats` call
+per project per poll.
+
+### Emitted metrics
+
+With the default `metric_prefix: langsmith`, the usage loop emits one series per session (project)
+per metric, labelled by the session dimension AND `retention_tier`:
+
+| Metric | Unit | Description |
+|--------|------|-------------|
+| `langsmith_usage_traces` | — | Per-project trace (root run) count — the billable ingestion unit |
+| `langsmith_usage_spans` | — | Per-project span (all-run) count — the storage/"excessive spans" driver |
+
+`retention_tier` is `longlived` (the expensive long-retention tier, ~400 days), `shortlived`
+(~14 days), or `unknown` (LangSmith did not report a tier for that project).
+
+### Example usage config
+
+```yaml
+loops:
+  usage:
+    enabled: true
+    cadence: 10m
+    metric_prefix: langsmith
+    settings:
+      stats_window: 10m
+      session_filter: eq(name, "my-project")
+      session_label_value: id
+      page_limit: 100
+      max_sessions: 1000
+      emit_span_counts: true
+```
+
+`stats_window` defaults to the loop's own cadence so successive windows tile (`sum_over_time`
+approximates the period total). Set `emit_span_counts: false` to emit only `langsmith_usage_traces`
+and skip the extra `runs/stats` call per project per poll; bound the fan-out with `session_filter`/
+`max_sessions`.
+
+---
+
 ## Content governance
 
-Both loops share the same content governance stack: a default-deny field strip plus the
+All three loops share the same content governance stack: a default-deny field strip plus the
 `source.Guard` defence-in-depth backstop. For the full model see
 [Content Governance](./governance.md).
 

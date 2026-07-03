@@ -319,10 +319,12 @@ module "service" {
       # Never appear in plaintext in the task definition or CloudWatch logs.
       secrets = local.container_secrets
 
-      # stopTimeout=120: Fargate's maximum (AWS hard limit). Gives the leader up to 120 s to
-      # complete the in-flight emit + final checkpoint Save before SIGKILL. The DynamoDB lock is
-      # NOT released on shutdown (no-release model — §5 design spec); the lock expires naturally
-      # and the standby acquires within ~lease_duration. On EC2 there is no 120 s cap.
+      # stopTimeout=120: Fargate's maximum (AWS hard limit). On SIGTERM the root context is cancelled,
+      # which ABORTS any in-flight emit and checkpoint Save (deliberately — the design does NOT drain or
+      # persist a final watermark on the way out; a partial window is simply re-pulled by the next
+      # leader from the last committed watermark). stopTimeout just bounds the wait before SIGKILL. The
+      # DynamoDB lock is NOT released on shutdown (no-release model — §5 design spec); it expires
+      # naturally and the standby acquires within ~lease_duration. On EC2 there is no 120 s cap.
       # Key is camelCase (stopTimeout) as required by the container-definition sub-module schema.
       stopTimeout = 120
 

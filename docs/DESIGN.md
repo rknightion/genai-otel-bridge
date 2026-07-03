@@ -389,9 +389,13 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
 - **F22 Two loops emitting the same series (M7)** → a **series-name ownership registry** (one name →
   one loop) fails startup on overlap (§4.1), so two loops can never write the same `(series, ts)`
   (which would be a data-dependent duplicate-timestamp clash config-validation alone can't catch).
-- **F23 Graceful shutdown (SIGTERM)** → stop accepting new ticks, drain in-flight emits within a grace
-  window, flush watermarks. **Lease-release ordering: see F35** (release only after watermarks are
-  persisted, else don't release).
+- **F23 Graceful shutdown (SIGTERM)** → stop accepting new ticks; `leaderCtx` is cancelled immediately
+  (hard-cancel, not a drain-to-completion window) — in-flight collect/emit is aborted via ctx, queued
+  batches are dropped, and the checkpoint commit path refuses any post-cancel `Save`. Nothing new
+  persists after cancel; the grace window only bounds how long the process has before SIGKILL. Safe
+  because re-emission after restart is deterministic and byte-identical (§3.3). **Lease-release
+  ordering: see F35** (the lease is not released on cancel — it expires — so a standby can't acquire
+  mid-shutdown; this is independent of whether anything actually finished emitting).
 - **F24 Secret in logs** → forbidden; redact auth in all logging and self-telemetry; test for it.
 - **F25 Backfill after long downtime (H3)** → `max_backfill_window` caps the re-pull, and is **≤ the
   Mimir accept window** (the stack's `out_of_order_time_window` — finite & per-tenant; e.g. 2h on

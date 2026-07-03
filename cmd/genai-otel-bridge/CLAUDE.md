@@ -36,7 +36,12 @@ must match the chart RBAC `resourceNames`. Names are fixed (single-instance char
 ## Lifecycle gotchas
 
 - `signal.NotifyContext(SIGTERM, SIGINT)` cancels the root ctx → `app.Run` returns → graceful shutdown.
-  If `app.Run` returns while ctx is **not** cancelled → fatal log + `os.Exit(1)`.
+  If `app.Run` returns a **non-nil** error while ctx is **not** cancelled → fatal log + `os.Exit(1)`.
+  **Gotcha:** with the `lease` coordinator, losing leadership (a renewal lapse) while the root ctx is
+  still alive makes `Run` return `ctx.Err()` == `nil` (not an error) — so this guard does NOT fire; the
+  process logs "stopped" and exits **0**, relying on the orchestrator to restart it and rejoin the
+  election. The `dynamodb` coordinator is NOT symmetric here — it re-enters its own acquire loop
+  in-process on leadership loss instead of returning, so `app.Run` doesn't exit in that case at all.
 - `selfobs.SetMemoryLimit(0.9, *memLimit)` runs **before** config load (90% of the container limit;
   no-op if ≤ 0).
 - **Self-observability identity:** falls back to the telemetry endpoint if `cfg.Emit.Self` is nil;

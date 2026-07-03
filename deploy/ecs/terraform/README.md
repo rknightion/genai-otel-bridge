@@ -110,6 +110,12 @@ ha:
     # retry_period: 2s
 ```
 
+**NTP note:** unlike the Kubernetes Lease backend, failover timing here compares the candidate task's
+wall clock against an `expiresAtMs` written from the leader task's wall clock — absolute inter-node
+clock skew (not just drift) affects how quickly a candidate can take over, bounded by roughly
+`lease_duration - renew_deadline`. Run an NTP-synced base image/task (ECS-optimized AMIs and Fargate
+both sync by default) rather than disabling clock sync. See `ARCHITECTURE.md` decision ledger #17.
+
 Full config schema: `internal/config/config.go` in the repo.
 
 ---
@@ -157,9 +163,13 @@ launch_type = "EC2"
 the active leader up to 120 s after SIGTERM to finish the in-flight emit and write the final
 checkpoint before SIGKILL. The DynamoDB lock is deliberately NOT released on shutdown (it expires
 naturally, matching the Kubernetes coordinator's `ReleaseOnCancel=false` behaviour). The standby task
-acquires the lock within approximately `lease_duration` (~15 s default) after expiry. If your emit
-retry budget could exceed 120 s (e.g. very aggressive retry settings), tune down `emit.retry_max`
-in your config to fit within the window.
+acquires the lock within approximately `lease_duration` (~15 s default) after expiry. Note the emit
+retry budget is a fixed constant (`DefaultRetryPolicy`, `MaxElapsed = 5 min`) — it is **not**
+config-tunable, and it already exceeds the 120 s Fargate `stopTimeout` by default. In practice this
+means a retry sequence in progress at SIGTERM is hard-cancelled at the 120 s mark rather than running
+to exhaustion; this is safe (no watermark advances past uncommitted work, and the next leader re-emits
+deterministically). If you want the leader to have longer to finish before SIGKILL, use the EC2 launch
+type (no 120 s cap) or override `stopTimeout` in a root-module `container_definitions` block.
 
 On **EC2** there is no 120 s cap. The task's `stopTimeout` still defaults to 120 s in this module
 for parity, but you can override it in a root-module `container_definitions` block if needed.

@@ -37,8 +37,16 @@ For a narrative walk-through, see [Configuration](./configuration.md).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `ha.coordinator` | string | `lease` | `lease` — Kubernetes Lease leader election. `none` — single-replica / dev. |
-| `ha.checkpoint` | string | `configmap` | `configmap` — watermarks in a Kubernetes ConfigMap (required with `coordinator=lease`). `file` — local file (dev only; unsafe with `coordinator=lease`). |
+| `ha.coordinator` | string | `lease` | `lease` — Kubernetes Lease leader election. `none` — single-replica / dev. `dynamodb` — DynamoDB lock (ECS/AWS). |
+| `ha.checkpoint` | string | `configmap` | `configmap` — watermarks in a Kubernetes ConfigMap (required with `coordinator=lease`). `file` — local file (dev only; unsafe with `coordinator=lease`). `dynamodb` — DynamoDB item (ECS/AWS). |
+| `ha.dynamodb.table` | string | _(required when coordinator\|checkpoint is `dynamodb`)_ | DynamoDB table backing both the leader lock and the checkpoint (one table for both). |
+| `ha.dynamodb.region` | string | AWS SDK default (`AWS_REGION` env) | AWS region override. |
+| `ha.dynamodb.endpoint` | string | — | Optional endpoint override (e.g. `dynamodb-local` or a VPC endpoint). |
+| `ha.dynamodb.lock_name` | string | `genai-otel-bridge-leader` | Leader-lock item key. |
+| `ha.dynamodb.key_prefix` | string | — | Optional prefix prepended to every item key (shared-table isolation). |
+| `ha.dynamodb.lease_duration` | duration | `15s` | Leader lease TTL. Must be greater than `renew_deadline`. |
+| `ha.dynamodb.renew_deadline` | duration | `10s` | Deadline for the leader to renew its lease before giving it up. |
+| `ha.dynamodb.retry_period` | duration | `2s` | Poll interval for lock acquisition/renewal retries. Must be > 0. |
 
 ---
 
@@ -102,6 +110,7 @@ Each entry in the `sources` list has:
 | `rate_limit.rps` | float | `1` | Sustained outbound request rate (requests/second). |
 | `rate_limit.burst` | int | `3` | Token bucket burst size. |
 | `http.user_agent` | string | — | Override User-Agent (required for some endpoints, e.g. LangSmith behind a WAF). |
+| `http.allow_hosts` | []string | — | Hostname allow-list for the egress/SSRF guard on this source's outbound client. Empty ⇒ any host that passes the IP guard; non-empty restricts requests (incl. redirects) to exactly these hosts, so `base_url`'s host must be included. |
 | `http.allow_private` | bool | `false` | Allow non-loopback, non-`https` base URLs (for in-VPC sources). |
 | `api_key_use_cases` | list | — | Maps human use-case labels to Portkey API key UUIDs. See the [Portkey guide](./portkey.md). |
 
@@ -131,6 +140,9 @@ The config validator (`internal/config/config.go`) enforces these rules at start
 - `emit.telemetry.otlp.endpoint` is required.
 - `queue.emit_workers` must be exactly 1.
 - `ha.checkpoint=file` with `ha.coordinator=lease` is rejected.
+- `ha.coordinator=dynamodb` requires `ha.checkpoint=dynamodb` (they share one table).
+- `ha.dynamodb.table` is required whenever `ha.coordinator` or `ha.checkpoint` is `dynamodb`.
+- `ha.dynamodb.lease_duration` must be greater than `ha.dynamodb.renew_deadline`, and `ha.dynamodb.retry_period` must be > 0 (checked when `ha.coordinator=dynamodb`).
 - `source_instance` must not contain `/`.
 - `source.base_url` must be `https://` unless `http.allow_private=true`.
 - `auth.header` and `auth.value` are required for every enabled source.

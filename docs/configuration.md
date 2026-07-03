@@ -74,14 +74,38 @@ These three resource attributes (`service.name`, `service.namespace`, `deploymen
 
 ```yaml
 ha:
-  coordinator: lease      # lease | none
-  checkpoint: configmap   # configmap | file
+  coordinator: lease      # lease | none | dynamodb
+  checkpoint: configmap   # configmap | file | dynamodb
 ```
 
 - `coordinator: lease` — Kubernetes Lease leader election. Required for multi-replica HA. The bridge uses `coordination.k8s.io/v1` via client-go; RBAC is created by the Helm chart.
 - `coordinator: none` — single-replica / dev. The process always acts as leader.
+- `coordinator: dynamodb` — DynamoDB lock (AWS ECS deployment target). Requires `checkpoint: dynamodb` (they share one table).
 - `checkpoint: configmap` — watermarks stored in a Kubernetes ConfigMap (`genai-otel-bridge-checkpoints`). Required with `coordinator: lease` — the file checkpoint is per-pod and not shared across replicas.
 - `checkpoint: file` — local file (dev / non-Kubernetes only). **Not safe with `coordinator: lease`.**
+- `checkpoint: dynamodb` — watermarks stored as DynamoDB items (AWS ECS deployment target).
+
+### ECS (`ha.coordinator`/`ha.checkpoint: dynamodb`)
+
+```yaml
+ha:
+  coordinator: dynamodb
+  checkpoint: dynamodb
+  dynamodb:
+    table: genai-otel-bridge-ha       # required; shared by the lock and the checkpoint
+    region: eu-west-1                 # optional; default: AWS_REGION env (SDK-resolved)
+    endpoint: ""                      # optional: dynamodb-local / VPC endpoint override
+    lock_name: genai-otel-bridge-leader
+    key_prefix: ""                    # optional: prepended to every item key (shared-table isolation)
+    lease_duration: 15s
+    renew_deadline: 10s
+    retry_period: 2s
+```
+
+`ha.dynamodb.table` is required whenever `coordinator` or `checkpoint` is `dynamodb`; `lease_duration`
+must be greater than `renew_deadline`. See [High availability](./high-availability.md) for the failover
+model and the [ECS Terraform module](https://github.com/rknightion/genai-otel-bridge/blob/main/deploy/ecs/terraform/README.md)
+for a full deployment example.
 
 ---
 
@@ -161,7 +185,7 @@ governance:
 - **`per_metric_cardinality_budget`** — caps the number of distinct label-sets per metric name. Over-budget series are dropped and counted as `genai_otel_bridge_guard_dropped_total`.
 - **`max_dpm`** — hard cap on data points per minute per series, on both planes. Default 1 (the Grafana Cloud standard).
 - **`max_stream_label_keys`** — caps how many OTLP resource attributes a single logs loop may contribute as Loki stream labels. The Grafana Cloud Loki default limit is 15 per series; the bridge fails fast at startup if a loop would exceed it.
-- **`allow_label_keys`** — extra content-free attribute keys the operator opts into the label allow-list, on top of each enabled source's declared keys. Default empty. See [Content governance](./governance.md).
+- **`allow_label_keys`** — extra content-free attribute keys the operator opts into the label allow-list, on top of every registered source's declared keys (the base union is unconditional — not gated on which sources are enabled; every key is content-free by declaration, so a disabled vendor's keys only widen the default-deny surface, never leak). Default empty. See [Content governance](./governance.md).
 
 ---
 

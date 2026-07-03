@@ -85,7 +85,7 @@ a genuinely stuck snapshot loop (`sessions`).
 2. Check `genai_otel_bridge_emit_errors_total` for that loop — failed emits prevent watermark advancement.
 3. Check `genai_otel_bridge_upstream_request_duration_seconds` — slow source API responses increase
    collect time, which can cause the window lag to grow.
-4. Check `genai_otel_bridge_queue_depth` — a full queue blocks collection.
+4. Check `genai_otel_bridge_queue_depth_ratio` — a full queue (ratio at or near 1) blocks collection.
 
 See also: [Troubleshooting — stale watermark](./troubleshooting.md#stale-watermark-and-window-lag).
 

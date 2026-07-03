@@ -19,8 +19,10 @@ included everywhere (DRY). **`selectorLabels` is the immutable Deployment/PDB se
   (maxUnavailable/maxSurge 1) + `revisionHistoryLimit: 3`. A **`checksum/config` pod annotation**
   (gated by `rolloutOnConfigChange`, default true) hashes `templates/configmap.yaml` so a config change
   rolls the pods — it hashes ONLY the `genai-otel-bridge-config` CM, NOT the app-created `genai-otel-bridge-checkpoints` state
-  CM. Shutdown ordering: persist watermarks **before** the lease releases (it expires, isn't released —
-  see `internal/coordinate`) to avoid leader overlap.
+  CM. Shutdown ordering: the lease is never released — it expires (see `internal/coordinate`) — so a
+  standby can't acquire mid-shutdown; `leaderCtx` cancels immediately on SIGTERM (hard-cancel, not a
+  drain), so nothing new persists after cancel. The grace window bounds time-to-SIGKILL, not a
+  drain-to-completion period.
 - `templates/pdb.yaml` — PodDisruptionBudget (`policy/v1`), `maxUnavailable: 1` (gated by
   `podDisruptionBudget.enabled`). Serialises node drains / Karpenter consolidation at replicas:3; a
   no-op at replicas:1 (no dev drain deadlock). `maxUnavailable` not `minAvailable` for that reason.

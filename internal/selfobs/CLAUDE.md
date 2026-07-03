@@ -30,7 +30,13 @@ leader overlap. Meter is `genai-otel-bridge/selfobs`; metrics use the `genai_ote
 
 ## 1DPM clamp (self plane)
 
-`NewProvider` clamps the OTel-Go PeriodicReader interval to `60s/max_dpm` (enforced, not assumed). The SDK emits exactly 1 point per interval, so the clamp is the entire self-plane DPM cap — no coalesce stage needed.
+`NewProvider` clamps an **explicitly configured** PeriodicReader interval up to the floor `60s/max_dpm`
+(enforced, not assumed). The SDK emits exactly 1 point per interval, so the clamp is the entire
+self-plane DPM cap — no coalesce stage needed. **Unset interval (`emit.self.metric_interval` absent,
+and the common `emit.self=nil` fallback) resolves to a flat 60s default — NOT the floor** ([#90]): 60s
+already satisfies the cap for every `max_dpm≥1` (`floor = 60s/max_dpm ≤ 60s`), so raising
+`governance.max_dpm` to widen the *product* plane never silently multiplies the *self*-plane export
+rate. Only a configured sub-floor value is clamped up (and that clamp is logged).
 
 ## Gotchas
 

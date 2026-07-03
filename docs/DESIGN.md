@@ -310,9 +310,9 @@ findings are folded in here and across §3–§5/§7 (tagged C1–C3, H1–H6, M
 the outcome summary. F1–F28 were the author's original set (several corrected by the review).
 
 ### Source-API failures
-- **F1 Transient 5xx / timeout on Collect** → loop logs, increments `api_errors_total`, does *not*
-  advance watermark; next tick re-pulls the same window. Repeated failure → `window_lag` grows →
-  staleness alert.
+- **F1 Transient 5xx / timeout on Collect** → loop logs, increments `emit_errors_total{kind="collect"}`
+  (the real per-loop counter — there is no standalone `api_errors_total`), does *not* advance the
+  watermark; next tick re-pulls the same window. Repeated failure → `window_lag` grows → staleness alert.
 - **F2 401/403 (bad/expired key, or WAF UA block)** → fatal-ish per source: mark source unhealthy,
   keep retrying with backoff, surface a distinct `auth_errors_total`; do not crash the whole process
   (other sources keep running).
@@ -428,10 +428,11 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   content assertion for the (deferred) logs loop (§4.7).
 - **F34 `is_quota_exceeded:true` with a parseable truncated body (M2)** → discard the whole batch;
   never derive/emit from a quota-flagged response (§3.1).
-- **F35 SIGTERM lease-release racing the standby mid-drain (M5)** → finish (or hard-cancel) in-flight
-  emits and persist watermarks **before** releasing the lease; if the grace window expires, do **not**
-  release — let it expire so the standby waits the full LeaseDuration (avoids overlap). (Supersedes
-  F23's "release promptly".)
+- **F35 SIGTERM lease-release racing the standby mid-drain (M5)** → SIGTERM cancels the root ctx, which
+  **hard-cancels** any in-flight collect/emit and the epoch-fenced commit (there is NO drain-to-completion
+  and NO final watermark persist on the way out — the next leader re-pulls the partial window from the last
+  committed watermark). We do **not** release the lease; it is left to expire so the standby waits the full
+  LeaseDuration (avoids overlap). (Supersedes F23's "release promptly".)
 - **F36 NTP step / large backward clock correction on the leader** → a backward wall-clock jump moves
   `now − settle` backward, making an already-emitted bucket "eligible" again → duplicate-timestamp.
   Mitigation: the watermark is monotonic (never emit `bucket_end ≤ watermark.Time`), so a backward

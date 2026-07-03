@@ -38,6 +38,7 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 	"github.com/rknightion/genai-otel-bridge/internal/selfobs"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/version"
 )
 
 // App-created HA state objects. These names are fixed (single-instance chart, see
@@ -60,7 +61,16 @@ func main() {
 	cleanupRetainCheckpoint := flag.Bool("cleanup-retain-checkpoint", false, "with -cleanup: keep the checkpoint ConfigMap (only remove the lease) so a reinstall resumes the watermark")
 	validateConfigMode := flag.Bool("validate-config", false, "load + validate the -config file (placeholdering unset ${ENV} refs so secrets aren't needed), print the result, and exit 0/1")
 	healthCheckMode := flag.Bool("healthcheck", false, "probe the local /healthz derived from -health-addr (a 0.0.0.0/[::] bind, or a bare port, is dialed via 127.0.0.1) and exit 0/1 (ECS container health check; distroless has no shell for curl)")
+	versionMode := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()
+
+	// [#91] Version path: print the ldflags-stamped build version and exit. Importing internal/version
+	// (here + in the self-obs resource wiring below) is also what makes the `-X .../version.Version=…`
+	// stamp actually LINK into the binary — without a real import the linker drops it and it stays "dev".
+	if *versionMode {
+		fmt.Println(version.String())
+		return
+	}
 
 	// Config-validation path: load + schema/semantic-check the -config file and exit. No wiring, no
 	// secrets required (unset ${ENV} refs get placeholders). For pre-deploy / CI overlay validation.
@@ -83,10 +93,11 @@ func main() {
 	// Health-check probe path (ECS container health check). Pure HTTP probe of the local /healthz +
 	// exit 0/1 — no config/wiring. distroless has no shell, so ECS runs the binary itself.
 	if *healthCheckMode {
-		// Not SSRF (Snyk go/Ssrf suppressed in .snyk via the ecs.go exclude): the probe target derives
-		// from the operator's own -health-addr flag and is rewritten to loopback (127.0.0.1) by
-		// localHealthURL — no untrusted input, no trust boundary crossed. Real outbound traffic (vendor/
-		// OTLP) goes through httpx's SSRF egress guard, not this path.
+		// Not an SSRF risk: the probe target derives from the operator's own -health-addr flag and is
+		// rewritten to loopback (127.0.0.1) by localHealthURL — no untrusted input, no trust boundary
+		// crossed. Real outbound traffic (vendor/OTLP) goes through httpx's SSRF egress guard, not this
+		// path. (Snyk tooling/.snyk suppressions were dropped from the fleet 2026-07-03 — this is a
+		// design-level rationale, not a scanner suppression.)
 		os.Exit(healthCheckCode(localHealthURL(*healthAddr)))
 	}
 
@@ -159,6 +170,7 @@ func main() {
 		}
 	}
 	slog.Info("config loaded",
+		"version", version.String(), // [#91] which build is this pod running — observable in logs, not just the image tag
 		"sources_enabled", enabledSources, "loops_enabled", enabledLoops,
 		"telemetry_endpoint", telemetryHost, "self_endpoint", cfg.Emit.Self != nil,
 		"profiling", cfg.Selfobs.Profiling.Enabled, "tracing", cfg.Selfobs.Tracing.Enabled,
@@ -178,7 +190,8 @@ func main() {
 	mp, mpShutdown, err := selfobs.NewProvider(ctx, selfobs.ProviderConfig{
 		Endpoint: selfEP.Endpoint, InstanceID: selfEP.InstanceID, Token: selfEP.Token,
 		ServiceNamespace: cfg.Identity.ServiceNamespace + "-meta", Environment: cfg.Identity.DeploymentEnvironment,
-		Instance: *identity, // [CP-H8] POD_NAME → per-replica self-metric identity
+		Instance: *identity,        // [CP-H8] POD_NAME → per-replica self-metric identity
+		Version:  version.String(), // [#91] service.version on the self resource → correlate a regression to a build
 		Interval: selfInterval,
 		MaxDPM:   cfg.Governance.MaxDPM,
 	})
@@ -219,7 +232,8 @@ func main() {
 		tp, tpShutdown, err := selfobs.NewTracerProvider(ctx, selfobs.TracingConfig{
 			Endpoint: selfEP.Endpoint, InstanceID: selfEP.InstanceID, Token: selfEP.Token,
 			ServiceNamespace: cfg.Identity.ServiceNamespace + "-meta", Environment: cfg.Identity.DeploymentEnvironment,
-			Instance: *identity, // POD_NAME — per-replica
+			Instance: *identity,        // POD_NAME — per-replica
+			Version:  version.String(), // [#91] service.version on the self trace resource
 		})
 		if err != nil {
 			fatal("selfobs tracing", err)
@@ -240,24 +254,8 @@ func main() {
 
 	// [CP-C5] /healthz liveness threshold = the worst LEGITIMATE gap between two tick-ATTEMPT beats, so a
 	// leader blocked in an intended emit-retry/backpressure, or a degraded loop on its slow backoff, is
-	// NOT killed — but a genuinely wedged scheduler (no beat at all) IS. Derived EXPLICITLY from the real
-	// components (not a coincidental constant): max(DegradedBackoff, slowest enabled cadence) +
-	// emit-retry budget + margin. (bucket_settle drives the window_lag staleness ALERT, not this
-	// heartbeat — beats fire on tick attempts regardless of settle, so it is intentionally absent here.)
-	const (
-		emitRetryBudget = 2 * time.Minute // 3× emit retry (exp backoff ~90s) + checkpoint save + slack
-		livenessMargin  = 4 * time.Minute // headroom for scheduling jitter / clock skew
-	)
-	base := schedule.DegradedBackoff
-	for _, sc := range cfg.Sources {
-		for _, lp := range sc.Loops {
-			if c := time.Duration(lp.Cadence); c > base {
-				base = c
-			}
-		}
-	}
-	threshold := base + emitRetryBudget + livenessMargin
-	health := selfobs.NewHealth(threshold)
+	// NOT killed — but a genuinely wedged scheduler (no beat at all) IS. See livenessThreshold.
+	health := selfobs.NewHealth(livenessThreshold(cfg))
 	// Wire the upstream-request self-obs histogram into every source's HTTP client (decoupled: httpx
 	// emits a RequestInfo, selfobs records it; neither imports the other).
 	deps := source.Deps{UpstreamObserver: func(i httpx.RequestInfo) {
@@ -384,6 +382,38 @@ func runCleanup(ns string, retainCheckpoint bool) {
 		fatal("cleanup", err)
 	}
 	slog.Info("cleanup complete", "namespace", ns, "lease", leaseName, "checkpoint_retained", retainCheckpoint)
+}
+
+// livenessThreshold derives the /healthz staleness threshold EXPLICITLY from the real scheduler
+// components (not a coincidental constant): max(schedule.DegradedBackoff, slowest ENABLED loop
+// cadence) + emit-retry budget + margin. [CP-C5] A leader blocked in an intended emit-retry /
+// backpressure window, or a degraded loop on its slow backoff, must not be killed — but a genuinely
+// wedged scheduler (no tick-attempt beat) must be. (bucket_settle drives the window_lag staleness
+// ALERT, not this heartbeat — beats fire on tick attempts regardless of settle, so it is absent here.)
+//
+// [#88] Only ENABLED sources/loops contribute — mirroring the config-summary loop and app.Build. A
+// disabled/parked slow loop (e.g. a 6h eval loop left in config) must NOT inflate the threshold, or a
+// wedged leader would pass liveness for hours instead of minutes before the orchestrator restarts it.
+func livenessThreshold(cfg *config.Config) time.Duration {
+	const (
+		emitRetryBudget = 2 * time.Minute // 3× emit retry (exp backoff ~90s) + checkpoint save + slack
+		livenessMargin  = 4 * time.Minute // headroom for scheduling jitter / clock skew
+	)
+	base := schedule.DegradedBackoff
+	for _, sc := range cfg.Sources {
+		if !sc.Enabled {
+			continue
+		}
+		for _, lp := range sc.Loops {
+			if !lp.Enabled {
+				continue
+			}
+			if c := time.Duration(lp.Cadence); c > base {
+				base = c
+			}
+		}
+	}
+	return base + emitRetryBudget + livenessMargin
 }
 
 func fatal(msg string, err error) { slog.Error(msg, "err", err); os.Exit(1) }

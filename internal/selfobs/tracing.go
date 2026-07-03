@@ -22,6 +22,7 @@ type TracingConfig struct {
 	ServiceNamespace            string // DISTINCT from product (H4), e.g. "genai-otel-bridge-meta"
 	Environment                 string
 	Instance                    string // [CP-H8] per-replica id (POD_NAME)
+	Version                     string // [#91] build version → service.version resource attr
 }
 
 // NewTracerProvider builds an OTLP-HTTP TracerProvider on the self endpoint. The CALLER invokes this
@@ -47,6 +48,7 @@ func NewTracerProvider(ctx context.Context, cfg TracingConfig) (*sdktrace.Tracer
 	res := resource.NewSchemaless(
 		attribute.String("service.namespace", cfg.ServiceNamespace),
 		attribute.String("service.name", "genai-otel-bridge"),
+		attribute.String("service.version", cfg.Version), // [#91] build version (ldflags-stamped, "dev" if unset)
 		attribute.String("deployment.environment.name", cfg.Environment),
 		attribute.String("service.instance.id", cfg.Instance),
 	)

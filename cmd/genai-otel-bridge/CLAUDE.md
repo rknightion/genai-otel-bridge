@@ -21,6 +21,8 @@ coordinator → handle SIGTERM. No logic beyond wiring (that's `internal/app`).
   needed — endpoints/URLs get an https placeholder), prints `validate-config: OK/FAIL`, exits 0/1.
   Branches before any wiring. For pre-deploy / CI overlay validation (e.g. an external overlay repo
   validating against the published image).
+- `-version`: **print path, not a normal run.** Prints the ldflags-stamped `version.String()` and
+  exits 0. Branches before any wiring.
 - `-cleanup` (+ `-cleanup-retain-checkpoint`): **uninstall path, not a normal run.** Builds an
   in-cluster client, deletes the app-created `genai-otel-bridge-leader` Lease and (unless retain) the
   `genai-otel-bridge-checkpoints` ConfigMap via `internal/cleanup.Run`, then exits. The chart's `post-delete`
@@ -67,4 +69,9 @@ must match the chart RBAC `resourceNames`. Names are fixed (single-instance char
   (no DynamoDB call here) so it's safe before `cfg.Validate` runs inside `app.Build`.
 
 Version is stamped into `internal/version.Version` via `make build` ldflags
-(`git describe --tags --always --dirty`, default `dev`).
+(`git describe --tags --always --dirty`, default `dev`). [#91] `main.go` **imports** `internal/version`
+(the `-version` flag + the self-obs resource wiring), which is what makes the `-X .../version.Version=…`
+stamp actually LINK into the binary — without a real import the linker drops it and it stays `dev`. The
+stamped version is observable three ways: the `-version` flag, the `version=` field on the startup
+`config loaded` log line, and the `service.version` resource attribute on both self-obs planes
+(metrics + traces).

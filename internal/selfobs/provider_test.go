@@ -37,12 +37,19 @@ func TestMinSelfInterval(t *testing.T) {
 }
 
 func TestEffectiveSelfInterval(t *testing.T) {
-	// configured 0 ⇒ floor; configured below floor ⇒ clamped to floor; configured ≥ floor ⇒ unchanged.
-	if got := effectiveSelfInterval(0, 1); got != time.Minute {
-		t.Errorf("unset ⇒ floor 60s; got %v", got)
+	// [#90] Unset (0) ⇒ 60s for ALL maxDPM≥1 — raising max_dpm must NOT silently speed up the self
+	// plane. A configured value below the floor is clamped up; at/above the floor it is unchanged.
+	for _, maxDPM := range []int{1, 2, 5, 12, 60} {
+		if got := effectiveSelfInterval(0, maxDPM); got != time.Minute {
+			t.Errorf("unset @ max_dpm=%d ⇒ 60s default; got %v", maxDPM, got)
+		}
 	}
 	if got := effectiveSelfInterval(10*time.Second, 1); got != time.Minute {
 		t.Errorf("10s @ max_dpm=1 ⇒ clamped 60s; got %v", got)
+	}
+	// Explicitly configured sub-floor value is still clamped UP to the (sub-60s) floor.
+	if got := effectiveSelfInterval(5*time.Second, 4); got != 15*time.Second {
+		t.Errorf("5s @ max_dpm=4 ⇒ clamped to 15s floor; got %v", got)
 	}
 	if got := effectiveSelfInterval(90*time.Second, 1); got != 90*time.Second {
 		t.Errorf("90s ≥ floor ⇒ unchanged; got %v", got)

@@ -440,10 +440,19 @@ step ≠ the expected granularity, it rejects and alerts rather than emitting mi
 The tool is on the production critical path, so it observes itself as a first-class concern,
 **OTLP-natively** (no Prometheus `/metrics` scrape endpoint).
 
-- **Self-metrics** (via OTel-Go SDK) include, per source/loop: `last_success_timestamp_seconds`,
-  `window_lag_seconds`, `api_errors_total`, `emitted_total`, `rate_limited_total`,
-  `queue_depth`, `emit_latency_seconds`, and a `leader` gauge. These are marked to **survive any
-  Adaptive-Metrics aggregation** — they are the staleness signal and must not be silently dropped.
+- **Self-metrics** (via the OTel-Go SDK, all `genai_otel_bridge_`-prefixed — the authoritative
+  catalogue is `internal/selfobs/signals.go`, rendered into `docs/telemetry.md` and held in lockstep
+  with the live instruments by `TestSelfObsSignalsParity`): the staleness/progress gauges
+  `last_success_timestamp_seconds`, `window_lag_seconds`, `queue_depth`; the throughput/gap counters
+  `emitted_total`, `emitted_logs_total`, `samples_skipped_total`, `emit_errors_total` (by `kind` —
+  `kind="collect"` is the transient-Collect-failure counter), `guard_dropped_total`,
+  `samples_capped_total`, `new_label_values_total`, `source_graph_unavailable_total`,
+  `auth_errors_total`, `bucket_revised_after_settle_total`; and the histograms
+  `upstream_request_duration_seconds` (outbound source-API latency by `{target,method,status_class}`)
+  and `bucket_revised_after_settle_age_seconds`. These are marked to **survive any Adaptive-Metrics
+  aggregation** — they are the staleness signal and must not be silently dropped. Leadership is NOT a
+  metric: it is exposed via `/healthz` (a leader past the stale threshold returns 503; a standby is
+  always healthy).
 - **Self-logs**: structured (logfmt) to **stdout**, scraped by the k8s-monitoring collector → Loki —
   NOT pushed via OTLP (a deliberate divergence from OTLP-everywhere, for logs only; self-metrics stay
   OTLP-push). Format is config-keyed (`log.format`, default `logfmt`) for cheap Loki parsing; built in

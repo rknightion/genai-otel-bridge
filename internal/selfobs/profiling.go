@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"time"
 
 	"github.com/grafana/pyroscope-go"
 )
@@ -46,6 +47,10 @@ func StartProfiling(cfg ProfilingConfig) (func(context.Context) error, error) {
 		}
 		return func(context.Context) error { return p.Stop() }, nil
 	default: // "pull" or "" (defaulted in config.Load, but be robust)
+		// [#72] The pull listener serves UNAUTHENTICATED pprof (heap/goroutine dumps) on the
+		// operator-chosen pull.addr (default :6060, all interfaces — NOT the health port). Exposure is
+		// bounded by deployment: bind it to loopback, or restrict :6060 with a NetworkPolicy so only the
+		// scraper reaches it. See internal/selfobs/CLAUDE.md.
 		ln, err := net.Listen("tcp", cfg.PullAddr)
 		if err != nil {
 			return noop, fmt.Errorf("selfobs profiling: listen %q: %w", cfg.PullAddr, err)
@@ -70,7 +75,11 @@ func servePprof(ln net.Listener) func(context.Context) error {
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	srv := &http.Server{Handler: mux}
+	// [#72] ReadHeaderTimeout bounds slow-header (Slowloris) clients that would otherwise pin a
+	// goroutine/FD open indefinitely while dribbling request headers (also satisfies gosec G114). No
+	// Read/WriteTimeout: pprof CPU/trace profiles are long-lived streaming responses a whole-request
+	// deadline would truncate.
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	return srv.Shutdown
 }

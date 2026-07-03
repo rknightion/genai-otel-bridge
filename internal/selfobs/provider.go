@@ -21,6 +21,7 @@ type ProviderConfig struct {
 	ServiceNamespace            string // DISTINCT from product (H4), e.g. "genai-otel-bridge-meta"
 	Environment                 string
 	Instance                    string // [CP-H8] per-replica id (POD_NAME) — diagnose leader overlap/disappearance
+	Version                     string // [#91] build version → service.version resource attr (correlate a regression to a build)
 	Interval                    time.Duration
 	MaxDPM                      int // self-plane DPM cap: the reader interval is clamped to ≥ 60s/MaxDPM. <1 ⇒ 1.
 }
@@ -46,6 +47,7 @@ func NewProvider(ctx context.Context, cfg ProviderConfig) (*metric.MeterProvider
 	res := resource.NewSchemaless(
 		attribute.String("service.namespace", cfg.ServiceNamespace),
 		attribute.String("service.name", "genai-otel-bridge"),
+		attribute.String("service.version", cfg.Version), // [#91] build version (ldflags-stamped, "dev" if unset)
 		attribute.String("deployment.environment.name", cfg.Environment),
 		attribute.String("service.instance.id", cfg.Instance), // [CP-H8] per-replica identity
 	)
@@ -72,11 +74,21 @@ func minSelfInterval(maxDPM int) time.Duration {
 	return time.Minute / time.Duration(maxDPM)
 }
 
-// effectiveSelfInterval resolves the reader interval: unset (0) ⇒ the floor; a configured value below
-// the floor is clamped up (caller logs the clamp); at/above the floor is honoured.
+// effectiveSelfInterval resolves the reader interval. [#90] Unset (0) ⇒ the documented 60s default,
+// NOT the floor: 60s always satisfies the cap for maxDPM≥1 (floor = 60s/maxDPM ≤ 60s), so raising
+// governance.max_dpm to widen the PRODUCT plane never silently speeds up the SELF plane. Only an
+// explicitly-configured value BELOW the floor is clamped up (caller logs the clamp); at/above the
+// floor it is honoured.
 func effectiveSelfInterval(configured time.Duration, maxDPM int) time.Duration {
-	floor := minSelfInterval(maxDPM)
-	if configured == 0 || configured < floor {
+	const defaultInterval = time.Minute
+	if configured == 0 {
+		// 60s ≥ floor for every maxDPM≥1 (minSelfInterval guards <1 ⇒ 1); guard anyway.
+		if floor := minSelfInterval(maxDPM); floor > defaultInterval {
+			return floor
+		}
+		return defaultInterval
+	}
+	if floor := minSelfInterval(maxDPM); configured < floor {
 		return floor
 	}
 	return configured

@@ -70,20 +70,72 @@ func TestEffectiveContentDenylist(t *testing.T) {
 		}
 	}
 
-	// #51: optedInContentFields unions ALL THREE knobs across enabled loops, ignoring disabled ones / blanks.
-	cfg := &config.Config{Sources: []config.SourceConfig{{
-		Enabled: true,
-		Loops: map[string]config.LoopConfig{
-			"runs":  {Enabled: true, Settings: map[string]string{"extra_record_fields": " tags , error ", "extra_indexed_fields": "name", "metadata_record_fields": "correlation_id"}},
-			"other": {Enabled: false, Settings: map[string]string{"extra_record_fields": "secret"}},
-		},
-	}}}
-	got := optedInContentFields(cfg)
+	// #51: optedInContentFieldsForLoop reads ALL THREE knobs from a SINGLE loop's settings, trimming blanks.
+	lc := config.LoopConfig{Settings: map[string]string{"extra_record_fields": " tags , error ", "extra_indexed_fields": "name", "metadata_record_fields": "correlation_id"}}
+	got := optedInContentFieldsForLoop(lc)
 	if !got["tags"] || !got["error"] || !got["name"] || !got["correlation_id"] {
 		t.Errorf("expected tags+error (record) + name (indexed) + correlation_id (metadata) opted in, got %v", got)
 	}
-	if got["secret"] {
-		t.Error("a disabled loop's opt-in fields must be ignored")
+	if got[""] {
+		t.Error("blank/empty opt-in fields must be ignored")
+	}
+}
+
+// fakeLoop is a minimal source.Loop double used to unit-test the composition root's per-loop denylist
+// wiring (#130) without standing up a real vendor source. When logs==true it also implements
+// source.IndexedKeyDeclarer (the capability the two real logs loops expose), marking it a logs loop.
+type fakeLoop struct {
+	key model.CheckpointKey
+}
+
+func (f fakeLoop) Key() model.CheckpointKey { return f.key }
+func (f fakeLoop) Cadence() time.Duration   { return time.Minute }
+func (f fakeLoop) Collect(context.Context, model.Watermark) (model.Batch, error) {
+	return model.Batch{}, nil
+}
+
+type fakeLogsLoop struct{ fakeLoop }
+
+func (fakeLogsLoop) IndexedKeys() []string { return []string{"ai_model"} }
+
+// TestContentDenyByLoopScoping (#130) is the composition-root half of the fix: only LOGS loops (those
+// exposing IndexedKeyDeclarer) get a per-loop denylist entry, and each releases ONLY the gray fields IT
+// opted into its own knobs. A metrics loop that merely warns extra_record_fields away as an unknown
+// setting gets NO entry, so its stray opt-in can never subtract a gray key from any loop's backstop.
+func TestContentDenyByLoopScoping(t *testing.T) {
+	logsA := fakeLogsLoop{fakeLoop{key: model.CheckpointKey{SourceInstance: "pk", Loop: "logs_export", OutputFingerprint: "f"}}}
+	logsB := fakeLogsLoop{fakeLoop{key: model.CheckpointKey{SourceInstance: "ls", Loop: "runs", OutputFingerprint: "f"}}}
+	metrics := fakeLoop{key: model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "f"}}
+
+	loops := []loopConfigured{
+		{loop: logsA, cfg: config.LoopConfig{Settings: map[string]string{"extra_record_fields": "error"}}}, // A releases error
+		{loop: logsB, cfg: config.LoopConfig{}}, // B releases nothing
+		{loop: metrics, cfg: config.LoopConfig{Settings: map[string]string{"extra_record_fields": "error"}}}, // metrics: must be ignored
+	}
+	byLoop := contentDenyByLoop(loops)
+
+	// Metrics loop must have NO entry — its opt-in has no effect on the guard (acceptance criterion 2).
+	if _, ok := byLoop[metrics.Key().String()]; ok {
+		t.Errorf("metrics loop must NOT get a per-loop denylist entry; got one: %v", byLoop[metrics.Key().String()])
+	}
+	// Loop A released "error" — absent from A's denylist; "events" (a gray field it did not opt in) present.
+	dA := byLoop[logsA.Key().String()]
+	if slices.Contains(dA, "error") {
+		t.Errorf("loop A opted error in — it must be released from A's denylist; got %v", dA)
+	}
+	if !slices.Contains(dA, "events") {
+		t.Errorf("loop A did not opt events in — it must stay denied for A; got %v", dA)
+	}
+	// Loop B released nothing — the FULL gray backstop (incl. error) stays denied for B (criterion 1).
+	dB := byLoop[logsB.Key().String()]
+	if !slices.Contains(dB, "error") {
+		t.Errorf("loop B opted nothing in — A's opt-in must not release error for B; got %v", dB)
+	}
+	// The floor is never subtracted from any per-loop entry.
+	for _, floor := range source.AbsoluteNeverDenyKeys() {
+		if !slices.Contains(dA, floor) {
+			t.Errorf("floor key %q must remain in loop A's denylist", floor)
+		}
 	}
 }
 

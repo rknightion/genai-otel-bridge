@@ -115,6 +115,37 @@ func TestSanitizeLogsBudgetPerLoopIdentity(t *testing.T) {
 	}
 }
 
+// TestSanitizeLogsPerLoopDenyScoping (#130): the content denylist is scoped PER LOOP. A gray backstop
+// field released for loop A (opted into A's record allow-list) must STILL be denied for loop B, whose own
+// backstop nobody weakened — the defence-in-depth layer stays independent per loop. A loop with no
+// per-loop entry falls back to the global DenyFieldKeys (the full floor+gray backstop).
+func TestSanitizeLogsPerLoopDenyScoping(t *testing.T) {
+	// Global (full) backstop denies both gray fields; loop "A" released only "error".
+	g := NewGuard(GuardConfig{
+		AllowLabelKeys: []string{"ai_model"},
+		DenyFieldKeys:  []string{"error", "events"}, // metrics + fallback: full backstop
+		DenyFieldKeysByLoop: map[string][]string{
+			"A": {"events"}, // A opted "error" in → only "events" remains denied for A
+		},
+	})
+	recWithError := []model.LogRecord{logRecord(map[string]string{"ai_model": "gpt-5"}, map[string]string{"error": "boom"}, "")}
+	recWithEvents := []model.LogRecord{logRecord(map[string]string{"ai_model": "gpt-5"}, map[string]string{"events": "x"}, "")}
+
+	// Loop A released "error" → the record is KEPT for A.
+	if kept, d := g.SanitizeLogs("A", recWithError); len(kept) != 1 || d != 0 {
+		t.Fatalf("loop A error-record: kept=%d dropped=%d want 1/0 (A opted error in)", len(kept), d)
+	}
+	// A did NOT release "events" → still denied for A.
+	if kept, d := g.SanitizeLogs("A", recWithEvents); len(kept) != 0 || d != 1 {
+		t.Fatalf("loop A events-record: kept=%d dropped=%d want 0/1 (A did not opt events in)", len(kept), d)
+	}
+	// Loop B has NO per-loop entry → falls back to the FULL global backstop: "error" is still denied.
+	// This is the crux of #130 — A's opt-in must NOT widen B's allowed set.
+	if kept, d := g.SanitizeLogs("B", recWithError); len(kept) != 0 || d != 1 {
+		t.Fatalf("loop B error-record: kept=%d dropped=%d want 0/1 (A's opt-in must not release error for B)", len(kept), d)
+	}
+}
+
 // TestSanitizeLogsBudget: distinct INDEXED signatures (= distinct Loki streams) are capped per loop.
 func TestSanitizeLogsBudget(t *testing.T) {
 	g := NewGuard(GuardConfig{AllowLabelKeys: []string{"ai_model"}, PerSeriesBudget: 2})

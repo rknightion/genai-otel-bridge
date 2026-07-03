@@ -81,19 +81,6 @@ func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, co
 			return nil, fmt.Errorf("governance.allow_label_keys / settings.extra_indexed_fields: %q is a content-floor key (message body / injected PII) and cannot be promoted to a label", k)
 		}
 	}
-	guard := source.NewGuard(source.GuardConfig{
-		AllowLabelKeys: allowKeys,
-		// Effective denylist = the never-subtractable floor + the gray backstop tier MINUS any field a
-		// loop explicitly opted in via ANY of its three content-governance knobs — extra_record_fields,
-		// extra_indexed_fields, metadata_record_fields (so a default deployment keeps the full
-		// defence-in-depth backstop; only explicitly opted-in gray fields are released — review HIGH-1).
-		// Considering all three knobs (not just extra_record_fields) is what stops a gray key promoted via
-		// extra_indexed_fields/metadata_record_fields from being auto-allow-listed yet still deny-dropped —
-		// deny beats allow — which would silently drop every affected record (#51).
-		DenyFieldKeys:   contentDenylist(optedInContentFields(cfg)),
-		PerSeriesBudget: cfg.Governance.PerMetricCardinalityBudget, // per-metric cap; config-keyed, default 10k
-		OnNewLabelValue: m.NewLabelValue,
-	})
 	// [settle-exceedance] Wire the settle-exceedance signal: a source that re-observes an
 	// already-emitted (settled) bucket change value calls this hook; it does NOT re-emit (DESIGN
 	// §3.3/F6). Mirrors the guard's OnNewLabelValue wiring above. Only set if a source didn't already
@@ -127,8 +114,12 @@ func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, co
 		streamLabelCeiling = config.DefaultMaxStreamLabelKeys
 	}
 	identityReserve := len(cfg.Identity.ProductIdentity())
+	// FIRST PASS: build every enabled source and its loops. Loops are built BEFORE the guard so the
+	// per-loop content denylist (#130) can be keyed by each loop's real identity (CheckpointKey.String()),
+	// which SanitizeLogs receives — and so we honour a content opt-in ONLY on loops that actually consume
+	// it (the logs loops, identified by the source.IndexedKeyDeclarer capability).
 	var srcs []source.Source
-	var specs []schedule.LoopSpec
+	var loops []loopConfigured
 	for _, sc := range cfg.Sources {
 		if !sc.Enabled {
 			continue
@@ -165,18 +156,37 @@ func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, co
 					return nil, fmt.Errorf("loop %q would emit %d Loki stream labels (identity %d + indexed %d) > governance.max_stream_label_keys %d (Loki max_label_names_per_series); reduce settings.extra_indexed_fields / governance.allow_label_keys, or raise the limit only if your tenant's max_label_names_per_series was increased by Grafana staff", lcName, n, identityReserve, len(d.IndexedKeys()), streamLabelCeiling)
 				}
 			}
-			runner := schedule.NewLoopRunner(lp, em, cp, guard, cfg.Queue.MaxBatches, cfg.Governance.MaxDPM, m)
-			specs = append(specs, schedule.LoopSpec{
-				Runner: runner, Loop: lp, Cadence: time.Duration(lc.Cadence), MaxBackfill: time.Duration(lc.MaxBackfill),
-				Window: time.Duration(lc.Window), MaxCatchupPerTick: cfg.Governance.MaxCatchupPerTick,
-			})
+			loops = append(loops, loopConfigured{loop: lp, cfg: lc})
 		}
 	}
 	if err := source.ValidateOwnership(srcs); err != nil {
 		return nil, err
 	}
-	if len(specs) == 0 {
+	if len(loops) == 0 {
 		return nil, fmt.Errorf("no enabled loops")
+	}
+	// Build the guard now the per-loop denylists (keyed by loop identity) are known.
+	guard := source.NewGuard(source.GuardConfig{
+		AllowLabelKeys: allowKeys,
+		// Global content denylist = the never-subtractable floor + the ENTIRE gray backstop, NOTHING
+		// subtracted. It polices the metrics path (Sample labels, additionally allow-list default-denied) and
+		// is the fallback for any logs loop with no per-loop entry. Per-loop gray-field releases live in
+		// DenyFieldKeysByLoop (#130) so one loop's opt-in can never weaken another loop's defence-in-depth
+		// backstop, and a content opt-in on a metrics loop (which merely warns it away as an unknown setting)
+		// has no effect on the guard at all.
+		DenyFieldKeys:       contentDenylist(nil),
+		DenyFieldKeysByLoop: contentDenyByLoop(loops),
+		PerSeriesBudget:     cfg.Governance.PerMetricCardinalityBudget, // per-metric cap; config-keyed, default 10k
+		OnNewLabelValue:     m.NewLabelValue,
+	})
+	// SECOND PASS: build the runners + specs now the shared guard exists.
+	var specs []schedule.LoopSpec
+	for _, l := range loops {
+		runner := schedule.NewLoopRunner(l.loop, em, cp, guard, cfg.Queue.MaxBatches, cfg.Governance.MaxDPM, m)
+		specs = append(specs, schedule.LoopSpec{
+			Runner: runner, Loop: l.loop, Cadence: time.Duration(l.cfg.Cadence), MaxBackfill: time.Duration(l.cfg.MaxBackfill),
+			Window: time.Duration(l.cfg.Window), MaxCatchupPerTick: cfg.Governance.MaxCatchupPerTick,
+		})
 	}
 	return &App{sched: schedule.NewScheduler(specs, m), coord: coord, specs: specs}, nil
 }
@@ -275,14 +285,36 @@ func contentDenylist(optedIn map[string]bool) []string {
 	return out
 }
 
-// optedInContentFields is the union of every enabled loop's THREE content-governance opt-in knobs —
+// loopConfigured pairs a built loop with its per-loop config, so the composition root can build the
+// runners AND the per-loop content denylist (#130) from one collected slice.
+type loopConfigured struct {
+	loop source.Loop
+	cfg  config.LoopConfig
+}
+
+// optedInContentFieldsForLoop is the union of a SINGLE loop's THREE content-governance opt-in knobs —
 // settings.extra_record_fields ∪ extra_indexed_fields ∪ metadata_record_fields (cross-source conventions
-// — the per-loop strips read these same keys). The composition root reads it here to compute the
-// effective denylist; it is governance wiring, not vendor/domain knowledge (the key names are generic and
-// the values are operator policy, not defaults). A gray backstop field named in ANY knob is an explicit
-// opt-in and is subtracted from the denylist, so the guard cannot silently deny-drop a field the operator
-// promoted+allow-listed (#51). A floor field present here is still kept denied (contentDenylist never
-// subtracts the floor) and is rejected fail-fast by the owning source / the composition-root floor check.
+// — the per-loop strips read these same keys). It is governance wiring, not vendor/domain knowledge (the
+// key names are generic and the values are operator policy, not defaults). A gray backstop field named in
+// ANY knob is an explicit opt-in and is subtracted from THIS loop's effective denylist, so the guard
+// cannot silently deny-drop a field the operator promoted+allow-listed for the loop (#51). A floor field
+// present here is still kept denied (contentDenylist never subtracts the floor) and is rejected fail-fast
+// by the owning source / the composition-root floor check.
+func optedInContentFieldsForLoop(lc config.LoopConfig) map[string]bool {
+	out := map[string]bool{}
+	for _, knob := range []string{"extra_record_fields", "extra_indexed_fields", "metadata_record_fields"} {
+		for f := range strings.SplitSeq(lc.Settings[knob], ",") {
+			if f = strings.TrimSpace(f); f != "" {
+				out[f] = true
+			}
+		}
+	}
+	return out
+}
+
+// optedInContentFields is the union of optedInContentFieldsForLoop across every ENABLED loop. It is no
+// longer used to build the guard (that is now strictly per-loop — see contentDenyByLoop, #130), but is
+// retained as the union primitive exercised by the focused #51 denylist-composition tests.
 func optedInContentFields(cfg *config.Config) map[string]bool {
 	out := map[string]bool{}
 	for _, sc := range cfg.Sources {
@@ -293,14 +325,29 @@ func optedInContentFields(cfg *config.Config) map[string]bool {
 			if !lp.Enabled {
 				continue
 			}
-			for _, knob := range []string{"extra_record_fields", "extra_indexed_fields", "metadata_record_fields"} {
-				for f := range strings.SplitSeq(lp.Settings[knob], ",") {
-					if f = strings.TrimSpace(f); f != "" {
-						out[f] = true
-					}
-				}
+			for f := range optedInContentFieldsForLoop(lp) {
+				out[f] = true
 			}
 		}
+	}
+	return out
+}
+
+// contentDenyByLoop builds the PER-LOOP effective content denylist for the logs path (#130), keyed by each
+// loop's identity (CheckpointKey.String() — the same string the runner passes to Guard.SanitizeLogs). It
+// scopes the gray-backstop subtraction so an opt-in on one loop can NEVER widen another loop's allowed
+// set (fixing the cross-loop bleed), and it honours the opt-in ONLY on loops that actually consume it —
+// the LOGS loops, identified by the source.IndexedKeyDeclarer capability (implemented solely by the two
+// logs loops). A metrics loop that merely warns extra_record_fields away as an unknown setting gets NO
+// entry, so its stray opt-in has no effect on the guard; such a loop falls back to the full global
+// backstop (GuardConfig.DenyFieldKeys). Vendor-neutral: it uses a generic capability, no loop-name knowledge.
+func contentDenyByLoop(loops []loopConfigured) map[string][]string {
+	out := map[string][]string{}
+	for _, l := range loops {
+		if _, isLogs := l.loop.(source.IndexedKeyDeclarer); !isLogs {
+			continue // a metrics loop does not consume the content-governance knobs — do not release anything
+		}
+		out[l.loop.Key().String()] = contentDenylist(optedInContentFieldsForLoop(l.cfg))
 	}
 	return out
 }

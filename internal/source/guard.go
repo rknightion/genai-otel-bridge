@@ -12,10 +12,18 @@ import (
 
 // GuardConfig configures the governance guard.
 type GuardConfig struct {
-	AllowLabelKeys  []string
-	DenyFieldKeys   []string
-	PerSeriesBudget int
-	OnNewLabelValue func(series string) // early-warning hook → new_label_values{series} self-metric
+	AllowLabelKeys []string
+	DenyFieldKeys  []string
+	// DenyFieldKeysByLoop is the PER-LOOP effective content denylist for the logs path (#130), keyed by the
+	// loop-identity string the runner passes to SanitizeLogs (model.CheckpointKey.String()). A logs loop that
+	// opts a subtractable "gray" backstop field into its record allow-list has THAT field (and only that
+	// field) removed from its OWN entry — so an opt-in on loop A can never widen the allowed set of loop B.
+	// A loop with no entry (every metrics loop, plus any logs loop that opted nothing in) falls back to the
+	// global DenyFieldKeys, which is the full floor+gray backstop. Never-subtractable content-floor keys are
+	// denied regardless of this map (IsContentFloorKey), so a per-loop entry can only release gray fields.
+	DenyFieldKeysByLoop map[string][]string
+	PerSeriesBudget     int
+	OnNewLabelValue     func(series string) // early-warning hook → new_label_values{series} self-metric
 }
 
 // Guard sits between derive and emit: drops samples with disallowed or deny-listed label keys,
@@ -25,8 +33,12 @@ type Guard struct {
 	deny   map[string]bool
 	budget int
 	onNew  func(string)
+	// denyByLoop is the #130 per-loop effective content denylist for the logs path, keyed by the loop
+	// identity SanitizeLogs receives. A loop present here uses its own map; a loop absent falls back to
+	// `deny`. Written only at construction (read-only after), like allow/deny — no lock needed.
+	denyByLoop map[string]map[string]bool
 	// [ext-review-8] One *Guard is shared across all loop runners (composition root), each running its
-	// own emit-worker goroutine, so the mutable cardinality state must be locked. allow/deny are
+	// own emit-worker goroutine, so the mutable cardinality state must be locked. allow/deny/denyByLoop are
 	// written only at construction (read-only after) so they need no lock; seen is read+written here.
 	mu   sync.Mutex
 	seen map[string]map[string]struct{} // series → set of distinct labelset signatures
@@ -46,6 +58,16 @@ func NewGuard(cfg GuardConfig) *Guard {
 	}
 	for _, k := range cfg.DenyFieldKeys {
 		g.deny[k] = true
+	}
+	if len(cfg.DenyFieldKeysByLoop) > 0 {
+		g.denyByLoop = make(map[string]map[string]bool, len(cfg.DenyFieldKeysByLoop))
+		for loop, keys := range cfg.DenyFieldKeysByLoop {
+			m := make(map[string]bool, len(keys))
+			for _, k := range keys {
+				m[k] = true
+			}
+			g.denyByLoop[loop] = m
+		}
 	}
 	return g
 }
@@ -94,13 +116,21 @@ func (g *Guard) SanitizeLogs(loop string, logs []model.LogRecord) ([]model.LogRe
 }
 
 func (g *Guard) okLog(loop string, lr model.LogRecord) bool {
+	// #130: use THIS loop's effective denylist if it has one (a logs loop that opted a gray field in);
+	// otherwise the full global backstop. A per-loop entry only ever RELEASES gray fields — the
+	// never-subtractable floor is still enforced below via IsContentFloorKey — so scoping can only make a
+	// loop's egress tighter than another's, never widen one loop's allowed set from another's opt-in.
+	deny := g.deny
+	if d, ok := g.denyByLoop[loop]; ok {
+		deny = d
+	}
 	// Content deny-list across both maps: any denied key ⇒ drop the record (loud-counted, never emitted).
 	// A never-subtractable content-floor key is denied here regardless of the configured deny map AND by
 	// PREFIX for the gen_ai content namespaces (IsContentFloorKey), so a flattened content attr like
 	// gen_ai.prompt.0.content that the exact-match deny map would miss is still blocked at the chokepoint (#97).
 	for _, m := range []map[string]string{lr.IndexedAttributes, lr.RecordAttributes} {
 		for k := range m {
-			if g.deny[k] || IsContentFloorKey(k) {
+			if deny[k] || IsContentFloorKey(k) {
 				return false
 			}
 		}

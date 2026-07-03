@@ -47,6 +47,12 @@ type LoopRunner struct {
 	saveFails int  // consecutive checkpoint-save failures
 	degraded  bool // terminal/degraded → scheduler backs off + alerts
 	firstOK   bool // a first successful watermark commit has been logged this leadership (info, once)
+	// [#94] backfill_unstorable de-duplication state: the frontier the abandoned-as-unstorable span was
+	// last counted against, and the floor up to which whole minutes were already counted for it — so a
+	// stuck loop (collect/emit failing, frontier pinned) counts the initial gap ONCE, then only the
+	// ~cadence the floor advances each subsequent tick, instead of re-counting the whole span every tick.
+	backfillCountedWm    time.Time
+	backfillCountedFloor time.Time
 }
 
 func NewLoopRunner(loop source.Loop, em emit.Emitter, cp checkpoint.Checkpointer, guard *source.Guard, queueDepth int, maxDPM int, m Metrics) *LoopRunner {
@@ -79,6 +85,29 @@ func (r *LoopRunner) Since(ctx context.Context) (model.Watermark, error) {
 	return r.cp.Load(ctx, r.loop.Key())
 }
 
+// BackfillUnstorableMinutes reports how many whole minutes of NEWLY-unstorable span to count for a
+// windowed loop whose watermark `wm` sits before `floor` (= now − max_backfill), recording the count
+// so a stuck loop does not re-count the same abandoned span every tick. [#94] It counts the initial
+// gap (floor − wm) once, then only the whole minutes the floor advances on subsequent ticks while the
+// frontier stays pinned; a changed frontier (a successful catch-up advanced past) resets the baseline.
+// Only whole minutes actually counted advance the stored floor, so sub-minute remainders are never
+// dropped. Caller has already gated on windowed + non-zero + wm.Before(floor).
+func (r *LoopRunner) BackfillUnstorableMinutes(wm, floor time.Time) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	from := wm
+	if r.backfillCountedWm.Equal(wm) && r.backfillCountedFloor.After(from) {
+		from = r.backfillCountedFloor // same pinned frontier: count only past what we already counted
+	}
+	mins := int(floor.Sub(from) / time.Minute)
+	if mins <= 0 {
+		return 0
+	}
+	r.backfillCountedWm = wm
+	r.backfillCountedFloor = from.Add(time.Duration(mins) * time.Minute)
+	return mins
+}
+
 // Reset clears per-leadership state on (re-)election [CP-R3]. Without it, a batch collected under a
 // PRIOR leadership could linger in the queue and then be emitted under the NEW live leaderCtx —
 // stale data, after an intervening leader already advanced the checkpoint. Reset (a) DRAINS the
@@ -97,7 +126,8 @@ func (r *LoopRunner) Reset() {
 	r.mu.Lock()
 	r.busy, r.hasFront, r.frontier = false, false, model.Watermark{}
 	r.saveFails, r.degraded = 0, false
-	r.firstOK = false // a new leadership re-announces its first successful commit (liveness signal)
+	r.firstOK = false                                                      // a new leadership re-announces its first successful commit (liveness signal)
+	r.backfillCountedWm, r.backfillCountedFloor = time.Time{}, time.Time{} // [#94] re-arm span-abandonment counting for the new leadership
 	r.mu.Unlock()
 }
 
@@ -198,13 +228,19 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 			frontier, advanced = bucketTime, true
 		case isTerminalHalt(err): // [CP-C7/C8] bad-encoding OR unknown request-level 400 → degrade, no advance
 			r.m.EmitError(r.name, rejectReason(err))
-			r.enterDegraded("terminal emit reject")
 			if advanced {
 				// [round3-#2] partial advance to an INTERIOR bucket (`frontier`), NOT the window end —
 				// so it must carry an EMPTY cursor, not b.Watermark.Cursor (the window-END resume token).
 				// Inert for the cursorless analytics loop; correctness for any future cursor-based source.
 				r.commit(leaderCtx, b.Key, frontier, "", epoch)
 			}
+			// [#93] Enter degraded AFTER the interior commit, not before: commit()'s success path clears
+			// r.degraded (to reset a transient checkpoint-save degrade), so degrading first would let the
+			// interior commit immediately wipe the degrade and the scheduler would re-tick at cadence
+			// instead of backing off to DegradedBackoff on the very tick that detected the terminal reject.
+			// A later good collect+commit still clears it (Cdx-M5). enterDegraded logs once per transition,
+			// so this also collapses the previously-doubled 'loop degraded' ERROR to one line per event.
+			r.enterDegraded("terminal emit reject")
 			return
 		default: // RetryableError (5xx/429/exhausted): stop, no advance; re-pull next tick.
 			r.m.EmitError(r.name, "retryable_exhausted")
@@ -232,7 +268,10 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 // reject), false to ABORT without advancing (a terminal-halt degrades the loop; a retryable failure
 // re-pulls) — so the cursor is not persisted and the loop re-does the step idempotently next tick.
 func (r *LoopRunner) processLogs(leaderCtx context.Context, b model.Batch) bool {
-	kept, dropped := r.guard.SanitizeLogs(r.name, b.Logs)
+	// [#98] Key the cardinality budget on the full checkpoint-key identity ("instance/loop/fingerprint"),
+	// not the bare loop name — otherwise two source instances that both run a same-named loop share (and
+	// starve) one budget pool. Key().String() is a FROZEN-safe accessor, so no seam changes.
+	kept, dropped := r.guard.SanitizeLogs(r.loop.Key().String(), b.Logs)
 	if dropped > 0 {
 		r.m.GuardDropped(r.name, dropped)
 	}

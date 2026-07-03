@@ -4,6 +4,7 @@ package schedule
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -165,6 +166,69 @@ func TestProcessStopsWithoutAdvanceOnBadEncoding(t *testing.T) {
 	if got, _ := cp.Load(context.Background(), key); got.Time.Unix() != 60 {
 		t.Fatalf("watermark=%d want 60 (bad-encoding halts loudly, no silent advance)", got.Time.Unix())
 	}
+	// [#93] The degrade set by the terminal reject on bucket 120 must SURVIVE the interior commit of
+	// bucket 60 — otherwise the scheduler re-ticks at cadence instead of backing off on this very tick.
+	if !r.Degraded() {
+		t.Fatal("[#93] loop must stay degraded after a terminal reject on a non-first bucket (interior commit must not clear it)")
+	}
+}
+
+// TestAuditTerminalHaltOnLaterBucketStaysDegraded is the [#93] regression guard: with the reject on the
+// SECOND bucket, bucket 1 commits (interior watermark advances to 60) AND the loop stays degraded, so
+// tickPlan backs off to DegradedBackoff rather than re-collecting at cadence. Asserts both legs together.
+func TestAuditTerminalHaltOnLaterBucketStaysDegraded(t *testing.T) {
+	em := &fakeEmitter{byTS: map[int64]error{120: &emit.RejectError{Reason: emit.ReasonUnknown, Status: 400, Msg: "bad"}}}
+	cp := newMemCP()
+	r, key := newRunner(em, cp)
+	r.ProcessBatch(leaderCtx(), batchAt(key, 60, 120, 180))
+	if got, _ := cp.Load(context.Background(), key); got.Time.Unix() != 60 {
+		t.Fatalf("interior watermark=%d want 60 (bucket 1 committed, no advance past the reject)", got.Time.Unix())
+	}
+	if !r.Degraded() {
+		t.Fatal("[#93] degrade must stick through the interior commit so the scheduler backs off")
+	}
+	// tickPlan must now choose the slow backoff (degraded precedence), proving the scheduler stops hammering.
+	if w, _, _ := tickPlan(r.Degraded(), false, 0, 4, time.Minute); w != DegradedBackoff {
+		t.Fatalf("degraded loop must back off to %v, got %v", DegradedBackoff, w)
+	}
+}
+
+// TestTransientSaveDegradeClearedByLaterSuccess guards that the [#93] fix does NOT break the intended
+// clear path: a degrade caused by repeated checkpoint-save failures (saveFails>=threshold) must still be
+// cleared by a later successful save. Uses a checkpointer that fails N times then succeeds.
+func TestTransientSaveDegradeClearedByLaterSuccess(t *testing.T) {
+	cp := &flakyCP{memCP: newMemCP(), failFirst: checkpointFailThreshold}
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	r := NewLoopRunner(fakeLoop{key: key}, &fakeEmitter{byTS: map[int64]error{}}, cp, source.NewGuard(source.GuardConfig{}), 4, 1, NoopMetrics{})
+	ctx := leaderCtx()
+	// Drive `checkpointFailThreshold` failing saves at ascending times → the loop degrades.
+	for i := 0; i < checkpointFailThreshold; i++ {
+		r.commit(ctx, key, time.Unix(int64(100+i), 0).UTC(), "", 1)
+	}
+	if !r.Degraded() {
+		t.Fatalf("precondition: %d save failures must degrade the loop", checkpointFailThreshold)
+	}
+	// A later successful save (flakyCP now accepts) must clear the transient degrade.
+	r.commit(ctx, key, time.Unix(1000, 0).UTC(), "", 1)
+	if r.Degraded() {
+		t.Fatal("a successful save must clear a transient checkpoint-save degrade")
+	}
+}
+
+// flakyCP fails Save the first `failFirst` times (generic error → saveFails increments), then behaves
+// like a monotonic in-memory checkpointer.
+type flakyCP struct {
+	*memCP
+	failFirst int
+	calls     int
+}
+
+func (c *flakyCP) Save(ctx context.Context, k model.CheckpointKey, w model.Watermark) error {
+	c.calls++
+	if c.calls <= c.failFirst {
+		return errors.New("configmap unavailable")
+	}
+	return c.memCP.Save(ctx, k, w)
 }
 
 func TestQueueBlocksOnFull(t *testing.T) {

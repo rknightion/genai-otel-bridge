@@ -148,7 +148,12 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 	defer span.End()
 	if sp.Runner.Busy() {
 		span.SetAttributes(attribute.String("outcome", "skipped_busy"))
-		return true // [CP-C1] prior batch in flight — skip collect, but a batch IS draining, so retry soon
+		// [CP-C1] prior batch in flight — skip collect. Signal catch-up (fast retry) only for a WINDOWED
+		// loop that is genuinely draining a backlog; a snapshot loop (Window==0) must NOT accelerate to
+		// 2s ticks just because a slow emit outlasted its cadence ([#92]) — that mirrors the end-of-tick
+		// backlog gate below (scheduler.go: `return sp.Window > 0 && ...`) and DESIGN §7's "snapshot loops
+		// never get catch-up acceleration". A busy snapshot loop simply retries at its jittered cadence.
+		return sp.Window > 0
 	}
 	wm, err := sp.Runner.Since(ctx) // [CP-C1] in-memory saved frontier, or persisted checkpoint
 	if err != nil {
@@ -172,7 +177,14 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 	// liveness heartbeat (= the last poll's `now`, so always slightly in the past) and carries no
 	// MaxBackfill — without this guard floor==now and every tick would falsely count backfill_unstorable.
 	if floor := now.Add(-sp.MaxBackfill); sp.Window > 0 && !wm.Time.IsZero() && wm.Time.Before(floor) {
-		s.m.SamplesSkipped(name, "backfill_unstorable", int(floor.Sub(wm.Time)/time.Minute))
+		// [#94] Count only the NEWLY-unstorable minutes. If Collect/emit keeps failing the frontier stays
+		// pinned while `now` (and thus `floor`) advances each tick — counting `floor - wm` unconditionally
+		// would re-count the entire abandoned span every tick and inflate samples_skipped_total by orders
+		// of magnitude. The runner records the last-counted floor per frontier so the initial gap is
+		// counted once and only ~cadence is added per subsequent stuck tick.
+		if mins := sp.Runner.BackfillUnstorableMinutes(wm.Time, floor); mins > 0 {
+			s.m.SamplesSkipped(name, "backfill_unstorable", mins)
+		}
 	}
 	batch, err := sp.Loop.Collect(ctx, wm)
 	switch {

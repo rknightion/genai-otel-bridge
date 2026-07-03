@@ -4,6 +4,7 @@ package schedule
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -181,6 +182,68 @@ func TestCatchupBacklogDetection(t *testing.T) {
 	// Snapshot loop (window 0) is always current → never accelerates.
 	if run(0, 100000, 100000+100000) {
 		t.Error("snapshot loop (window 0) must never signal catch-up")
+	}
+
+	// [#92] Busy-skip path: a batch in flight short-circuits runOnce at Busy() BEFORE the end-of-tick
+	// backlog gate. It must still respect the snapshot/windowed distinction — a busy WINDOWED loop
+	// signals catch-up (drain fast once the in-flight batch clears), a busy SNAPSHOT loop (Window==0)
+	// must NOT accelerate to 2s ticks just because a slow emit outlasted its cadence.
+	runBusy := func(window time.Duration) bool {
+		cp := newMemCP()
+		cp.Save(context.Background(), key, model.Watermark{Time: time.Unix(100000, 0).UTC(), Epoch: 1})
+		loop := &collectStub{key: key, out: batchAt(key, 100000)}
+		r := NewLoopRunner(loop, &fakeEmitter{byTS: map[int64]error{}}, cp, source.NewGuard(source.GuardConfig{}), 4, 1, &NoopMetrics{})
+		if err := r.Enqueue(leaderCtx(), batchAt(key, 100000)); err != nil { // mark busy; no worker drains it
+			t.Fatal(err)
+		}
+		if !r.Busy() {
+			t.Fatal("precondition: runner should be busy after Enqueue with no worker draining")
+		}
+		sch := NewScheduler(nil, &NoopMetrics{})
+		return sch.runOnce(leaderCtx(), LoopSpec{Runner: r, Loop: loop, Cadence: time.Minute, MaxBackfill: time.Hour,
+			Window: window, MaxCatchupPerTick: 4}, time.Unix(100000+4000, 0).UTC())
+	}
+	if !runBusy(50 * time.Minute) {
+		t.Error("busy windowed loop must still signal catch-up (fast retry while draining a backlog)")
+	}
+	if runBusy(0) {
+		t.Error("[#92] busy snapshot loop (window 0) must NOT accelerate to 2s ticks")
+	}
+}
+
+// failCollectStub always fails Collect with a generic upstream error (the outage that caused the old
+// watermark). Used to pin the frontier across ticks so the backfill_unstorable de-dup can be asserted.
+type failCollectStub struct{ key model.CheckpointKey }
+
+func (c *failCollectStub) Key() model.CheckpointKey { return c.key }
+func (c *failCollectStub) Cadence() time.Duration   { return time.Minute }
+func (c *failCollectStub) Collect(context.Context, model.Watermark) (model.Batch, error) {
+	return model.Batch{}, errors.New("upstream still down")
+}
+
+// TestBackfillUnstorableNotRecountedWhileStuck guards [#94]: a windowed loop whose watermark is behind
+// now−max_backfill and whose Collect keeps failing (frontier pinned) must count the abandoned span
+// ONCE, then only ~cadence per subsequent stuck tick — not the full span every tick (which inflated
+// samples_skipped_total by orders of magnitude and tripped skipped-samples SLOs on a one-time gap).
+func TestBackfillUnstorableNotRecountedWhileStuck(t *testing.T) {
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	cp := newMemCP()
+	// wm 1000s; max_backfill 90m; pick `now` so floor = now−90m is ~149m ahead of wm.
+	// now=15340 ⇒ floor=15340−5400=9940 ⇒ span=(9940−1000)/60=149 minutes.
+	cp.Save(context.Background(), key, model.Watermark{Time: time.Unix(1000, 0).UTC(), Epoch: 1})
+	loop := &failCollectStub{key: key}
+	m := &capMetrics{}
+	r := NewLoopRunner(loop, &fakeEmitter{byTS: map[int64]error{}}, cp, source.NewGuard(source.GuardConfig{}), 4, 1, m)
+	sch := NewScheduler(nil, m)
+	sp := LoopSpec{Runner: r, Loop: loop, Cadence: time.Minute, Window: 50 * time.Minute, MaxBackfill: 90 * time.Minute}
+	base := time.Unix(15340, 0).UTC()
+	for i := 0; i < 3; i++ {
+		sch.runOnce(leaderCtx(), sp, base.Add(time.Duration(i)*time.Minute)) // 3 failing ticks, 1m apart
+	}
+	got := m.skipped["backfill_unstorable"]
+	// Correct: ~149 (span, counted once) + 1 + 1 (cadence deltas) ≈ 151. Bug counted ~149×3 = ~447.
+	if got < 149 || got > 160 {
+		t.Fatalf("[#94] backfill_unstorable=%d over 3 stuck ticks; want ~150 (span once + cadence deltas), not the span re-counted each tick", got)
 	}
 }
 

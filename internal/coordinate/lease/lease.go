@@ -59,8 +59,10 @@ func (c *Coordinator) Run(ctx context.Context, onElected func(context.Context)) 
 		LeaseDuration: c.leaseDur,
 		RenewDeadline: c.renew,
 		RetryPeriod:   c.retry,
-		// ReleaseOnCancel is intentionally false: on SIGTERM we persist watermarks first and let
-		// the lease expire rather than release into a standby mid-drain (F35).
+		// ReleaseOnCancel is intentionally false: on SIGTERM the root ctx is cancelled, which aborts
+		// any in-flight collect/emit and the epoch-fenced commit (no final watermark is persisted on
+		// the way out) — we let the lease EXPIRE rather than release it into a standby, so the next
+		// leader resumes from the last committed watermark and re-pulls the partial window (F35).
 		ReleaseOnCancel: false,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(leaderCtx context.Context) {

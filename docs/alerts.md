@@ -95,8 +95,10 @@ See also: [Troubleshooting — stale watermark](./troubleshooting.md#stale-water
 
 **Severity:** critical
 
-**Fires when:** fatal emit errors (`retryable_exhausted`, `checkpoint_*`, `bad_encoding`) appear
-in the last 10 minutes. Benign upstream-collect retries are excluded.
+**Fires when:** fatal emit errors (`retryable_exhausted`, `checkpoint_*`, `bad_encoding`,
+`unknown_4xx`) appear in the last 10 minutes. Benign upstream-collect retries are excluded.
+(`unknown_4xx` is the terminal-halt kind for an unrecognised request-level 4xx such as a bad
+token — the loop halts+degrades rather than silently re-pulling forever, so it must alert.)
 
 **What to check:**
 
@@ -104,6 +106,8 @@ in the last 10 minutes. Benign upstream-collect retries are excluded.
 2. Check that the OTLP endpoint is reachable and accepting data.
 3. If `bad_encoding` errors appear, this indicates a bug in the OTLP encoder — file an issue.
 4. If `checkpoint_*` errors appear, check ConfigMap RBAC and whether the ConfigMap is corrupt.
+5. If `unknown_4xx` errors appear, the gateway is rejecting requests at the request level (e.g. an
+   invalid/expired token or a permission problem) — check the emit credentials and endpoint.
 
 See also: [Troubleshooting](./troubleshooting.md).
 

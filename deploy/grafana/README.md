@@ -82,7 +82,7 @@ The `self-obs/` dir ships **eleven** alerts (push the whole dir with `gcx resour
 |-------|----------|------------|
 | `GenaiOtelBridgeLeaderAbsent` | critical | `absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m])` — no replica has emitted in 15m (poller down / never reached a first commit). |
 | `GenaiOtelBridgePollerStale` | warning | a loop's last-success age exceeds **2× its own trailing-6h p90 baseline AND 300s** — staler than normal *for that loop*. Self-relative, so it does not false-positive on the slow log-export loops (see below). |
-| `GenaiOtelBridgeEmitFailing` | critical | fatal emit errors (`retryable_exhausted`/`checkpoint_*`/`bad_encoding`; the benign `collect` upstream-fetch retries are excluded) in 10m. |
+| `GenaiOtelBridgeEmitFailing` | critical | fatal emit errors (`retryable_exhausted`/`checkpoint_*`/`granularity_unexpected`/`bad_encoding`/`unknown_4xx`; the benign `collect` upstream-fetch retries are excluded) in 10m. `unknown_4xx` = an unrecognised non-retryable 4xx from the OTLP gateway (e.g. a rotated/invalid emit token). |
 | `GenaiOtelBridgeAuthErrors` | critical | `increase(genai_otel_bridge_auth_errors_total[10m]) > 0` — upstream returned 401/403 (credential failure). |
 | `GenaiOtelBridgeUpstreamErrorBudget` | warning | >20% of requests to an upstream `target` are 4xx/5xx/error (incl. timeouts) over 10m. |
 | `GenaiOtelBridgeWindowTruncatedDroppingRecords` | warning | a windowed log loop truncated a window — records dropped (see below). |

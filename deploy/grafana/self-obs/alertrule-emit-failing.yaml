@@ -10,7 +10,8 @@ spec:
   title: GenaiOtelBridgeEmitFailing
   # Fatal emit/checkpoint/encoding errors — NOT the benign upstream-fetch (collect) retries which are
   # excluded by the kind filter. These error kinds mean the loop has failed to commit a checkpoint or
-  # emit to the OTLP backend after exhausting retries, or encountered a bad encoding / unexpected
+  # emit to the OTLP backend after exhausting retries, hit an unrecognised non-retryable 4xx from the
+  # gateway (unknown_4xx — a terminal HALT+degrade), or encountered a bad encoding / unexpected
   # granularity. Any occurrence of these means data is being lost or the loop is stalled.
   execErrState: Ok
   noDataState: Ok
@@ -21,7 +22,7 @@ spec:
     severity: critical
   annotations:
     summary: "genai-otel-bridge {{ $labels.loop }} loop has fatal emit/checkpoint errors"
-    description: "genai_otel_bridge_emit_errors_total for the {{ $labels.loop }} loop has registered one or more fatal error kinds (retryable_exhausted / checkpoint_load / checkpoint_save / checkpoint_fenced / granularity_unexpected / bad_encoding) in the last 10m. The loop is failing to emit or commit its watermark. Check pod logs and OTLP egress (port 4318/443, Grafana Cloud credentials, network policy). Also check the genai-otel-bridge-checkpoints ConfigMap for a corrupt/fenced checkpoint. See deploy/grafana/README.md."
+    description: "genai_otel_bridge_emit_errors_total for the {{ $labels.loop }} loop has registered one or more fatal error kinds (retryable_exhausted / checkpoint_load / checkpoint_save / checkpoint_fenced / granularity_unexpected / bad_encoding / unknown_4xx) in the last 10m. The loop is failing to emit or commit its watermark. Check pod logs and OTLP egress (port 4318/443, Grafana Cloud credentials, network policy) — unknown_4xx in particular is an unrecognised non-retryable 4xx from the OTLP gateway (e.g. a rotated/invalid emit token → 401/403). Also check the genai-otel-bridge-checkpoints ConfigMap for a corrupt/fenced checkpoint. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -29,7 +30,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop) (increase(genai_otel_bridge_emit_errors_total{kind=~"retryable_exhausted|checkpoint_load|checkpoint_save|checkpoint_fenced|granularity_unexpected|bad_encoding"}[10m])) > 0'
+        expr: 'sum by (loop) (increase(genai_otel_bridge_emit_errors_total{kind=~"retryable_exhausted|checkpoint_load|checkpoint_save|checkpoint_fenced|granularity_unexpected|bad_encoding|unknown_4xx"}[10m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

@@ -203,7 +203,7 @@ sources:
 #           job_poll_timeout: 30m
 #           # logs_export: watermark older than now-max_backfill skipped LOUD. Cap ≤ Loki reject_old_samples_max_age (GC default 7d). Default 24h.
 #           max_backfill: 24h
-#           # logs_export: tripwire — a window exceeding this pages advances-past with a counted gap (never stalls)
+#           # logs_export: tripwire — a window needing MORE than this many export pages errors LOUD with NO advance (a deliberate stall; window_lag grows) rather than silently tail-dropping. Reduce `window` (or raise this) so a window fits within the cap.
 #           max_pages_per_window: "50"
 #           # logs_export: lift named sub-keys OUT of the (otherwise hard-denied) Portkey metadata blob into the structured-metadata tier (csv, default empty) — e.g. correlation_id. Only operator-named content-free sub-keys are extracted; the rest of metadata (PII) stays dropped. Bodies hard-denied.
 #           metadata_record_fields: ""

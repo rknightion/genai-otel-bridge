@@ -35,8 +35,9 @@ spec:
         # startup, so without this a `helm upgrade` that changes config: / configOverride updates the
         # ConfigMap but leaves pods on stale config. Hashes ONLY templates/configmap.yaml (the
         # genai-otel-bridge-config CM); the runtime genai-otel-bridge-checkpoints state CM is app-created, not chart-rendered,
-        # so it is intentionally not hashed here. A roll triggers one Lease failover, covered by the
-        # 300s graceful drain + lease handoff.
+        # so it is intentionally not hashed here. A roll triggers one Lease failover: SIGTERM
+        # hard-cancels in-flight work (no drain), and the next leader re-pulls the interrupted window
+        # idempotently from the last committed watermark — so the roll is safe without a drain window.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
       {{- end }}
     spec:
@@ -97,7 +98,11 @@ spec:
 
       containers:
         - name: genai-otel-bridge
-          image: {{ .Values.image }}
+          # Default to the image built for THIS chart release when .Values.image is unset: chart
+          # version == appVersion == release version == published image tag (all unprefixed, e.g. 3.0.1).
+          # A chart packaged for release X.Y.Z therefore default-installs the X.Y.Z image, never the
+          # previous release's binary. Override .Values.image to pin a digest or use a mirror/proxy.
+          image: {{ .Values.image | default (printf "ghcr.io/rknightion/genai-otel-bridge:%s" .Chart.AppVersion) }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - "-config=/etc/genai-otel-bridge/config.yaml"
@@ -166,9 +171,11 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 
-          # Health probes. /readyz returns 200 once the leader has completed its first successful
-          # collect+emit cycle. /healthz returns 200 for both leader and standby (so standby pods
-          # don't flap — CP-C5). Probe intervals and thresholds are intentionally loose; the liveness
+          # Health probes. /readyz returns 200 once config is loaded and the health server is up — on
+          # BOTH the leader and the standby, at Run start, NOT gated on any collect/emit cycle (a Ready
+          # pod may not have emitted yet). This is deliberate: standbys must stay Ready for PDB/rollout
+          # purposes. /healthz likewise returns 200 for both leader and standby (so standby pods don't
+          # flap — CP-C5). Probe intervals and thresholds are intentionally loose; the liveness
           # threshold (4 failures × 15s = 60s) gives the retry budget time to exhaust before a restart.
           readinessProbe:
             httpGet:

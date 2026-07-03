@@ -4,13 +4,13 @@
 # task + execution IAM roles (least-privilege), and a default-deny egress security group.
 #
 # Uses terraform-aws-modules where they add value:
-#   dynamodb-table ~> 4.0  (on-demand, PITR, SSE, no TTL) — requires AWS provider >= 5.98 (→ v6.x)
+#   dynamodb-table ~> 5.0  (on-demand, PITR, SSE, no TTL) — requires AWS provider >= 5.98 (→ v6.x)
 #   ecs/aws        ~> 7.0  (cluster module — v7 requires AWS provider >= 6.34, compatible with v6.x)
 #   ecs/aws//modules/service ~> 7.0  (service submodule — v7 is still a two-module composition)
 # Security group uses a raw aws_security_group resource with inline egress blocks (not the sg module)
 # to ensure Terraform removes the AWS implicit allow-all egress and achieves true default-deny.
 #
-# Note: ECS module v5 (plan L-5) is incompatible with AWS provider v6 (which dynamodb-table ~> 4.0
+# Note: ECS module v5 (plan L-5) is incompatible with AWS provider v6 (which dynamodb-table ~> 5.0
 # requires). We use ECS v7 which targets AWS provider v6. All service variable names are identical.
 #
 # Variable names verified against terraform-aws-modules GitHub sources (2026-06-28).
@@ -64,9 +64,13 @@ module "table" {
 #   - DynamoDB: GetItem + PutItem + UpdateItem on the single HA table (lock + checkpoint).
 #     DeleteItem is intentionally excluded — the coordinator never deletes the lock item
 #     (it expires naturally — §3.3 of the design spec — no-release-needed shutdown model).
-#   - SecretsManager: GetSecretValue on the caller-supplied secret ARNs (one per API key).
 #   - KMS: Decrypt + GenerateDataKey on the caller-supplied CMK (only when kms_key_arn != null).
 #     Required when DynamoDB SSE uses a customer-managed key; omitted for the AWS-owned default key.
+# NOTE: the task role does NOT get secretsmanager:GetSecretValue. Container-definition `secrets`
+# (valueFrom Secrets Manager ARN) are fetched by the ECS agent using the EXECUTION role BEFORE the
+# app process starts — not by the task role — and the app itself never calls Secrets Manager (secrets
+# arrive as injected env vars). We grant that read on the execution role instead, via the service
+# module's `task_exec_secret_arns` (see the module.service call below), which is least-privilege-correct.
 # The execution role (ECS agent role) is managed by the service module (create_task_exec_iam_role).
 #
 # Built as a literal list — NOT via jsondecode(aws_iam_policy_document.json) — on purpose. The DynamoDB
@@ -88,14 +92,6 @@ locals {
         resources = [module.table.dynamodb_table_arn]
       },
     ],
-    length(var.secret_arns) > 0 ? [
-      {
-        sid       = "SecretsRead"
-        effect    = "Allow"
-        actions   = ["secretsmanager:GetSecretValue"]
-        resources = values(var.secret_arns)
-      },
-    ] : [],
     var.kms_key_arn != null ? [
       {
         sid       = "KMSDecrypt"
@@ -223,8 +219,11 @@ locals {
     "table: ${var.name}-ha",
   )
 
-  # MEM_LIMIT in bytes = var.memory MiB. Feeds the GOMEMLIMIT env var via the existing 80%-of-limit
-  # logic in the binary (same mechanism as the Helm downward-API resourceFieldRef: limits.memory).
+  # MEM_LIMIT in bytes = var.memory MiB. Passed to the binary's -container-mem-bytes flag (see the
+  # container `command` below), which sets GOMEMLIMIT = 0.9 × this value (selfobs.SetMemoryLimit) —
+  # the same soft-limit mechanism as the Helm downward-API resourceFieldRef: limits.memory path, which
+  # also feeds -container-mem-bytes. (The env var alone is inert: the Go runtime only reads a var named
+  # GOMEMLIMIT, and the binary reads the limit from the flag, not from MEM_LIMIT.)
   mem_limit_bytes = var.memory * 1024 * 1024
 
   # Build the secrets list for the container definition from var.secret_arns.
@@ -283,6 +282,17 @@ module "service" {
   # the module-managed role (verified: the variable accepts a list of policy statement objects).
   tasks_iam_role_statements = local.task_iam_statements
 
+  # Execution role secret access — the ECS AGENT (execution role, not the task role) fetches the
+  # container-definition `secrets` (valueFrom Secrets Manager ARN) at task launch, before the app
+  # starts. The module adds a scoped secretsmanager:GetSecretValue statement to the module-created
+  # execution role for exactly these ARNs. WITHOUT this, every task launch fails with
+  # ResourceInitializationError / AccessDeniedException and the service never reaches RUNNING.
+  # Secrets encrypted with the AWS-managed aws/secretsmanager key need no extra grant (the key policy
+  # covers it); secrets encrypted with a CUSTOMER-managed KMS key additionally need kms:Decrypt on that
+  # key on the execution role — pass it via task_exec_iam_statements in your root module (the secrets
+  # CMK may differ from var.kms_key_arn, which is the DynamoDB SSE key).
+  task_exec_secret_arns = values(var.secret_arns)
+
   container_definitions = {
     (var.name) = {
       image     = var.image
@@ -290,10 +300,20 @@ module "service" {
       memory    = var.memory
       essential = true
 
+      # Container command (docker CMD, appended to the image ENTRYPOINT ["/genai-otel-bridge"]).
+      # -container-mem-bytes is what actually sets GOMEMLIMIT (= 0.9 × the value) — the Go runtime only
+      # honours a var literally named GOMEMLIMIT, and the binary reads the limit from this flag, so the
+      # MEM_LIMIT env var alone would be a no-op. This mirrors the Helm deployment, which passes
+      # -container-mem-bytes=$(MEM_LIMIT). No -config flag: config is delivered via the
+      # GENAI_OTEL_BRIDGE_CONFIG env var (ECS/Fargate has no file mount), and identity resolves from the
+      # ECS task-metadata endpoint — so only the memory flag is appended here.
+      command = ["-container-mem-bytes", tostring(local.mem_limit_bytes)]
+
       # Environment variables injected at plan time (static values).
       # GENAI_OTEL_BRIDGE_CONFIG: the full YAML config (non-secret structure; secret values arrive
       #   via the Secrets Manager `secrets` injection below as ${ENV_VAR_NAME} placeholders).
-      # MEM_LIMIT: feeds GOMEMLIMIT = 80% of the limit (mirrors the Helm downward-API mechanism).
+      # MEM_LIMIT: informational only — the same byte value is passed to -container-mem-bytes above
+      #   (which is what actually sets GOMEMLIMIT = 0.9 × it); kept for parity/visibility with Helm.
       # ENV: resolves ${ENV} in the config (identity.deployment_environment, source_instance).
       # AWS_REGION (only when var.aws_region is set): lets the DynamoDB SDK resolve the region when the
       #   config omits ha.dynamodb.region (the bundled default does).

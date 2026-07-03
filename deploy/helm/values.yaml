@@ -7,9 +7,15 @@
 
 replicas: 2
 
-# Full image reference including tag. Override at deploy time to point at your registry:
-#   helm upgrade genai-otel-bridge ./deploy/helm --set image=<registry>/genai-otel-bridge:v0.1.0
-image: ghcr.io/rknightion/genai-otel-bridge:latest@sha256:6b8946d9e12bf04d520d2fc25ea1644cf57f1dcdc23e1574ad40d0c653329282
+# Full image reference including tag. LEFT EMPTY on purpose: when unset, the Deployment defaults the
+# image to ghcr.io/rknightion/genai-otel-bridge:<.Chart.AppVersion> — i.e. the image built for THIS
+# chart release (chart version == appVersion == release version == published image tag, all unprefixed,
+# e.g. 3.0.1). This guarantees a chart packaged for release X.Y.Z default-installs the X.Y.Z image and
+# never the previous release's binary, so a release that ADDS a config key ships the matching binary (no
+# unknown-YAML-key crash loop). It also means no static digest is pinned here for Renovate to bump to a
+# stale value. Override at deploy time to pin a digest or point at a mirror/proxy:
+#   helm upgrade genai-otel-bridge ./deploy/helm --set image=<registry>/genai-otel-bridge:3.0.1
+image: ""
 
 # Image pull secrets for a private registry. Each entry is a {name: <secret>} referencing a
 # kubernetes.io/dockerconfigjson Secret that must already exist in the release namespace. Default
@@ -49,9 +55,12 @@ podDisruptionBudget:
   enabled: true
   maxUnavailable: 1
 
-# terminationGracePeriodSeconds must be >= the emit-retry budget so an in-flight emit can
-# complete before SIGKILL. 300s covers the 3x retry (exponential backoff, max ~90s total)
-# plus the checkpoint save and leadership handoff.
+# terminationGracePeriodSeconds bounds the wait before SIGKILL. NOTE: SIGTERM hard-cancels the root
+# context, which aborts any in-flight emit and refuses any post-cancel checkpoint save — there is NO
+# drain. Correctness is preserved anyway: no watermark advances after cancel, so the next leader
+# re-pulls and re-emits the interrupted window byte-identically (idempotent). So this only needs to
+# cover the self-obs OTLP flush on the way out (seconds); 300s is a generous ceiling, not a required
+# drain window, and lowering it does not risk data loss.
 terminationGraceSeconds: 300
 
 # NetworkPolicy egress — DNS + API server are matched robustly (label selector / configurable CIDR);
@@ -314,7 +323,7 @@ config:
 #           job_poll_timeout: 30m
 #           # logs_export: watermark older than now-max_backfill skipped LOUD. Cap ≤ Loki reject_old_samples_max_age (GC default 7d). Default 24h.
 #           max_backfill: 24h
-#           # logs_export: tripwire — a window exceeding this pages advances-past with a counted gap (never stalls)
+#           # logs_export: tripwire — a window needing MORE than this many export pages errors LOUD with NO advance (a deliberate stall; window_lag grows) rather than silently tail-dropping. Reduce `window` (or raise this) so a window fits within the cap.
 #           max_pages_per_window: "50"
 #           # logs_export: lift named sub-keys OUT of the (otherwise hard-denied) Portkey metadata blob into the structured-metadata tier (csv, default empty) — e.g. correlation_id. Only operator-named content-free sub-keys are extracted; the rest of metadata (PII) stays dropped. Bodies hard-denied.
 #           metadata_record_fields: ""

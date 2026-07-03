@@ -1,6 +1,6 @@
 # deploy — Helm chart + dashboards/alerting
 
-## helm/ (chart v0.5.0)
+## helm/ (chart version is release-please-managed in Chart.yaml — do not hardcode it here)
 
 2-replica (active/passive; raise to 3 for a second standby) Deployment, namespaced (least-privilege),
 default-deny egress **and** ingress. A render guard fails on `ha.coordinator=none` + `replicas>1`.

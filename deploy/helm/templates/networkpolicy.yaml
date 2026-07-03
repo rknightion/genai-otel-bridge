@@ -72,16 +72,26 @@ spec:
   # integrator's health listener (8080); widen it only for extra sidecar listeners that the kubelet (or
   # another pod) must reach — e.g. the e2e's loopback sink/mock probe ports. The pprof port is appended
   # automatically in pull mode.
+  # [CP-H10d] An empty ingressPorts list MUST mean deny-all, not allow-all. A NetworkPolicy ingress
+  # rule with a null/empty `ports:` (and no `from:`) matches ALL ports from ALL peers — the exact
+  # inverse of the intent. So render the port-scoped rule ONLY when there is at least one port to allow
+  # (ingressPorts non-empty, or pprof appended in pull mode); otherwise emit `ingress: []`, which with
+  # policyTypes:[Ingress] is a true default-deny-all-ingress.
+  {{- $pprofIngress := and .Values.profiling.enabled (eq .Values.profiling.mode "pull") }}
+  {{- if or .Values.networkPolicy.ingressPorts $pprofIngress }}
   ingress:
     - ports:
     {{- range .Values.networkPolicy.ingressPorts }}
         - protocol: TCP
           port: {{ . }}
     {{- end }}
-{{- if and .Values.profiling.enabled (eq .Values.profiling.mode "pull") }}
+    {{- if $pprofIngress }}
         - protocol: TCP
           port: {{ .Values.profiling.pullPort }}
-{{- end }}
+    {{- end }}
+  {{- else }}
+  ingress: []
+  {{- end }}
 
   egress:
     # DNS: select the cluster DNS pods (CoreDNS/kube-dns) in kube-system by LABEL, not CIDR.

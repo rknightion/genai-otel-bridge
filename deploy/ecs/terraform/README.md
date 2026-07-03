@@ -5,7 +5,7 @@ with full active/standby leader-elected HA backed by DynamoDB — the same singl
 as the Kubernetes/Helm deployment.
 
 Built on [terraform-aws-modules](https://registry.terraform.io/namespaces/terraform-aws-modules):
-- `terraform-aws-modules/dynamodb-table/aws ~> 4.0` — lock + checkpoint table
+- `terraform-aws-modules/dynamodb-table/aws ~> 5.0` — lock + checkpoint table
 - `aws_security_group` (raw resource) — default-deny egress security group
 - `terraform-aws-modules/ecs/aws ~> 7.0` — ECS cluster
 - `terraform-aws-modules/ecs/aws//modules/service ~> 7.0` — ECS service (2 tasks active/standby)
@@ -44,7 +44,10 @@ module "genai_otel_bridge" {
 
   # Secrets Manager ARNs — injected as env vars; the bundled default config references these names.
   # (The literal ${MY_ENV_NAME} in the YAML reaches the binary, which resolves it from the injected
-  # env var at load time.)
+  # env var at load time.) These are fetched by the ECS agent using the module-created EXECUTION role
+  # at task launch (the module wires task_exec_secret_arns = values(secret_arns) for you) — NOT by the
+  # task/app role, which never calls Secrets Manager. If the secrets are encrypted with a CUSTOMER-managed
+  # KMS key, also grant kms:Decrypt on that key to the execution role via task_exec_iam_statements.
   secret_arns = {
     GC_OTLP_ENDPOINT = aws_secretsmanager_secret.gc_endpoint.arn
     GC_INSTANCE_ID   = aws_secretsmanager_secret.gc_instance.arn

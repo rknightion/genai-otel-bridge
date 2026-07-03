@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,6 +166,89 @@ func TestDownloadChunkNon200Errors(t *testing.T) {
 	l := dlLoop(t, srv)
 	if _, _, _, err := l.downloadChunk(context.Background(), srv.URL+"/500", 0, 4, time.Unix(0, 0).UTC()); err == nil {
 		t.Fatal("a non-200 download must error (no silent empty page)")
+	}
+}
+
+// TestDownloadChunkRedactsSignedURLInTransportError (issue #34, SECURITY): a transport error on the
+// signed-URL fetch must NOT leak the credential-bearing query (X-Amz-Signature / SAS token) into the
+// returned error — which would otherwise be logged to stdout → Loki. We point the download at an
+// allow-listed but unreachable host (server closed) so dlClient.Do returns a *url.Error embedding the
+// full signed URL, and assert no signature/credential survives.
+func TestDownloadChunkRedactsSignedURLInTransportError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	l := mkLogsLoop(t, logsCfg(srv, map[string]string{"window": "1h", "settle": "10m"}), time.Now().UTC())
+	signed := srv.URL + "/obj.jsonl?X-Amz-Signature=SUPERSECRETSIG&X-Amz-Credential=AKIAEXAMPLE&X-Amz-Expires=21600"
+	srv.Close() // connections now refused ⇒ the transport error is a *url.Error embedding the full signed URL
+	_, _, _, err := l.downloadChunk(context.Background(), signed, 0, 4, time.Unix(0, 0).UTC())
+	if err == nil {
+		t.Fatal("expected a transport error from the unreachable signed URL")
+	}
+	for _, leak := range []string{"SUPERSECRETSIG", "X-Amz-Signature", "X-Amz-Credential", "AKIAEXAMPLE", "X-Amz-Expires", "?"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Fatalf("signed-URL credential leaked into download error: %q", err.Error())
+		}
+	}
+}
+
+// TestDownloadChunkSkipsOversizeLine (issue #35): a single JSONL line exceeding the line cap is SKIPPED
+// (drained, never parsed) while the good lines around it are emitted, the line offset advances PAST the
+// bad line (so the loop can never wedge re-reading it), and it fires exactly one line_oversize count.
+func TestDownloadChunkSkipsOversizeLine(t *testing.T) {
+	big := `{"id":"big","pad":"` + strings.Repeat("x", 4096) + `"}` + "\n"
+	body := exportLine(0, "m") + big + exportLine(2, "m")
+	srv := bodyServer(t, body)
+	l := dlLoop(t, srv)
+	l.maxLineBytes = 1024 // a normal exportLine (~few hundred B) fits; the padded line (>4 KiB) is over-long
+	var skipped []string
+	l.onGraphSkipped = func(loop, graph string) { skipped = append(skipped, loop+"/"+graph) }
+	recs, lines, eof, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 10, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines != 3 {
+		t.Fatalf("lines consumed=%d want 3 (offset must advance PAST the over-long line)", lines)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("emitted records=%d want 2 (over-long line dropped, good lines around it kept)", len(recs))
+	}
+	if recs[0].RecordAttributes["id"] != "r0" || recs[1].RecordAttributes["id"] != "r2" {
+		t.Fatalf("wrong records emitted: %q,%q want r0,r2", recs[0].RecordAttributes["id"], recs[1].RecordAttributes["id"])
+	}
+	if !eof {
+		t.Fatal("want eof=true (3 < chunk max 10)")
+	}
+	if len(skipped) != 1 || skipped[0] != "logs_export/line_oversize" {
+		t.Fatalf("over-long line must fire exactly one logs_export/line_oversize count, got %v", skipped)
+	}
+}
+
+// TestDownloadChunkResumesPastOversizeLine (issue #35): a chunked page whose FIRST line is over-long is
+// consumed across two chunks — the first chunk skips the bad line, the second resumes at the advanced
+// offset and never re-reads it (no wedge on identical bytes).
+func TestDownloadChunkResumesPastOversizeLine(t *testing.T) {
+	big := `{"id":"big","pad":"` + strings.Repeat("x", 4096) + `"}` + "\n"
+	body := big + exportLine(1, "m") + exportLine(2, "m")
+	srv := bodyServer(t, body)
+	l := dlLoop(t, srv)
+	l.maxLineBytes = 1024
+	// chunk 1: max=1 ⇒ read exactly one line — the over-long one — skip it, offset advances to 1.
+	recs, lines, eof, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 1, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines != 1 || len(recs) != 0 || eof {
+		t.Fatalf("chunk1: want 1 line / 0 recs / eof=false, got %d/%d/%v", lines, len(recs), eof)
+	}
+	// chunk 2: resume at offset 1 (skip the bad line without re-parsing it), emit the two good lines.
+	recs, lines, eof, err = l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 1, 10, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines != 2 || len(recs) != 2 || !eof {
+		t.Fatalf("chunk2: want 2 lines / 2 recs / eof=true, got %d/%d/%v", lines, len(recs), eof)
+	}
+	if recs[0].RecordAttributes["id"] != "r1" || recs[1].RecordAttributes["id"] != "r2" {
+		t.Fatalf("resume emitted wrong records: %q,%q want r1,r2", recs[0].RecordAttributes["id"], recs[1].RecordAttributes["id"])
 	}
 }
 

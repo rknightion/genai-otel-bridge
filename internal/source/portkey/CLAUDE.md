@@ -165,13 +165,28 @@ allow-list), `logs_settings.go` (decoupled knobs + `newLogsExportLoop`).
   exact-matches `settings.signed_url_allow_hosts` before any fetch, independent of the dlClient egress
   guard (whose `AllowHosts` is the SAME list — belt-and-braces). `signed_url_allow_hosts` + `workspace_id`
   are REQUIRED (fail-fast at construction). `requested_data` is validated content-free.
-- **Streaming chunker:** the ≤page_size file is never buffered whole — `bufio.Scanner` line-by-line,
-  skip `page_offset_done`, take ≤`chunk_max_records`. `page_offset_done` counts LINES (a malformed line
-  is skipped-loud yet still advances). A download exceeding `download cap` errors loudly (no silent
-  truncation). Per-chunk re-download is the resume mechanism — bounded memory, but a >chunk_max_records
-  page re-GETs the whole object per chunk (tune `chunk_max_records`/`window` for high-traffic windows).
+- **Streaming chunker:** the ≤page_size file is never buffered whole — a bounded `readLine` reader
+  (`logs_download.go`, NOT `bufio.Scanner`) line-by-line, skip `page_offset_done`, take
+  ≤`chunk_max_records`. `page_offset_done` counts LINES (both a malformed line AND an **over-long line
+  > `maxLogLineBytes`** are skipped-loud yet still advance the offset — so the loop can never wedge
+  re-reading the same bytes). An over-long line is drained + discarded (never parsed/stringified — it may
+  be content-bearing) and fires `OnGraphSkipped(logs_export,"line_oversize")` so it is alertable, not
+  silent; a malformed (unparseable) line is `slog.Warn`-skipped. NB `bufio.Scanner` was deliberately
+  replaced here: it aborts the WHOLE scan with `ErrTooLong` on one over-long line and cannot advance past
+  it, which permanently stalled the window (issue #35). A download exceeding `download cap` errors loudly
+  (no silent truncation). Per-chunk re-download is the resume mechanism — bounded memory, but a
+  >chunk_max_records page re-GETs the whole object per chunk (tune `chunk_max_records`/`window` for
+  high-traffic windows).
+- **Signed-URL secret redaction (§7 / issue #34):** a transport error on the signed-URL object download
+  is a `*url.Error` whose string embeds the FULL URL — and the signed query is a live bearer credential
+  (`X-Amz-Signature`/`X-Goog-Signature`/SAS token). `downloadChunk` routes every download transport /
+  request-build error through `httpx.RedactURLError` (strips the query + fragment, masks userinfo) so the
+  signature can never reach the scheduler's `slog` → stdout → Loki. The non-2xx path already used
+  `httpx.ErrSnippet` (bounded body, no URL) and is unchanged.
 - **Failure honesty:** failed/stopped/stuck jobs `slog.Error` AND fire `Deps.OnGraphSkipped` (→
-  `genai_otel_bridge_source_graph_unavailable_total{loop=logs_export,graph=export_failed|export_stuck}`).
+  `genai_otel_bridge_source_graph_unavailable_total{loop=logs_export,graph=export_failed|export_stuck}`);
+  a skipped over-long line reuses the same self-metric with `graph=line_oversize` (and an unparseable
+  trace-id value with `graph=trace_id_unparsed`).
   `max_pages_per_window` over-size → loud error (no silent tail-drop). `max_backfill` floor skips an
   unstorable old span loudly (mirrors analytics F25).
 - **Decoupled knobs** (`settings`, no `internal/config` change): `window`(1h) `settle`(10m)

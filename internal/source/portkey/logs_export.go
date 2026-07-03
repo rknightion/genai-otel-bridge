@@ -84,6 +84,7 @@ type logsExportLoop struct {
 	maxPagesPerWindow         int
 	chunkMaxRecords           int
 	downloadMaxBytes          int64 // 0 ⇒ defaultDownloadMaxBytes; a loop field so the truncation path is testable
+	maxLineBytes              int   // 0 ⇒ maxLogLineBytes; a loop field so the oversize-line skip path is testable without a multi-MiB fixture
 	jobPollTimeout            time.Duration
 	requestedData             []string
 	signedURLAllowHosts       []string
@@ -115,6 +116,17 @@ func (l *logsExportLoop) jobFailed(reason string) {
 func (l *logsExportLoop) traceIDUnparsed() {
 	if l.onGraphSkipped != nil {
 		l.onGraphSkipped("logs_export", "trace_id_unparsed")
+	}
+}
+
+// lineOversize counts a single JSONL export line that exceeded maxLogLineBytes and was SKIPPED (the line
+// offset still advances, so the loop never wedges re-reading the same bytes forever). Reuses the
+// graph-skipped self-metric (→ genai_otel_bridge_source_graph_unavailable_total{loop="logs_export",graph="line_oversize"})
+// so an over-long line is loud + alertable — matching the "skipped loudly" contract in CLAUDE.md — rather
+// than a silent gap. The oversized bytes are NEVER parsed or stringified (they may be content-bearing).
+func (l *logsExportLoop) lineOversize() {
+	if l.onGraphSkipped != nil {
+		l.onGraphSkipped("logs_export", "line_oversize")
 	}
 }
 

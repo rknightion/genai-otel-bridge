@@ -4,8 +4,11 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,5 +139,45 @@ func TestDoRejectsDisallowedHost(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "https://evil.example.com/x", nil)
 	if _, err := c.Do(req); err == nil {
 		t.Fatal("expected host-allowlist rejection")
+	}
+}
+
+// TestRedactURLError asserts a *url.Error carrying a credential-bearing query (a presigned signed-URL
+// signature) is sanitised: the query/signature never survives, but the operation, scheme://host/path,
+// and the inner transport error are preserved (and errors.Is still sees the inner error).
+func TestRedactURLError(t *testing.T) {
+	inner := errors.New("dial tcp 1.2.3.4:443: connect: connection refused")
+	ue := &url.Error{
+		Op:  "Get",
+		URL: "https://signed-url-host.example.com/obj.jsonl?X-Amz-Signature=SUPERSECRETSIG&X-Amz-Credential=AKIA%2Fus-east-1",
+		Err: inner,
+	}
+	got := RedactURLError(ue)
+	msg := got.Error()
+	for _, leak := range []string{"SUPERSECRETSIG", "X-Amz-Signature", "X-Amz-Credential", "AKIA", "?"} {
+		if strings.Contains(msg, leak) {
+			t.Fatalf("redacted error still leaks %q: %s", leak, msg)
+		}
+	}
+	if !strings.Contains(msg, "signed-url-host.example.com/obj.jsonl") {
+		t.Fatalf("redacted error should keep scheme/host/path, got: %s", msg)
+	}
+	if !errors.Is(got, inner) {
+		t.Fatalf("redacted error must still wrap the inner transport error")
+	}
+
+	// userinfo password is masked.
+	ue2 := &url.Error{Op: "Get", URL: "https://user:hunter2@host.example.com/x?sig=abc", Err: inner}
+	if m := RedactURLError(ue2).Error(); strings.Contains(m, "hunter2") || strings.Contains(m, "sig=abc") {
+		t.Fatalf("must mask userinfo password + query, got: %s", m)
+	}
+
+	// non-*url.Error passes through unchanged; nil ⇒ nil.
+	plain := errors.New("some non-url error")
+	if RedactURLError(plain) != plain {
+		t.Fatal("a non-*url.Error must pass through unchanged")
+	}
+	if RedactURLError(nil) != nil {
+		t.Fatal("nil in ⇒ nil out")
 	}
 }

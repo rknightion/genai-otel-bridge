@@ -619,6 +619,39 @@ func TestLogsCollectTruncatedDownloadErrors(t *testing.T) {
 	}
 }
 
+// TestLogsCollectCompletesWindowWithOversizeLine (issue #35): a window whose page contains a single
+// over-long JSONL line must NOT wedge (the old bufio.Scanner ErrTooLong bug retried the same offset
+// forever). The over-long line is skipped loudly (line_oversize count), the good lines around it are
+// emitted, and the window frontier advances to completion.
+func TestLogsCollectCompletesWindowWithOversizeLine(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	big := `{"id":"big","pad":"` + strings.Repeat("x", 4096) + `"}` + "\n"
+	body := exportLine(0, "m") + big + exportLine(2, "m")
+	f := newFakeExport(t, 3, func(int) string { return body })
+	var skipped []string
+	deps := source.Deps{OnGraphSkipped: func(loop, graph string) { skipped = append(skipped, loop+"/"+graph) }}
+	l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}), deps, now)
+	l.maxLineBytes = 1024
+
+	start := model.Watermark{Time: now.Add(-time.Hour)}
+	logs, wm := drive(t, l, start, 20)
+	if len(logs) != 2 {
+		t.Fatalf("emitted %d logs, want 2 (over-long line skipped, window still completes)", len(logs))
+	}
+	if !wm.Time.After(start.Time) {
+		t.Fatalf("window frontier must advance past the over-long line (no wedge), got %v", wm.Time)
+	}
+	found := false
+	for _, s := range skipped {
+		if s == "logs_export/line_oversize" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("over-long line must fire logs_export/line_oversize, got %v", skipped)
+	}
+}
+
 // TestLogsCollectResumesInFlightJobAcrossLeaderChange: a NEW loop instance (simulating a new leader)
 // handed the persisted cursor RESUMES the in-flight job (polls/downloads the SAME job id) rather than
 // creating a new one — idempotent failover.

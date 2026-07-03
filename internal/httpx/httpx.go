@@ -10,6 +10,7 @@ package httpx
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -126,6 +127,45 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		c.cfg.Observer(RequestInfo{Target: req.URL.Hostname(), Method: req.Method, StatusCode: code, Err: err, Duration: time.Since(start)})
 	}
 	return resp, err
+}
+
+// RedactURLError sanitises a transport error so a request URL's QUERY STRING can never reach a log
+// line. Go's *url.Error stringifies as `Op "<full-url>": <inner>`, embedding the FULL request URL —
+// and for a presigned/signed download URL the query IS a live bearer credential (X-Amz-Signature /
+// X-Goog-Signature / an Azure SAS token) granting read access to the raw object. This returns an error
+// whose message keeps the operation + scheme://host/path (operationally useful) but DROPS the query and
+// fragment entirely, and masks any userinfo password. A non-*url.Error passes through unchanged (its
+// string does not carry the request URL). nil in ⇒ nil out.
+//
+// The inner transport error (`ue.Err`, e.g. "dial tcp …: connection refused") does not carry the URL,
+// so it is preserved (wrapped, so errors.Is/As still see it). Callers that render a download/transport
+// error into a log or trace MUST route it through this first.
+func RedactURLError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	redacted := stripQuery(ue.URL)
+	return fmt.Errorf("%s %q: %w", ue.Op, redacted, ue.Err)
+}
+
+// stripQuery removes the query string, fragment, and any userinfo password from a raw URL, leaving
+// scheme://[user@]host/path. On a parse failure it falls back to truncating at the first '?' so a
+// signature can never survive even an unparseable URL.
+func stripQuery(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		before, _, _ := strings.Cut(raw, "?")
+		return before
+	}
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.Redacted() // masks a userinfo password too; query already cleared
 }
 
 // ErrSnippet reads a bounded prefix of a non-2xx response body and returns it as a trimmed, single-line

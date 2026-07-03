@@ -135,7 +135,9 @@ func (s *Store) Save(ctx context.Context, key model.CheckpointKey, w model.Water
 	if err := checkpoint.CheckEncodable(w); err != nil {
 		return err
 	}
-	for attempt := 0; attempt < s.retries; attempt++ {
+	// [#116] `attempt <= s.retries` = 1 initial attempt + s.retries re-tries, mirroring the configmap
+	// backend's loop bound exactly (the package doc's claim). `<` gave one fewer attempt than configmap.
+	for attempt := 0; attempt <= s.retries; attempt++ {
 		out, err := s.db.GetItem(ctx, &awsddb.GetItemInput{
 			TableName:      aws.String(s.table),
 			Key:            map[string]ddbtypes.AttributeValue{"pk": sstr(s.pk(key))},
@@ -180,7 +182,7 @@ func (s *Store) Save(ctx context.Context, key model.CheckpointKey, w model.Water
 		}
 		return fmt.Errorf("checkpoint/dynamodb: put: %w", err)
 	}
-	return fmt.Errorf("checkpoint/dynamodb: exhausted RMW retries for %s", key)
+	return fmt.Errorf("checkpoint/dynamodb: exhausted RMW after %d attempts for %s", s.retries+1, key)
 }
 
 var _ checkpoint.Checkpointer = (*Store)(nil)

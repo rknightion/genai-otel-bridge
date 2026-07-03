@@ -5,6 +5,7 @@ package dynamodb
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +81,28 @@ func TestEncodeDecodeRoundTripAtYearBound(t *testing.T) {
 	got, ver, err := decode(item)
 	if err != nil || ver != 1 || !got.Time.Equal(w.Time) || got.Cursor != "c" || got.Epoch != 4 {
 		t.Fatalf("year-9999 must round-trip; got wm=%+v ver=%d err=%v", got, ver, err)
+	}
+}
+
+// TestSaveRMWAttemptCountOnExhaustion [#116]: under sustained conditional-write contention the
+// dynamodb backend must perform the SAME number of RMW attempts as the configmap backend for the
+// same retries value — 1 initial attempt + retries re-tries = retries+1 total — since its package doc
+// claims it "mirrors the ConfigMap RMW exactly". Guards the loop bound (`<=` not `<`). The exhaustion
+// error must state the actual number of attempts made.
+func TestSaveRMWAttemptCountOnExhaustion(t *testing.T) {
+	f := &fakeAPI{getOut: &awsddb.GetItemOutput{}, putErr: &ddbtypes.ConditionalCheckFailedException{}}
+	s := New(f, "t", "ckpt#")
+	err := s.Save(context.Background(), model.CheckpointKey{SourceInstance: "i", Loop: "l", OutputFingerprint: "fp"},
+		model.Watermark{Time: time.Unix(100, 0).UTC(), Epoch: 1})
+	if err == nil {
+		t.Fatal("sustained conditional-write contention must exhaust and error")
+	}
+	// retries=5 → 1 initial + 5 re-tries = 6 attempts, matching configmap's `attempt <= s.retries`.
+	if f.puts != 6 {
+		t.Fatalf("RMW made %d PutItem attempts, want 6 (retries=5 → 1 initial + 5 retries, mirroring configmap)", f.puts)
+	}
+	if !strings.Contains(err.Error(), "6 attempts") {
+		t.Fatalf("exhaustion error must state the actual attempt count; got %q", err.Error())
 	}
 }
 

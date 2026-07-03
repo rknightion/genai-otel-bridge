@@ -51,12 +51,17 @@ in `ARCHITECTURE.md` ledger #17.
   only bounds how long the SIGKILL takes to arrive, it does not let watermarks keep advancing.
 - `epoch()` reads `Lease.Spec.LeaseTransitions` once at election as a coarse monotonic fence (returns 0
   + warns on GET error; never guesses). The real in-flight fence is leaderCtx cancellation.
-- **Leadership-loss exit is asymmetric between backends.** `lease.Coordinator.Run` returns `ctx.Err()`
-  after `le.Run` stops, which is `nil` when leadership was lost (renewal lapse) while the root ctx is
-  still alive — `main`'s `err != nil && ctx.Err() == nil` fatal guard does not fire, so the process logs
-  and exits **0**, relying on the container orchestrator to restart it and rejoin the election. The
-  `dynamodb/` coordinator instead re-enters its own `acquire` loop in-process on leadership loss (no
-  process exit) — see `dynamodb/` below.
+- **Leadership loss re-campaigns in-process on BOTH backends (#110).** `lease.Coordinator.Run` wraps a
+  single election term (`campaign`) in a `for` loop: on a genuine renewal lapse (leadership lost while
+  the root ctx is still alive) it builds a **fresh** elector and re-campaigns, exactly like the
+  `dynamodb/` coordinator's `acquire` loop — it only returns when the root ctx is cancelled
+  (SIGTERM/rollout → `ctx.Err() != nil`, a clean exit) or when the elector cannot be constructed (a
+  loud, non-nil error → `main` fatals). This removed the prior asymmetry where a lease lapse made
+  `Run` return `ctx.Err() == nil`, fell through `main`'s `err != nil && ctx.Err() == nil` guard, and
+  exited the process **0** mid-pod-life on every K8s-API flap. The drain barrier (`elected || IsLeader`
+  → `<-leadDone`) still joins the prior term before the next campaign, so a re-election never races the
+  old leadership's emit worker; each re-election reads a fresh epoch fence and re-enters `onElected`
+  (`Scheduler.Run` resets via `Reset()`, the same re-entry the dynamodb coordinator already relies on).
 
 ## dynamodb/ gotchas
 

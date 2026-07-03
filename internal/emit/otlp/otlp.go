@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +45,10 @@ type Emitter struct {
 	logsURL string
 	auth    string
 	hc      *http.Client
+	// now/sleep are injectable so the retry loop (backoff + Retry-After honouring) is deterministically
+	// testable without real wall-clock waits. Production uses time.Now and a ctx-aware timer sleep.
+	now   func() time.Time
+	sleep func(context.Context, time.Duration) error
 }
 
 func New(cfg Config) *Emitter {
@@ -76,6 +81,17 @@ func New(cfg Config) *Emitter {
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+		},
+		now: time.Now,
+		sleep: func(ctx context.Context, d time.Duration) error {
+			t := time.NewTimer(d)
+			defer t.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-t.C:
+				return nil
+			}
 		},
 	}
 }
@@ -128,9 +144,11 @@ func (e *Emitter) emitSamples(ctx context.Context, samples []model.Sample) error
 }
 
 // emitLogs encodes log records and POSTs them to /v1/logs, splitting on 413 (F40).
-// NOTE: the logs reject taxonomy re-uses classify() unchanged — it is conservative for v1.
-// An unrecognised gateway reject maps to ReasonUnknown, on which the runner halts+degrades rather
-// than silently advancing. Real Loki-specific error shapes are a documented follow-up.
+// NOTE: the logs reject taxonomy re-uses classify() unchanged. classify() already matches Loki's
+// distributor ordering/age reject strings ("entry out of order", "too far behind", "greater than
+// max age") alongside the Mimir err-mimir-* codes — see followup.md's Portkey logs_export row
+// (BUILT, regression-tested). An unrecognised gateway reject still maps to ReasonUnknown, on which
+// the runner halts+degrades rather than silently advancing.
 func (e *Emitter) emitLogs(ctx context.Context, logs []model.LogRecord) error {
 	body, err := EncodeLogs(e.cfg.Identity, logs)
 	if err != nil {
@@ -164,11 +182,11 @@ func (e *Emitter) emitLogs(ctx context.Context, logs []model.LogRecord) error {
 func (e *Emitter) post(ctx context.Context, url string, gz []byte) error {
 	p := e.cfg.Retry
 	delay := p.InitialDelay
-	deadline := time.Now().Add(p.MaxElapsed)
+	deadline := e.now().Add(p.MaxElapsed)
 	var lastStatus int
 	var lastErr error
 	for {
-		status, respBody, err := e.doOnce(ctx, url, gz)
+		status, respBody, retryAfter, err := e.doOnce(ctx, url, gz)
 		respBody = e.redactSecrets(respBody) // [ext-review-7] never let an echoed credential reach an error string
 		lastStatus, lastErr = status, err
 		switch {
@@ -191,16 +209,31 @@ func (e *Emitter) post(ctx context.Context, url string, gz []byte) error {
 		default: // 5xx not in the retryable set (e.g. 500/501) — re-pull next cadence, no inline retry
 			return &emit.RetryableError{Status: status, Err: fmt.Errorf("non-retryable-inline status %d", status)}
 		}
-		if time.Now().After(deadline) {
+		now := e.now()
+		if now.After(deadline) {
 			return &emit.RetryableError{Status: lastStatus, Err: fmt.Errorf("retry budget exhausted: %v", lastErr)}
 		}
 		sleep := jittered(delay, p.Jitter)
-		t := time.NewTimer(sleep)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return &emit.RetryableError{Status: lastStatus, Err: ctx.Err()}
-		case <-t.C:
+		// [#122] Honour a 429 Retry-After: retry no sooner than the gateway's advertised throttle window
+		// (seconds or HTTP-date, parsed in doOnce), so we don't burn attempts firing guaranteed-429s
+		// inside the window. Take max(computed backoff, Retry-After). If the advertised wait is longer
+		// than the REMAINING budget, sleeping would only blow past the deadline for no gain — short-circuit
+		// to a RetryableError now (re-pull next cadence) rather than waiting it out. Retry-After only
+		// applies to 429; the 502/503/504/transport backoff is unchanged (retryAfter is 0 on those). The
+		// normal-backoff sleep is intentionally NOT capped to the remaining budget — it may overshoot the
+		// deadline by up to one MaxDelay, exactly as before (F8); the next iteration's `now.After(deadline)`
+		// then returns. (Capping to `remaining` would let sleep hit 0 at the boundary and busy-loop, since
+		// `After` is strict.)
+		if status == 429 && retryAfter > 0 {
+			if remaining := deadline.Sub(now); retryAfter > remaining {
+				return &emit.RetryableError{Status: lastStatus, Err: fmt.Errorf("429 Retry-After %v exceeds remaining retry budget %v", retryAfter, remaining)}
+			}
+			if retryAfter > sleep {
+				sleep = retryAfter
+			}
+		}
+		if err := e.sleep(ctx, sleep); err != nil { // ctx cancelled mid-wait
+			return &emit.RetryableError{Status: lastStatus, Err: err}
 		}
 		if delay = time.Duration(float64(delay) * p.Multiplier); delay > p.MaxDelay {
 			delay = p.MaxDelay
@@ -232,10 +265,13 @@ func (e *Emitter) redactSecrets(s string) string {
 	return s
 }
 
-func (e *Emitter) doOnce(ctx context.Context, url string, gz []byte) (int, string, error) {
+// doOnce sends one POST and returns the status, a (limited) body, and the parsed Retry-After delay
+// (0 when absent/unparseable — only meaningful on a 429). [#122] The header must be surfaced here
+// because post()'s backoff cannot otherwise see it — resp is not visible to the retry loop.
+func (e *Emitter) doOnce(ctx context.Context, url string, gz []byte) (int, string, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(gz))
 	if err != nil {
-		return 0, "", err
+		return 0, "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Content-Encoding", "gzip")
@@ -244,11 +280,11 @@ func (e *Emitter) doOnce(ctx context.Context, url string, gz []byte) (int, strin
 	}
 	resp, err := e.hc.Do(req)
 	if err != nil {
-		return 0, "", err // transport error
+		return 0, "", 0, err // transport error
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return resp.StatusCode, string(body), nil
+	return resp.StatusCode, string(body), parseRetryAfter(resp.Header.Get("Retry-After"), e.now()), nil
 }
 
 func isRetryable(status int, err error) bool {
@@ -299,6 +335,28 @@ func trunc(s string) string {
 		return s[:256]
 	}
 	return s
+}
+
+// parseRetryAfter parses an RFC 7231 Retry-After value: either delay-seconds (a non-negative integer)
+// or an HTTP-date. It returns the wait as a duration relative to now, clamped to >= 0; a missing,
+// malformed, or past value yields 0 (fall back to the computed backoff). [#122]
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := t.Sub(now); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 func jittered(d time.Duration, j float64) time.Duration {

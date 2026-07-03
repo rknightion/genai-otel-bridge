@@ -5,6 +5,7 @@ package configmap
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +90,31 @@ func TestConfigMapRejectsUnencodableTime(t *testing.T) {
 	}
 	if !got.Time.Equal(good.Time) {
 		t.Fatalf("stored value was clobbered: %+v", got)
+	}
+}
+
+// TestConfigMapRMWAttemptCountOnExhaustion [#116]: under sustained resourceVersion contention the
+// configmap backend performs 1 initial attempt + retries re-tries = retries+1 total attempts, and the
+// exhaustion error must state the actual number of attempts made (not just the retry count) — the
+// number the dynamodb backend must mirror exactly.
+func TestConfigMapRMWAttemptCountOnExhaustion(t *testing.T) {
+	cs := fake.NewSimpleClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "genai-otel-bridge-checkpoints", Namespace: "genai-otel-bridge"}, Data: map[string]string{}})
+	var n int
+	cs.PrependReactor("update", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		n++
+		return true, nil, apiConflict() // every update conflicts → RMW exhausts
+	})
+	s := New(cs, "genai-otel-bridge", "genai-otel-bridge-checkpoints")
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	err := s.Save(context.Background(), key, model.Watermark{Time: time.Unix(100, 0).UTC(), Epoch: 1})
+	if err == nil {
+		t.Fatal("sustained resourceVersion conflict must exhaust and error")
+	}
+	if n != 6 {
+		t.Fatalf("RMW made %d update attempts, want 6 (retries=5 → 1 initial + 5 retries)", n)
+	}
+	if !strings.Contains(err.Error(), "6 attempts") {
+		t.Fatalf("exhaustion error must state the actual attempt count; got %q", err.Error())
 	}
 }
 

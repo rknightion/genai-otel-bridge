@@ -46,7 +46,33 @@ func leadershipStoppedEvent(everLed bool, ctxErr error) (slog.Level, string) {
 	}
 }
 
+// Run campaigns for leadership and runs onElected while leader. [#110] On a genuine renewal lapse
+// (leadership lost while the root ctx is still alive) it RE-CAMPAIGNS in-process rather than
+// returning — symmetric with the dynamodb coordinator's acquire loop. Previously a lapse made Run
+// return ctx.Err() == nil, which fell through main's `err != nil && ctx.Err() == nil` fatal guard, so
+// the process logged "stopped" and exited 0 mid-pod-life on every K8s-API flap. Now the loop only
+// returns when the root ctx is cancelled (SIGTERM/rollout → ctx.Err() != nil, a clean exit) or when
+// elector construction fails (a loud, non-nil error → main fatal). Each iteration builds a FRESH
+// elector so a re-election reads a fresh epoch fence and re-enters onElected (Scheduler.Run resets via
+// Reset(), the same re-entry the dynamodb coordinator already relies on; the drain barrier below joins
+// the prior term first, so a re-election never races the old leadership's emit worker).
 func (c *Coordinator) Run(ctx context.Context, onElected func(context.Context)) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := c.campaign(ctx, onElected); err != nil {
+			return err // elector construction failure — genuine, loud, non-nil (main fatals)
+		}
+		// campaign() returned: either the root ctx was cancelled (handled at the top of the next
+		// iteration) or leadership lapsed with the ctx still live — loop back and re-campaign.
+	}
+}
+
+// campaign runs a single leader-election term to completion (drain barrier included). It returns nil
+// when the term ends (leadership lost or ctx cancelled) and a non-nil error only if the elector
+// cannot be constructed.
+func (c *Coordinator) campaign(ctx context.Context, onElected func(context.Context)) error {
 	var elected atomic.Bool         // [round3 HIGH-1] set iff we started leading
 	leadDone := make(chan struct{}) // closed when onElected (the scheduler drain) returns
 	lock := &resourcelock.LeaseLock{
@@ -105,7 +131,9 @@ func (c *Coordinator) Run(ctx context.Context, onElected func(context.Context)) 
 	if elected.Load() || le.IsLeader() {
 		<-leadDone
 	}
-	return ctx.Err()
+	// [#110] Return nil regardless of why the term ended — Run's loop re-checks ctx.Err() at the top
+	// and returns it on a real cancellation, or re-campaigns on a bare leadership lapse.
+	return nil
 }
 
 // epochReadAttempts / epochReadBackoff bound the retry on a TRANSIENT Lease Get error when reading

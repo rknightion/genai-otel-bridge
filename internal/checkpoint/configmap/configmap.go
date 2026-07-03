@@ -123,7 +123,7 @@ func (s *Store) Save(ctx context.Context, key model.CheckpointKey, w model.Water
 		}
 		return fmt.Errorf("checkpoint/configmap: write: %w", err)
 	}
-	return fmt.Errorf("checkpoint/configmap: exhausted %d RMW retries for %s", s.retries, key)
+	return fmt.Errorf("checkpoint/configmap: exhausted RMW after %d attempts for %s", s.retries+1, key)
 }
 
 // dataKey maps a CheckpointKey to a VALID ConfigMap data key. [ext-review-1] CheckpointKey.String()

@@ -12,7 +12,7 @@ LDFLAGS := -X github.com/rknightion/genai-otel-bridge/internal/version.Version=$
 GOLANGCI_LINT_VERSION ?= v2.12.2
 SETUP_ENVTEST_VERSION ?= release-0.23
 ENVTEST_K8S_VERSION   ?= 1.35.0
-HELM_VERSION          ?= v3.18.3
+HELM_VERSION          ?= v3.21.2
 K3D_VERSION           ?= v5.9.0
 K3S_IMAGE             ?= rancher/k3s:v1.35.1-k3s1
 IMAGE                 ?= genai-otel-bridge:dev

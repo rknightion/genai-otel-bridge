@@ -51,13 +51,18 @@ func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, co
 	if err := cfg.Validate(reg.Known()); err != nil {
 		return nil, fmt.Errorf("config invalid: %w", err)
 	}
-	// Indexed/label allow-list (guard is default-deny, CP-C6): the union of each ENABLED-source vendor
-	// package's declared content-free keys — quantile (latency/percentile gauges), ai_model/metadata_key/
-	// metadata_value (groups), ai_org/response_status_code (portkey logs), session/feedback_key
+	// Indexed/label allow-list (guard is default-deny, CP-C6): the UNCONDITIONAL union of EVERY registered
+	// vendor package's declared content-free keys — quantile (latency/percentile gauges), ai_model/
+	// metadata_key/metadata_value (groups), ai_org/response_status_code (portkey logs), session/feedback_key
 	// (langsmith sessions), run_type/status (langsmith runs) — PLUS the operator's additive
-	// governance.allow_label_keys opt-in. The keys live in the vendor packages (portkey/langsmith
-	// AllowedLabelKeys), not hardcoded here, per the decoupling hard rule. An un-listed indexed attr is
-	// dropped (a Sample) or drops the whole LogRecord (okLog).
+	// governance.allow_label_keys opt-in. The union is NOT gated on which sources are enabled (#75): every
+	// key here is content-free by declaration and each label key is chosen by SOURCE CODE, never derived
+	// from upstream data, so a disabled vendor's keys widen the default-deny surface with no live leak path
+	// (a Portkey-only deployment allow-lists langsmith's run_type/status etc., harmlessly). Keying it on
+	// enabled sources would tighten the surface but needs a per-type registry hook; the union is accepted
+	// as-is. The keys live in the vendor packages (portkey/langsmith AllowedLabelKeys), not hardcoded here,
+	// per the decoupling hard rule. An un-listed indexed attr is dropped (a Sample) or drops the whole
+	// LogRecord (okLog).
 	// Operator promotions to the indexed/label tier: top-level governance.allow_label_keys PLUS each
 	// loop's settings.extra_indexed_fields (per-loop). The latter is AUTO-allow-listed here so a strip
 	// that promotes a field to IndexedAttributes can't then be silently dropped by the default-deny guard
@@ -68,22 +73,24 @@ func Build(_ context.Context, cfg *config.Config, cp checkpoint.Checkpointer, co
 	// Reject a content-floor key (message body / injected PII) named in any operator promotion: the guard's
 	// deny floor would otherwise silently neutralise it (deny beats allow), and a silent no-op of operator
 	// intent violates the operationally-honest rule. (The owning source ALSO rejects it at construction;
-	// this composition-root check is the backstop that can't drift.) Fail fast at startup.
-	floor := map[string]bool{}
-	for _, k := range source.AbsoluteNeverDenyKeys() {
-		floor[k] = true
-	}
+	// this composition-root check is the backstop that can't drift.) source.IsContentFloorKey matches by
+	// EXACT key AND by gen_ai content-namespace PREFIX, so a flattened content attr such as
+	// gen_ai.prompt.0.content is rejected here too, not only the bare gen_ai.prompt (#97). Fail fast at startup.
 	for _, k := range operatorPromoted {
-		if floor[k] {
+		if source.IsContentFloorKey(k) {
 			return nil, fmt.Errorf("governance.allow_label_keys / settings.extra_indexed_fields: %q is a content-floor key (message body / injected PII) and cannot be promoted to a label", k)
 		}
 	}
 	guard := source.NewGuard(source.GuardConfig{
 		AllowLabelKeys: allowKeys,
 		// Effective denylist = the never-subtractable floor + the gray backstop tier MINUS any field a
-		// loop explicitly opted into its record allow-list (so a default deployment keeps the full
+		// loop explicitly opted in via ANY of its three content-governance knobs — extra_record_fields,
+		// extra_indexed_fields, metadata_record_fields (so a default deployment keeps the full
 		// defence-in-depth backstop; only explicitly opted-in gray fields are released — review HIGH-1).
-		DenyFieldKeys:   contentDenylist(optedInRecordFields(cfg)),
+		// Considering all three knobs (not just extra_record_fields) is what stops a gray key promoted via
+		// extra_indexed_fields/metadata_record_fields from being auto-allow-listed yet still deny-dropped —
+		// deny beats allow — which would silently drop every affected record (#51).
+		DenyFieldKeys:   contentDenylist(optedInContentFields(cfg)),
 		PerSeriesBudget: cfg.Governance.PerMetricCardinalityBudget, // per-metric cap; config-keyed, default 10k
 		OnNewLabelValue: m.NewLabelValue,
 	})
@@ -198,8 +205,13 @@ func (a *App) Run(ctx context.Context, health http.Handler, healthAddr string, m
 // backstop; only the specific opted-in keys are released. Contrast source.AbsoluteNeverDenyKeys (the
 // never-subtractable, never-opt-in-able floor of message bodies + injected PII).
 func grayBackstopDenyKeys() []string {
+	// NOTE: inputs_preview/outputs_preview are NOT here — they are truncated renderings of the actual
+	// prompt/response (LLM content), so they were promoted to the never-subtractable content FLOOR
+	// (source.AbsoluteNeverDenyKeys) and can no longer be opted in via any knob (#95). "no LLM content to
+	// Grafana Cloud — ever" (followup.md). The keys below are content-free-BY-DEFAULT free-text/operational
+	// fields: subtractable defence-in-depth only.
 	return []string{
-		"inputs_preview", "outputs_preview", "events", "extra", "serialized",
+		"events", "extra", "serialized",
 		"manifest", "s3_urls", "error", "name",
 	}
 }
@@ -240,12 +252,15 @@ func contentDenylist(optedIn map[string]bool) []string {
 	return out
 }
 
-// optedInRecordFields is the union of every enabled loop's settings.extra_record_fields (a cross-source
-// content-governance convention — the per-loop strips read the same key). The composition root reads it
-// here to compute the effective denylist; it is governance wiring, not vendor/domain knowledge (the key
-// name is generic and the values are operator policy, not defaults). A floor field present here is still
-// kept denied (contentDenylist never subtracts the floor) and is rejected fail-fast by the owning source.
-func optedInRecordFields(cfg *config.Config) map[string]bool {
+// optedInContentFields is the union of every enabled loop's THREE content-governance opt-in knobs —
+// settings.extra_record_fields ∪ extra_indexed_fields ∪ metadata_record_fields (cross-source conventions
+// — the per-loop strips read these same keys). The composition root reads it here to compute the
+// effective denylist; it is governance wiring, not vendor/domain knowledge (the key names are generic and
+// the values are operator policy, not defaults). A gray backstop field named in ANY knob is an explicit
+// opt-in and is subtracted from the denylist, so the guard cannot silently deny-drop a field the operator
+// promoted+allow-listed (#51). A floor field present here is still kept denied (contentDenylist never
+// subtracts the floor) and is rejected fail-fast by the owning source / the composition-root floor check.
+func optedInContentFields(cfg *config.Config) map[string]bool {
 	out := map[string]bool{}
 	for _, sc := range cfg.Sources {
 		if !sc.Enabled {
@@ -255,9 +270,11 @@ func optedInRecordFields(cfg *config.Config) map[string]bool {
 			if !lp.Enabled {
 				continue
 			}
-			for f := range strings.SplitSeq(lp.Settings["extra_record_fields"], ",") {
-				if f = strings.TrimSpace(f); f != "" {
-					out[f] = true
+			for _, knob := range []string{"extra_record_fields", "extra_indexed_fields", "metadata_record_fields"} {
+				for f := range strings.SplitSeq(lp.Settings[knob], ",") {
+					if f = strings.TrimSpace(f); f != "" {
+						out[f] = true
+					}
 				}
 			}
 		}
@@ -268,7 +285,7 @@ func optedInRecordFields(cfg *config.Config) map[string]bool {
 // optedInIndexedFields is the ordered, de-duplicated union of every enabled loop's
 // settings.extra_indexed_fields — the per-loop INDEXED-tier (Loki stream-label) promotion. The
 // composition root auto-allow-lists these in the guard (so a promoted indexed attr is never silently
-// dropped) and floor-rejects any content key. Same generic-wiring rationale as optedInRecordFields (no
+// dropped) and floor-rejects any content key. Same generic-wiring rationale as optedInContentFields (no
 // vendor/domain knowledge — a generic key name + operator-policy values). NOTE: only the LOGS loops
 // (portkey logs_export, langsmith runs) actually consume the key in their strip; on a metrics loop the
 // key is a no-op (allow-listing it here is harmless, and a floor key is still rejected) — matching the

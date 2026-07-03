@@ -20,13 +20,19 @@ observer, forwarded to each source's HTTP client). The guard's per-metric cardin
 1. Build the source registry + register all source types (`portkey.Register`) — extension point for new
    sources.
 2. `cfg.Validate(registry.Known())` — fails if a configured source type isn't registered.
-3. Build the cardinality Guard: **content denylist** = `contentDenylist(optedInRecordFields(cfg))` — the
+3. Build the cardinality Guard: **content denylist** = `contentDenylist(optedInContentFields(cfg))` — the
    never-subtractable FLOOR (`source.AbsoluteNeverDenyKeys`, enumerated in `internal/source/CLAUDE.md`;
-   defence beyond minimisation, Cdx-H7) PLUS the gray backstop tier MINUS any field a loop opted into its record
-   allow-list (`settings.extra_record_fields`), so a default deployment keeps the full backstop and only
-   explicitly-opted-in gray fields are released (review HIGH-1). Floor keys are denied regardless of
-   opt-in. The **indexed/label allow-list** is the union of each enabled vendor package's
-   `AllowedLabelKeys()` (the keys live in the vendor packages, not hardcoded here — decoupling) PLUS the
+   defence beyond minimisation, Cdx-H7) PLUS the gray backstop tier MINUS any field a loop opted in via ANY
+   of its three content-governance knobs (`settings.extra_record_fields` ∪ `extra_indexed_fields` ∪
+   `metadata_record_fields`), so a default deployment keeps the full backstop and only explicitly-opted-in
+   gray fields are released (review HIGH-1). Considering all three knobs (not just `extra_record_fields`) is
+   what stops a gray key promoted via `extra_indexed_fields`/`metadata_record_fields` from being
+   auto-allow-listed yet still deny-dropped — deny beats allow — which silently ate every affected record
+   (#51). Floor keys are denied regardless of opt-in. The **indexed/label allow-list** is the UNCONDITIONAL
+   union of EVERY registered vendor package's `AllowedLabelKeys()` — NOT gated on which sources are enabled
+   (#75: every key is content-free by declaration and chosen by source code, never from upstream data, so a
+   disabled vendor's keys widen the default-deny surface with no live-leak path). The keys live in the
+   vendor packages, not hardcoded here — decoupling. PLUS the
    operator's promotions: `governance.allow_label_keys` (top-level) and each loop's
    `settings.extra_indexed_fields` (per-loop, gathered by `optedInIndexedFields` and AUTO-allow-listed so
    a strip-promoted indexed attr can't be silently dropped). A content-floor key named in either promotion

@@ -281,6 +281,100 @@ func TestLangsmithRunsExtraRecordFieldFlows(t *testing.T) {
 	}
 }
 
+// TestLangsmithRunsRejectsContentPreviewOptIn (#95): opting an LLM-content PREVIEW field
+// (inputs_preview/outputs_preview — truncated prompt/response renderings) into extra_record_fields must
+// FAIL FAST at config load. They are on the never-subtractable content floor, so the langsmith runs
+// hard-denied opt-in validation (built from source.AbsoluteNeverDenyKeys) rejects them — enforcing the
+// resolved "no LLM content to Grafana Cloud — ever" posture, not merely a strip default.
+func TestLangsmithRunsRejectsContentPreviewOptIn(t *testing.T) {
+	for _, field := range []string{"inputs_preview", "outputs_preview"} {
+		cfg := langsmithRunsConfig("http://127.0.0.1:1")
+		cfg.Sources[0].Loops["runs"].Settings["extra_record_fields"] = field
+		cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
+		_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+		if err == nil {
+			t.Fatalf("%s: Build must reject opting an LLM-content preview into extra_record_fields (#95)", field)
+		}
+		if !strings.Contains(err.Error(), field) {
+			t.Fatalf("%s: error should name the rejected field, got %v", field, err)
+		}
+	}
+}
+
+// TestLangsmithRunsExtraIndexedGrayFieldFlows (#51): a GRAY backstop key promoted via
+// settings.extra_indexed_fields must flow end-to-end (auto-allow-listed AND released from the effective
+// denylist), NOT be silently guard-dropped. Pre-fix, "error" was auto-allow-listed but stayed on the
+// denylist (subtraction only considered extra_record_fields), so deny-beats-allow dropped every record —
+// 0 payloads forever. The content floor still holds: message bodies never leak.
+func TestLangsmithRunsExtraIndexedGrayFieldFlows(t *testing.T) {
+	f := newFakeRuns(t)
+
+	var mu sync.Mutex
+	var logBodies [][]byte
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/logs" {
+			raw, _ := io.ReadAll(r.Body)
+			body := raw
+			if r.Header.Get("Content-Encoding") == "gzip" {
+				if zr, err := gzip.NewReader(bytes.NewReader(raw)); err == nil {
+					body, _ = io.ReadAll(zr)
+				}
+			}
+			mu.Lock()
+			logBodies = append(logBodies, body)
+			mu.Unlock()
+		}
+		w.WriteHeader(200)
+	}))
+	defer gw.Close()
+
+	cfg := langsmithRunsConfig(f.URL)
+	// Promote the gray free-text field "error" into the INDEXED tier (operator's explicit content decision).
+	cfg.Sources[0].Loops["runs"].Settings["extra_indexed_fields"] = "error"
+
+	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
+	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t",
+		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := a.Specs()[0]
+
+	leaderCtx := coordinate.WithEpoch(context.Background(), 1)
+	since := model.Watermark{}
+	for step := range 8 {
+		b, cerr := sp.Loop.Collect(leaderCtx, since)
+		if cerr != nil {
+			t.Fatalf("step %d: Collect: %v", step, cerr)
+		}
+		sp.Runner.ProcessBatch(leaderCtx, b)
+		next, _ := sp.Runner.Since(leaderCtx)
+		since = next
+		mu.Lock()
+		got := len(logBodies)
+		mu.Unlock()
+		if got > 0 {
+			break
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logBodies) == 0 {
+		t.Fatal("no /v1/logs payload reached the gateway — the record was guard-dropped despite the gray key being opted in (#51)")
+	}
+	joined := bytes.Join(logBodies, []byte{})
+	if !bytes.Contains(joined, []byte("ZZERRORTXTZZ")) {
+		t.Fatal("expected the opted-in gray field (error) value to flow as an indexed attr (#51)")
+	}
+	for _, marker := range []string{"ZZINPUTSZZ", "ZZOUTPUTSZZ", "ZZMSGZZ", "ZZPREVIEWZZ"} {
+		if bytes.Contains(joined, []byte(marker)) {
+			t.Fatalf("CONTENT LEAK: %q leaked", marker)
+		}
+	}
+}
+
 // TestLangsmithRunsExtraIndexedFieldFlows proves the INDEXED-tier opt-in composes end-to-end: a
 // content-free field promoted via settings.extra_indexed_fields is emitted as an indexed attr AND the
 // record is NOT dropped — i.e. the composition root auto-allow-listed the promoted key in the guard (a

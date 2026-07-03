@@ -95,9 +95,12 @@ func (g *Guard) SanitizeLogs(loop string, logs []model.LogRecord) ([]model.LogRe
 
 func (g *Guard) okLog(loop string, lr model.LogRecord) bool {
 	// Content deny-list across both maps: any denied key ⇒ drop the record (loud-counted, never emitted).
+	// A never-subtractable content-floor key is denied here regardless of the configured deny map AND by
+	// PREFIX for the gen_ai content namespaces (IsContentFloorKey), so a flattened content attr like
+	// gen_ai.prompt.0.content that the exact-match deny map would miss is still blocked at the chokepoint (#97).
 	for _, m := range []map[string]string{lr.IndexedAttributes, lr.RecordAttributes} {
 		for k := range m {
-			if g.deny[k] {
+			if g.deny[k] || IsContentFloorKey(k) {
 				return false
 			}
 		}
@@ -140,7 +143,7 @@ func (g *Guard) okLog(loop string, lr model.LogRecord) bool {
 
 func (g *Guard) ok(s model.Sample) bool {
 	for k := range s.Labels {
-		if g.deny[k] {
+		if g.deny[k] || IsContentFloorKey(k) { // floor is denied regardless of the deny map, incl. gen_ai prefix variants (#97)
 			return false
 		}
 		if !g.allow[k] { // [CP-C6] empty allowlist ⇒ DENY all label keys (v1 no-label policy); NEVER allow-any
@@ -174,7 +177,16 @@ func (g *Guard) ok(s model.Sample) bool {
 	return true
 }
 
-// labelSig returns a deterministic string signature for a label set, used for cardinality tracking.
+// labelSigReplacer escapes the signature's delimiter/escape characters so labelSig is INJECTIVE over
+// label sets. Without it a label value containing '=' or ';' could forge a different label set's
+// signature — e.g. {a:"1;b=2"} and {a:"1",b:"2"} both naively render "a=1;b=2;" — collapsing two distinct
+// downstream series into one cardinality-budget slot (and admitting a colliding set as "already seen"
+// even when the budget is full). Escaping '\' first keeps the encoding reversible/unambiguous (#99).
+var labelSigReplacer = strings.NewReplacer(`\`, `\\`, `=`, `\=`, `;`, `\;`)
+
+// labelSig returns a deterministic, injective string signature for a label set, used for cardinality
+// tracking. Keys and values are individually escaped so no combination of characters in one label can
+// reproduce the signature of a different label set (#99).
 func labelSig(m map[string]string) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -183,9 +195,9 @@ func labelSig(m map[string]string) string {
 	sort.Strings(keys)
 	var b strings.Builder
 	for _, k := range keys {
-		b.WriteString(k)
+		b.WriteString(labelSigReplacer.Replace(k))
 		b.WriteByte('=')
-		b.WriteString(m[k])
+		b.WriteString(labelSigReplacer.Replace(m[k]))
 		b.WriteByte(';')
 	}
 	return b.String()

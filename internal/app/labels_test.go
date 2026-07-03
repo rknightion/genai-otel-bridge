@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
@@ -75,5 +76,49 @@ func TestBuildRejectsFloorKeyInExtraIndexedFields(t *testing.T) {
 	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
 	if err == nil || !strings.Contains(err.Error(), "content-floor") {
 		t.Fatalf("want a content-floor rejection for extra_indexed_fields, got %v", err)
+	}
+}
+
+// TestBuildRejectsContentFloorPrefixInExtraIndexedFields (#97): the composition-root floor check matches
+// by gen_ai content-namespace PREFIX (source.IsContentFloorKey), so a FLATTENED content attr like
+// gen_ai.prompt.0.content — which exact-matches no floor key — is still rejected fail-fast, honouring the
+// documented gen_ai.prompt* prefix contract.
+func TestBuildRejectsContentFloorPrefixInExtraIndexedFields(t *testing.T) {
+	cfg := minimalConfig("http://127.0.0.1:1")
+	lp := cfg.Sources[0].Loops["analytics"]
+	if lp.Settings == nil {
+		lp.Settings = map[string]string{}
+	}
+	lp.Settings["extra_indexed_fields"] = "gen_ai.prompt.0.content" // flattened content attr — prefix floor
+	cfg.Sources[0].Loops["analytics"] = lp
+	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
+	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	if err == nil || !strings.Contains(err.Error(), "content-floor") {
+		t.Fatalf("want a content-floor rejection for the gen_ai prefix variant, got %v", err)
+	}
+}
+
+// TestGrayFieldPromotedNotSimultaneouslyDenied (#51): a gray backstop key promoted via extra_indexed_fields
+// must be BOTH auto-allow-listed AND absent from the effective guard denylist — never both allowed and
+// denied (deny beats allow ⇒ silent record drop). Also covers the metadata_record_fields knob.
+func TestGrayFieldPromotedNotSimultaneouslyDenied(t *testing.T) {
+	cfg := &config.Config{Sources: []config.SourceConfig{{
+		Enabled: true,
+		Loops: map[string]config.LoopConfig{
+			"runs": {Enabled: true, Settings: map[string]string{
+				"extra_indexed_fields":   "name",  // gray, promoted to the indexed tier
+				"metadata_record_fields": "error", // gray, lifted to the record tier
+			}},
+		},
+	}}}
+	deny := contentDenylist(optedInContentFields(cfg))
+	if slices.Contains(deny, "name") {
+		t.Error("gray key promoted via extra_indexed_fields must be released from the effective denylist (#51)")
+	}
+	if slices.Contains(deny, "error") {
+		t.Error("gray key promoted via metadata_record_fields must be released from the effective denylist (#51)")
+	}
+	if !slices.Contains(optedInIndexedFields(cfg), "name") {
+		t.Error("extra_indexed_fields key must be auto-allow-listed as an indexed attr (#51)")
 	}
 }

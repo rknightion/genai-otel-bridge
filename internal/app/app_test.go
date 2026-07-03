@@ -37,7 +37,7 @@ func TestEffectiveContentDenylist(t *testing.T) {
 			t.Errorf("floor key %q must always be denied", floor)
 		}
 	}
-	for _, gray := range []string{"error", "events", "name", "inputs_preview"} {
+	for _, gray := range []string{"error", "events", "name", "serialized"} {
 		if !slices.Contains(base, gray) {
 			t.Errorf("default (no opt-in) deployment must keep gray backstop key %q", gray)
 		}
@@ -58,20 +58,32 @@ func TestEffectiveContentDenylist(t *testing.T) {
 		t.Error("floor keys (inputs/metadata) must remain denied even if named in extra_record_fields")
 	}
 
-	// optedInRecordFields unions across enabled loops and ignores disabled ones / blanks.
+	// #95: inputs_preview/outputs_preview are LLM-content previews → now on the never-subtractable floor.
+	// They stay denied even when explicitly opted in via extra_record_fields.
+	prevOpt := contentDenylist(map[string]bool{"inputs_preview": true, "outputs_preview": true})
+	for _, p := range []string{"inputs_preview", "outputs_preview"} {
+		if !slices.Contains(source.AbsoluteNeverDenyKeys(), p) {
+			t.Errorf("%q must be a content floor key (#95)", p)
+		}
+		if !slices.Contains(prevOpt, p) {
+			t.Errorf("content-preview floor key %q must remain denied even if opted in (#95)", p)
+		}
+	}
+
+	// #51: optedInContentFields unions ALL THREE knobs across enabled loops, ignoring disabled ones / blanks.
 	cfg := &config.Config{Sources: []config.SourceConfig{{
 		Enabled: true,
 		Loops: map[string]config.LoopConfig{
-			"runs":  {Enabled: true, Settings: map[string]string{"extra_record_fields": " tags , error "}},
+			"runs":  {Enabled: true, Settings: map[string]string{"extra_record_fields": " tags , error ", "extra_indexed_fields": "name", "metadata_record_fields": "correlation_id"}},
 			"other": {Enabled: false, Settings: map[string]string{"extra_record_fields": "secret"}},
 		},
 	}}}
-	got := optedInRecordFields(cfg)
-	if !got["tags"] || !got["error"] {
-		t.Errorf("expected tags+error opted in, got %v", got)
+	got := optedInContentFields(cfg)
+	if !got["tags"] || !got["error"] || !got["name"] || !got["correlation_id"] {
+		t.Errorf("expected tags+error (record) + name (indexed) + correlation_id (metadata) opted in, got %v", got)
 	}
 	if got["secret"] {
-		t.Error("a disabled loop's extra_record_fields must be ignored")
+		t.Error("a disabled loop's opt-in fields must be ignored")
 	}
 }
 

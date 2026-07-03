@@ -45,7 +45,16 @@ cannot be released by any `extra_record_fields` opt-in. **This is the single sou
 `internal/app`, `internal/source/langsmith`, `internal/source/portkey` reference it by name, don't re-enumerate.
 
 `gen_ai.*`, `input.value`, `output.value`, `request`, `response`, `inputs`, `outputs`, `messages`,
-`metadata`, `portkeyHeaders`.
+`inputs_preview`, `outputs_preview` (LLM-content previews — floor, never opt-in-able), `metadata`,
+`portkeyHeaders`.
+
+`gen_ai.*` is matched by **prefix**, not just the exact enumerated keys — `IsContentFloorKey` (in
+`content.go`) treats any key under the `gen_ai.prompt` / `gen_ai.completion` / `gen_ai.input.messages` /
+`gen_ai.output.messages` / `gen_ai.system_instructions` namespaces as floor, so flattened/indexed content
+forms (`gen_ai.prompt.0.content`) are denied by the guard and rejected by the composition-root floor check
+too. Both the guard and the source opt-in validators should use `IsContentFloorKey` so the two layers
+can't drift (exact-vs-prefix). Content-free operational GenAI attrs (`gen_ai.request.*`, `gen_ai.usage.*`)
+are deliberately NOT covered.
 
 Effective denylist (wired in `internal/app`) = this floor + a gray backstop tier − fields a loop opted into
 its record allow-list. Floor keys are denied regardless of opt-in (defence beyond minimisation, Cdx-H7).

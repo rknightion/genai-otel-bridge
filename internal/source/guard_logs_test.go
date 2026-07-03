@@ -75,6 +75,46 @@ func TestSanitizeLogsRecordAttrsNotAllowListed(t *testing.T) {
 	}
 }
 
+// TestSanitizeLogsDeniesContentFloorPrefix (#97): a flattened gen_ai content attr in EITHER attr map
+// drops the whole record via the floor prefix rule, even though it exact-matches nothing on the deny list.
+func TestSanitizeLogsDeniesContentFloorPrefix(t *testing.T) {
+	g := NewGuard(GuardConfig{AllowLabelKeys: []string{"ai_model"}})
+	in := []model.LogRecord{
+		logRecord(map[string]string{"ai_model": "gpt-5"}, nil, ""),                                                  // ok
+		logRecord(map[string]string{"ai_model": "gpt-5"}, map[string]string{"gen_ai.prompt.0.content": "leak"}, ""), // record-attr floor prefix → drop
+	}
+	kept, dropped := g.SanitizeLogs("logs_export", in)
+	if len(kept) != 1 || dropped != 1 {
+		t.Fatalf("kept=%d dropped=%d want 1/1 (flattened gen_ai content must drop the record)", len(kept), dropped)
+	}
+}
+
+// TestSanitizeLogsBudgetPerLoopIdentity (#98): the logs cardinality budget is keyed on the loop-identity
+// string the caller passes, so two source instances passing DISTINCT identities (e.g. the full
+// CheckpointKey "pk-eu/logs_export/f" vs "pk-us/logs_export/f") each get an INDEPENDENT budget and cannot
+// starve each other; the SAME identity shares one budget. (Production wiring must pass an instance-distinct
+// identity — the bare loop name conflates instances; see the runner change tracked by #98.)
+func TestSanitizeLogsBudgetPerLoopIdentity(t *testing.T) {
+	g := NewGuard(GuardConfig{AllowLabelKeys: []string{"ai_model"}, PerSeriesBudget: 1})
+	euA := []model.LogRecord{logRecord(map[string]string{"ai_model": "a"}, nil, "")}
+	euB := []model.LogRecord{logRecord(map[string]string{"ai_model": "b"}, nil, "")}
+	// instance eu: first stream fills its budget, a second distinct stream is over budget → dropped.
+	if _, d := g.SanitizeLogs("pk-eu/logs_export/f", euA); d != 0 {
+		t.Fatalf("eu first stream dropped=%d want 0", d)
+	}
+	if _, d := g.SanitizeLogs("pk-eu/logs_export/f", euB); d != 1 {
+		t.Fatalf("eu second distinct stream dropped=%d want 1 (over its budget)", d)
+	}
+	// instance us: an INDEPENDENT budget — its first distinct stream is admitted, not starved by eu.
+	if _, d := g.SanitizeLogs("pk-us/logs_export/f", euA); d != 0 {
+		t.Fatalf("us first stream dropped=%d want 0 (independent per-instance budget)", d)
+	}
+	// same identity as eu, already-seen signature → still admitted (shared budget for one instance).
+	if _, d := g.SanitizeLogs("pk-eu/logs_export/f", euA); d != 0 {
+		t.Fatalf("eu already-seen stream dropped=%d want 0", d)
+	}
+}
+
 // TestSanitizeLogsBudget: distinct INDEXED signatures (= distinct Loki streams) are capped per loop.
 func TestSanitizeLogsBudget(t *testing.T) {
 	g := NewGuard(GuardConfig{AllowLabelKeys: []string{"ai_model"}, PerSeriesBudget: 2})

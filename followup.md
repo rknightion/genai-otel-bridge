@@ -102,12 +102,17 @@ regulated-records path), they go to a **customer-owned** S3/WORM store (§4 bulk
 
 No code change required — content-free is already the **enforced default**, verified 2026-06-22 across
 five layers: (1) the never-subtractable floor `source.AbsoluteNeverDenyKeys` (`internal/source/content.go`
-— `gen_ai.*`, `request`/`response`, `inputs`/`outputs`/`messages`, `input.value`/`output.value`, plus
-Portkey-injected `metadata`/`portkeyHeaders`); (2) per-source hard-denied sets (langsmith
-`inputs_s3_urls`/`outputs_s3_urls`, portkey bare `prompt`); (3) default-deny strips on both logs loops
+— `gen_ai.*` (matched by PREFIX, so flattened `gen_ai.prompt.0.content` forms are covered too — #97),
+`request`/`response`, `inputs`/`outputs`/`messages`, `input.value`/`output.value`, the LLM-content previews
+`inputs_preview`/`outputs_preview` (#95 — previews ARE prompt/response content, so they are floor, NOT the
+subtractable gray tier), plus Portkey-injected `metadata`/`portkeyHeaders`); (2) per-source hard-denied
+sets (langsmith `inputs_s3_urls`/`outputs_s3_urls`, portkey bare `prompt` — built from the floor, so the
+preview promotion propagates automatically); (3) default-deny strips on both logs loops
 (`defaultLogFieldPolicy` allow-lists only content-free operational fields; `Body` never set); (4) the
-default-deny Guard backstop + denylist; (5) opting content IN via
-`extra_record_fields`/`extra_indexed_fields`/`allow_label_keys` is **rejected fail-fast at config load**.
+default-deny Guard backstop + denylist; (5) opting genuine content IN via
+`extra_record_fields`/`extra_indexed_fields`/`allow_label_keys` is **rejected fail-fast at config load**
+(true content = floor keys, incl. the previews — verified by `TestLangsmithRunsRejectsContentPreviewOptIn`;
+content-free "gray" operational fields remain opt-in-able, that is the configurable-governance lever below).
 Enforced by `make gate`: `TestLogsExportContentLeakConformanceGate` + `TestLangsmithRunsContentLeakConformanceGate`
 (end-to-end Build→strip→guard→encode→emit; both verified to fail on a real leak).
 
@@ -116,12 +121,17 @@ returns regardless), so the client-side strip — not the projection — is the 
 
 **✅ BUILT 2026-06-20 — configurable content-governance (default-on guards, customer opt-in).** The
 field allow/deny apparatus is now config-extendable:
-- The app `contentDenylist()` was SHRUNK to the **absolute-never message bodies** only (`gen_ai.*`,
-  `input.value`/`output.value`, `request`/`response`, `inputs`/`outputs`, `messages`, plus the
-  Portkey-injected `metadata`/`portkeyHeaders`). The "gray" fields (`error`/`events`/`extra`/
-  `serialized`/`*_preview`/`s3_urls`/`manifest`/`name`/`tags`/…) are no longer hard-denied — they are
-  governed by the per-loop default-deny strip, so a customer CAN opt them in without the guard silently
-  eating the whole record.
+- The app `contentDenylist()` was SHRUNK to the **absolute-never message bodies + content previews** only
+  (`gen_ai.*`, `input.value`/`output.value`, `request`/`response`, `inputs`/`outputs`, `messages`,
+  `inputs_preview`/`outputs_preview`, plus the Portkey-injected `metadata`/`portkeyHeaders`). The remaining
+  "gray" fields (`error`/`events`/`extra`/`serialized`/`s3_urls`/`manifest`/`name`/`tags`/…) are not
+  hard-denied — they are governed by the per-loop default-deny strip, so a customer CAN opt them in without
+  the guard silently eating the whole record. NOTE (#95): `*_preview` was MOVED off the gray tier onto the
+  floor — a preview is a truncated rendering of the actual prompt/response, i.e. LLM content, so it is
+  never opt-in-able. NOTE (#51): the "opt in without the guard eating the record" property now holds for
+  ALL THREE opt-in knobs (`extra_record_fields` ∪ `extra_indexed_fields` ∪ `metadata_record_fields`); the
+  effective-denylist subtraction previously considered only `extra_record_fields`, so a gray key promoted
+  via the other two was auto-allow-listed yet still deny-dropped (silent total data loss for the loop).
 - The langsmith runs strip gained `settings.extra_record_fields` (csv) → appends to the strip's RECORD
   (structured-metadata) allow-list; the `select` projection mirrors it. The strip also gained
   array→csv (a scalar array under an allow-listed key joins with `,`; objects/nested/null still dropped),
@@ -130,9 +140,12 @@ field allow/deny apparatus is now config-extendable:
   time (loud), not silently dropped.
 
 **indexed (Loki stream-label) opt-in — part (a) ✅ BUILT 2026-06-20, part (b) still deferred.**
-(a) ✅ The composition-root guard `AllowLabelKeys` is now **config-driven**: each enabled source declares
+(a) ✅ The composition-root guard `AllowLabelKeys` is now **config-driven**: each source declares
 its content-free keys (`portkey.AllowedLabelKeys()` / `langsmith.AllowedLabelKeys()` — no vendor strings
-in `app.go` anymore), and the operator opts EXTRA content-free keys in additively via
+in `app.go` anymore). The base allow-list is the UNCONDITIONAL union of EVERY registered vendor package's
+keys — deliberately NOT gated on which sources are enabled (#75): every key is content-free by declaration
+and chosen by source code, never derived from upstream data, so a disabled vendor's keys only widen the
+default-deny surface with no live-leak path. The operator opts EXTRA content-free keys in additively via
 `governance.allow_label_keys` (default empty). A floor key (message body / injected PII) in the opt-in is
 rejected fail-fast at `Build`. The `values.yaml` field doc-comment documents the GS1 LIMITATION: a key is
 allowed past the guard but only becomes a **queryable Loki stream label** if it is in the Grafana OTel
@@ -363,17 +376,18 @@ metrics** only. (Detail/IDs: `docs/DESIGN.md` §7/§7a; live-API findings alread
 **k8s failover testing — correctness notes (recorded 2026-06-19, ahead of the k3d e2e build):**
 
 - **Failover is NOT sub-second — assert against `LeaseDuration`, not a fast release.** `coordinate/lease/lease.go`
-  sets `ReleaseOnCancel: false` *intentionally* (F35): on SIGTERM the leader persists watermarks and lets the
-  Lease **expire** rather than releasing it into a standby mid-drain. So on BOTH a graceful `kubectl delete pod`
+  sets `ReleaseOnCancel: false` *intentionally* (F35): on SIGTERM the leader lets the Lease **expire** rather
+  than releasing it into a standby (SIGTERM cancels the root ctx, which aborts any in-flight emit/Save — it
+  does NOT persist a final watermark; the next leader re-pulls the partial window). So on BOTH a graceful `kubectl delete pod`
   (SIGTERM → ctx cancel → renewals stop) and a hard `kill -9`, the standby acquires only after the Lease
   expires — ~`LeaseDuration` (15s) after the old leader stops renewing (params 15s/10s/2s = LeaseDuration/
   RenewDeadline/RetryPeriod, `main.go:121`). e2e failover assertions MUST use tolerances ≥ LeaseDuration +
   RetryPeriod + jitter (a ≥30s `Eventually` budget); the generic "~2s with `ReleaseOnCancel=true`" guidance is
   the WRONG steer here — for us slower failover is a deliberate no-mid-drain-handoff trade, not a gap.
-- **`terminationGracePeriodSeconds: 300` ≠ failover delay.** A gracefully-deleted leader lingers in `Terminating`
-  up to 300s while it drains an in-flight emit (`values.yaml`), but it stops renewing the Lease at SIGTERM, so
-  the standby takes over ~15s later regardless — the e2e must not wait for the old pod to fully terminate before
-  asserting takeover. Hard-kill scenarios should use `--grace-period=0 --force` / `kill -9` to skip the drain.
+- **`terminationGracePeriodSeconds: 300` ≠ failover delay.** A gracefully-deleted leader may linger in
+  `Terminating` up to 300s, but SIGTERM cancels the root ctx immediately (aborting any in-flight emit — there
+  is NO drain) and stops renewing the Lease, so the standby takes over ~15s later regardless — the e2e must
+  not wait for the old pod to fully terminate before asserting takeover. The grace period only bounds SIGKILL.
 - **Deterministic e2e observables (there is no scrape endpoint).** Self-metrics leave only via OTLP
   (`internal/selfobs/provider.go`) — no Prometheus `/metrics`. The e2e asserts on (1) the Lease `genai-otel-bridge-leader`
   (`holderIdentity`, `leaseTransitions`) and (2) the checkpoint ConfigMap `genai-otel-bridge-checkpoints` (monotonic

@@ -82,6 +82,21 @@ func New(sc config.SourceConfig, deps source.Deps) (source.Source, error) {
 	if !enS && !enR && !enU {
 		return &sessionsSource{}, nil // nothing enabled
 	}
+	// [#56] The sessions/usage loops are aggregate-now SNAPSHOTS (like runs/logs_export): LoopConfig.Window
+	// MUST be 0. A stray non-zero window is silently ignored by the loop but internal/app copies it into
+	// LoopSpec.Window, which flips the scheduler into WINDOWED semantics and fires spurious
+	// samples_skipped{reason=backfill_unstorable} every tick. Reject it fast (mirrors the runs/logs_export
+	// guard), pointing the operator at the real span knob (settings.stats_window).
+	if enS {
+		if w := time.Duration(sessCfg.Window); w != 0 {
+			return nil, fmt.Errorf("langsmith: loops.sessions.window must be unset/0 (aggregate-now snapshot; the real span is settings.stats_window); got %s", w)
+		}
+	}
+	if enU {
+		if w := time.Duration(usageCfg.Window); w != 0 {
+			return nil, fmt.Errorf("langsmith: loops.usage.window must be unset/0 (aggregate-now snapshot; the real span is settings.stats_window); got %s", w)
+		}
+	}
 	hc := newClient(sc, deps)
 	var loops []source.Loop
 	if enS {
@@ -339,13 +354,7 @@ func (l *sessionsLoop) fetchPage(ctx context.Context, statsStart time.Time, offs
 		q.Set("use_approx_stats", "true")
 	}
 	q.Set("stats_start_time", statsStart.UTC().Format(time.RFC3339))
-	q.Set("sort_by", "start_time")
-	q.Set("sort_by_desc", "true")
-	q.Set("limit", strconv.Itoa(l.pageLimit))
-	q.Set("offset", strconv.Itoa(offset))
-	if l.sessionFilter != "" {
-		q.Set("filter", l.sessionFilter)
-	}
+	setSessionsPageQuery(q, l.pageLimit, offset, l.sessionFilter)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -367,6 +376,22 @@ func (l *sessionsLoop) fetchPage(ctx context.Context, statsStart time.Time, offs
 		return nil, resp.StatusCode, fmt.Errorf("decode: %w", err)
 	}
 	return page, resp.StatusCode, nil
+}
+
+// setSessionsPageQuery sets the query params shared by ALL GET /sessions callers — the sessions metrics
+// loop, the usage loop, and runs auto-discovery (listSessionIDs). The sort_by=start_time&sort_by_desc
+// ordering is REQUIRED by the real Cloudflare-fronted instance: a bare offset/limit request 403s
+// (live-probed). Centralising it here is the single source of truth so the three /sessions call sites
+// cannot drift again (#54); each caller adds its own include_stats/stats_start_time as needed. It also
+// gives discovery a defined pagination order (previously it sent a bare offset).
+func setSessionsPageQuery(q url.Values, limit, offset int, filter string) {
+	q.Set("sort_by", "start_time")
+	q.Set("sort_by_desc", "true")
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	if filter != "" {
+		q.Set("filter", filter)
+	}
 }
 
 var _ source.Loop = (*sessionsLoop)(nil)

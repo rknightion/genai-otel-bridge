@@ -144,6 +144,18 @@ func (l *runsLoop) sessionsTruncated() {
 	}
 }
 
+// backfillSkipped records the max_backfill floor clamp (an outage older than now-max_backfill whose
+// unstorable span is skipped) as a loud, counted, alertable event — not merely slog.Warn (#53). The
+// scheduler's pre-emptive backfill_unstorable counter can NEVER fire for this loop (it is gated on
+// LoopSpec.Window>0, but the runs loop forces LoopConfig.Window==0), and the reactive ReasonTooOld path
+// can't catch it either (the skipped span is never fetched), so without this hook a >max_backfill outage
+// silently drops that log span with only a log line — violating the "every gap is alertable" rule.
+func (l *runsLoop) backfillSkipped() {
+	if l.onGraphSkipped != nil {
+		l.onGraphSkipped("runs", "backfill_skipped")
+	}
+}
+
 // Collect drains ONE cursor page of the current window. Idle (empty/corrupt cursor) starts a new window
 // [winMin,winMax] and fetches page 0; a draining cursor resumes via the API token. Watermark.Time
 // advances to winMax ONLY when cursors.next is exhausted (or the page cap truncates the window,
@@ -172,6 +184,7 @@ func (l *runsLoop) Collect(ctx context.Context, since model.Watermark) (model.Ba
 			slog.Warn("langsmith runs: watermark older than max_backfill — skipping the unstorable span",
 				"from", winMin.UTC().Format(time.RFC3339), "floor", floor.UTC().Format(time.RFC3339), "source", l.sourceInstance)
 			winMin = floor
+			l.backfillSkipped() // counted + alertable (#53) — not only slog.Warn
 		}
 		winMax = winMin.Add(l.window)
 		if cutoff := now.Add(-l.settle); winMax.After(cutoff) {

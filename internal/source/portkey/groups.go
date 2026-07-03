@@ -227,10 +227,16 @@ type groupsEndpoint struct {
 	dimField      string // JSON field name for the dimension value (ai_model | metadata_value)
 	valueLabelKey string
 	baseLabels    map[string]string
+	// emitCost gates the per-row cost gauge for THIS endpoint. It MUST stay in sync with SeriesNames():
+	// deriveGroups emits <prefix>_cost_usd_by_<dim> whenever emitCost && a row carries a cost field, so a
+	// dim whose cost name is NOT declared (e.g. prompt) must set emitCost=false — otherwise, if Portkey
+	// ever adds cost to that dimension's rows, the loop would emit an UNDECLARED series that bypassed the
+	// M7 ownership check (#104). Keeps emitted ⊆ declared, structurally.
+	emitCost bool
 }
 
 func (l *groupsLoop) endpoints() []groupsEndpoint {
-	eps := []groupsEndpoint{{urlPath: "ai-models", label: "ai-models", dim: "model", dimField: "ai_model", valueLabelKey: "ai_model"}}
+	eps := []groupsEndpoint{{urlPath: "ai-models", label: "ai-models", dim: "model", dimField: "ai_model", valueLabelKey: "ai_model", emitCost: l.emitCost}}
 	for _, k := range l.metadataKeys {
 		eps = append(eps, groupsEndpoint{
 			urlPath:       "metadata/" + url.PathEscape(k),
@@ -239,12 +245,16 @@ func (l *groupsLoop) endpoints() []groupsEndpoint {
 			dimField:      "metadata_value",
 			valueLabelKey: "metadata_value",
 			baseLabels:    map[string]string{"metadata_key": k},
+			emitCost:      l.emitCost,
 		})
 	}
 	if l.emitPrompts {
 		eps = append(eps, groupsEndpoint{
 			urlPath: "prompt", label: "prompt", dim: "prompt",
 			dimField: "prompt", valueLabelKey: "prompt",
+			// emitCost deliberately false: the prompt dimension carries no cost (live-probed 2026-06-22)
+			// and SeriesNames() declares no cost_usd_by_prompt. Never emit an undeclared cost series (#104).
+			emitCost: false,
 		})
 	}
 	return eps
@@ -259,7 +269,7 @@ func (l *groupsLoop) endpoints() []groupsEndpoint {
 func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
 	if l.expectedWorkspace != "" && !l.scopeVerified {
-		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, now, l.onGraphSkipped)
+		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, l.sourceInstance, now, l.onGraphSkipped, l.onAuthError)
 		if err != nil {
 			return model.Batch{}, err // refuse to emit (mismatch) or retry (transient) — never silently advance
 		}
@@ -288,7 +298,7 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 				}
 				continue
 			}
-			s := deriveGroups(rows, l.prefix, ep.dim, ep.baseLabels, ep.valueLabelKey, l.emitCost, stamp)
+			s := deriveGroups(rows, l.prefix, ep.dim, ep.baseLabels, ep.valueLabelKey, ep.emitCost, stamp)
 			stampUseCase(s, p.slug)
 			samples = append(samples, s...)
 		}

@@ -4,6 +4,7 @@ package langsmith
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -152,6 +153,43 @@ func TestRunsCollectQuotaAndRetryable(t *testing.T) {
 			t.Fatalf("code %d: ErrQuotaExceeded=%v want %v (err=%v)", tc.code, got, tc.wantQuota, err)
 		}
 		srv.Close()
+	}
+}
+
+// TestRunsCollectBackfillFloorCounted (#53): a watermark older than now-max_backfill clamps winMin to the
+// floor AND fires an alertable self-metric (OnGraphSkipped runs/backfill_skipped) — not only slog.Warn.
+// The scheduler's pre-emptive backfill_unstorable counter can never fire for this snapshot loop
+// (Window==0), so without this hook a >max_backfill outage would drop the span log-only (unalertable).
+func TestRunsCollectBackfillFloorCounted(t *testing.T) {
+	var gotStart string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			StartTime string `json:"start_time"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotStart = body.StartTime
+		_, _ = w.Write([]byte(`{"runs":[],"cursors":{"next":null}}`))
+	}))
+	defer srv.Close()
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	lp := newTestRunsLoop(t, srv.URL, now, map[string]string{"window": "10m", "settle": "1m", "max_backfill": "1h"})
+	var skipped int32
+	lp.onGraphSkipped = func(loop, graph string) {
+		if loop == "runs" && graph == "backfill_skipped" {
+			atomic.AddInt32(&skipped, 1)
+		}
+	}
+	// since.Time = now-3h, older than the now-1h max_backfill floor ⇒ winMin must clamp to the floor.
+	since := model.Watermark{Time: now.Add(-3 * time.Hour)}
+	if _, err := lp.Collect(context.Background(), since); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&skipped) != 1 {
+		t.Fatalf("backfill floor must fire the backfill_skipped counter once, got %d", skipped)
+	}
+	wantFloor := now.Add(-time.Hour).UTC().Format(time.RFC3339)
+	if gotStart != wantFloor {
+		t.Fatalf("winMin must be clamped to the floor: query start_time=%q want %q", gotStart, wantFloor)
 	}
 }
 

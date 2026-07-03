@@ -133,6 +133,19 @@ func newAnalyticsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps sou
 		return nil, fmt.Errorf("portkey: analytics loop requires a positive window (time-bucketed source); got %s", window)
 	}
 	settle := time.Duration(lpCfg.BucketSettle)
+	// [#57] Mirror the AR-HIGH window guard for the OTHER two silent-no-op triggers on a raw-YAML config
+	// (config.Load applies no defaults for these; the chart renders 50m/90m). Collect computes
+	// start=now-bootstrap clamped to the now-max_backfill floor, and until=now-settle:
+	//   - max_backfill omitted/0 (or ≤ settle) ⇒ floor=now-max_backfill ≥ until ⇒ start ≥ until every tick;
+	//   - bootstrap ≤ settle ⇒ until ≤ start=now-bootstrap every tick.
+	// Either way until ≤ start ⇒ empty batch, watermark stays zero, window_lag is skipped (zero watermark),
+	// no samples/errors — a permanent FULLY SILENT data gap. Require both > settle so the loop can advance.
+	if bootstrap := time.Duration(lpCfg.BootstrapLookback); bootstrap <= settle {
+		return nil, fmt.Errorf("portkey: analytics loop requires bootstrap_lookback (%s) > bucket_settle (%s) (else the loop never advances past the settle cutoff — a silent no-op)", bootstrap, settle)
+	}
+	if mb := time.Duration(lpCfg.MaxBackfill); mb <= settle {
+		return nil, fmt.Errorf("portkey: analytics loop requires max_backfill (%s) > bucket_settle (%s) (else the backfill floor clamps every window empty — a silent no-op)", mb, settle)
+	}
 	band := detectionBand(settle)
 	// Build passes: if use-cases are configured, one pass per use-case; otherwise a single unlabelled
 	// pass using the legacy settings.api_key_ids filter (backward compatible — Key() is unchanged).
@@ -239,7 +252,7 @@ func (l *analyticsLoop) Key() model.CheckpointKey {
 func (l *analyticsLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
 	if l.expectedWorkspace != "" && !l.scopeVerified {
-		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, now, l.onGraphSkipped)
+		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, l.sourceInstance, now, l.onGraphSkipped, l.onAuthError)
 		if err != nil {
 			return model.Batch{}, err // refuse to emit (mismatch) or retry (transient) — never silently advance
 		}

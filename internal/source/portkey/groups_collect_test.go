@@ -490,6 +490,75 @@ func promptRows(slugs ...string) groupsResponse {
 	return r
 }
 
+// promptRowsWithCost is a HYPOTHETICAL future page where Portkey has added a `cost` field to prompt rows.
+// Used to prove the loop never emits an undeclared cost_usd_by_prompt series (#104).
+func promptRowsWithCost(slugs ...string) groupsResponse {
+	r := groupsResponse{Object: "list"}
+	for i, s := range slugs {
+		raw := map[string]json.RawMessage{
+			"prompt":   json.RawMessage(strconv.Quote(s)),
+			"requests": json.RawMessage(strconv.Itoa(200 + i)),
+			"cost":     json.RawMessage("136.85"),
+			"object":   json.RawMessage(`"analytics-group"`),
+		}
+		r.Data = append(r.Data, raw)
+		r.Total++
+	}
+	return r
+}
+
+// TestGroupsPromptDimensionNeverEmitsCost (#104): even if Portkey adds a cost field to prompt rows, the
+// loop must NOT emit portkey_api_cost_usd_by_prompt — that name is not in SeriesNames(), so emitting it
+// would bypass the M7 ownership collision check. The prompt endpoint's cost is gated off structurally.
+func TestGroupsPromptDimensionNeverEmitsCost(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	srv := fakeGroups(t, map[string][]groupsResponse{
+		"ai-models": {modelRows("gpt-4o")},
+		"prompt":    {promptRowsWithCost("summarize-v2", "classify-v1")},
+	}, nil, nil)
+	defer srv.Close()
+	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "emit_cost": "true", "emit_prompts": "true"}), source.Deps{}, now)
+	b, err := gl.Collect(context.Background(), model.Watermark{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := countByName(b.Samples)
+	if c["portkey_api_cost_usd_by_prompt"] != 0 {
+		t.Fatalf("must NEVER emit the undeclared cost_usd_by_prompt series, got %d", c["portkey_api_cost_usd_by_prompt"])
+	}
+	if c["portkey_api_requests_by_prompt"] != 2 {
+		t.Fatalf("prompt requests gauge should still emit 2, got %d", c["portkey_api_requests_by_prompt"])
+	}
+	// ai-models cost is still emitted (that dim IS declared) — proves emit_cost is not globally suppressed.
+	if c["portkey_api_cost_usd_by_model"] == 0 {
+		t.Fatal("ai-models cost gauge must still emit (emit_cost applies to the declared dims)")
+	}
+}
+
+// TestGroupsEmittedSeriesSubsetOfDeclared (#104): SeriesNames() must provably cover every name
+// deriveGroups can produce for the configured endpoints — even when EVERY endpoint's rows carry a cost
+// field. This locks emitted ⊆ declared structurally, so a new cost-bearing dimension can't slip an
+// undeclared series past ownership validation.
+func TestGroupsEmittedSeriesSubsetOfDeclared(t *testing.T) {
+	at := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	srv := fakeGroups(t, nil, nil, nil)
+	defer srv.Close()
+	gl := mkGroups(t, groupsCfg(srv, map[string]string{"metadata_keys": "use_case", "emit_cost": "true", "emit_prompts": "true"}), source.Deps{}, at)
+	declared := map[string]bool{}
+	for _, n := range gl.SeriesNames() {
+		declared[n] = true
+	}
+	// Feed each endpoint a cost-bearing row and collect every name deriveGroups would produce.
+	for _, ep := range gl.endpoints() {
+		rows := []groupRow{{dimValue: "x", requests: 1, cost: 100, hasCost: true}}
+		for _, s := range deriveGroups(rows, gl.prefix, ep.dim, ep.baseLabels, ep.valueLabelKey, ep.emitCost, at) {
+			if !declared[s.Name] {
+				t.Fatalf("endpoint %q can emit undeclared series %q (not in SeriesNames)", ep.label, s.Name)
+			}
+		}
+	}
+}
+
 // TestGroupsPromptDimension: with emit_prompts=true the loop polls /analytics/groups/prompt and emits a
 // requests_by_prompt gauge per prompt with a {prompt} label and NO cost series (the dimension has none).
 func TestGroupsPromptDimension(t *testing.T) {

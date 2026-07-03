@@ -125,7 +125,7 @@ func ExampleSettingsComments() map[string]string {
 		"window":                  "logs_export: per-export query span; the scheduler is snapshot-gated (LoopConfig.Window==0)",
 		"max_backfill":            "logs_export: watermark older than now-max_backfill skipped LOUD. Cap ≤ Loki reject_old_samples_max_age (GC default 7d). Default 24h.",
 		"page_size":               "page size per fetch (groups: dimension rows; logs_export: records per export page, server ceiling 50000)",
-		"max_pages_per_window":    "logs_export: tripwire — a window exceeding this pages advances-past with a counted gap (never stalls)",
+		"max_pages_per_window":    "logs_export: tripwire — a window needing MORE than this many export pages errors LOUD with NO advance (a deliberate stall; window_lag grows) rather than silently tail-dropping. Reduce `window` (or raise this) so a window fits within the cap.",
 		"chunk_max_records":       "logs_export: per-Collect emit chunk (bounds memory; the export file is never buffered whole)",
 		"job_poll_timeout":        "logs_export: abandon a stuck job after this interval (cancel + restart the window)",
 		"download_timeout":        "logs_export: signed-URL object GET timeout (S3 downloads are larger than control-plane calls)",

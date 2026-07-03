@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/httpx"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
@@ -50,18 +51,23 @@ func TestCheckWorkspaceScope(t *testing.T) {
 		expected   string
 		wantRes    workspaceScopeResult
 		wantErr    bool
+		wantAuth   bool // #103: a 401/403 probe must fire onAuthError (credential-failure signal)
 	}{
-		{"match", 200, []string{"ws-acme-001"}, "ws-acme-001", scopeMatched, false},
-		{"wrong-single", 200, []string{"ws-other-12ab34"}, "ws-acme-001", scopeMismatch, false},
-		{"multi-too-broad", 200, []string{"ws-acme-001", "ws-prod-99zz", "ws-test-55yy"}, "ws-acme-001", scopeMismatch, false},
-		{"undeterminable-no-traffic", 200, nil, "ws-acme-001", scopeUndeterminable, false},
-		{"transient-5xx", 503, nil, "ws-acme-001", scopeUndeterminable, true},
+		{"match", 200, []string{"ws-acme-001"}, "ws-acme-001", scopeMatched, false, false},
+		{"wrong-single", 200, []string{"ws-other-12ab34"}, "ws-acme-001", scopeMismatch, false, false},
+		{"multi-too-broad", 200, []string{"ws-acme-001", "ws-prod-99zz", "ws-test-55yy"}, "ws-acme-001", scopeMismatch, false, false},
+		{"undeterminable-no-traffic", 200, nil, "ws-acme-001", scopeUndeterminable, false, false},
+		{"transient-5xx", 503, nil, "ws-acme-001", scopeUndeterminable, true, false},
+		{"auth-401", 401, nil, "ws-acme-001", scopeUndeterminable, true, true},
+		{"auth-403", 403, nil, "ws-acme-001", scopeUndeterminable, true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := wsServer(t, tc.status, tc.workspaces...)
 			defer srv.Close()
-			res, detail, err := checkWorkspaceScope(context.Background(), scopeTestClient(t), srv.URL, "x-portkey-api-key", "k", tc.expected, now)
+			var auth [][2]string
+			res, detail, err := checkWorkspaceScope(context.Background(), scopeTestClient(t), srv.URL, "x-portkey-api-key", "k", tc.expected, "analytics", "pk-test", now,
+				func(loop, s string) { auth = append(auth, [2]string{loop, s}) })
 			if tc.wantErr != (err != nil) {
 				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
 			}
@@ -70,6 +76,13 @@ func TestCheckWorkspaceScope(t *testing.T) {
 			}
 			if tc.name == "multi-too-broad" && !strings.Contains(detail, "ws-prod-99zz") {
 				t.Fatalf("mismatch detail should list the observed workspaces, got %q", detail)
+			}
+			if tc.wantAuth {
+				if len(auth) != 1 || auth[0] != [2]string{"analytics", "pk-test"} {
+					t.Fatalf("auth status must fire OnAuthError once (analytics,pk-test), got %v", auth)
+				}
+			} else if len(auth) != 0 {
+				t.Fatalf("non-auth status must NOT fire OnAuthError, got %v", auth)
 			}
 		})
 	}
@@ -98,6 +111,59 @@ func TestGroupsCollectRefusesOnWorkspaceScopeMismatch(t *testing.T) {
 	}
 }
 
+// TestScopeProbeAuthErrorFiresForBothLoops proves the Collect-path wiring (#103): with expected_workspace
+// set and scope UNVERIFIED, a 401 on the scope probe fires Deps.OnAuthError for BOTH the analytics and
+// groups loops — so a credential failure increments auth_errors_total even though the probe returns before
+// the graph/endpoint fetch path that carries the usual onAuthError instrumentation.
+func TestScopeProbeAuthErrorFiresForBothLoops(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+
+	t.Run("groups", func(t *testing.T) {
+		srv := wsServer(t, 401) // scope probe 401 (revoked/expired key)
+		defer srv.Close()
+		var auth [][2]string
+		gl := mkGroups(t, groupsCfg(srv, map[string]string{"expected_workspace": "ws-acme-001", "page_size": "100"}),
+			source.Deps{OnAuthError: func(loop, s string) { auth = append(auth, [2]string{loop, s}) }}, now)
+		if _, err := gl.Collect(context.Background(), model.Watermark{}); err == nil {
+			t.Fatal("a 401 scope probe must make Collect refuse to emit (error)")
+		}
+		if len(auth) != 1 || auth[0] != [2]string{"groups", "pk-test"} {
+			t.Fatalf("OnAuthError want one (groups,pk-test), got %v", auth)
+		}
+	})
+
+	t.Run("analytics", func(t *testing.T) {
+		srv := wsServer(t, 401)
+		defer srv.Close()
+		var auth [][2]string
+		cfg := config.SourceConfig{
+			Type: "portkey", Enabled: true, BaseURL: srv.URL, SourceInstance: "pk-test",
+			Auth:      config.AuthConfig{Header: "x-portkey-api-key", Value: "k"},
+			RateLimit: config.RateLimitConfig{RPS: 1000, Burst: 1000},
+			HTTP:      config.HTTPConfig{AllowPrivate: true},
+			Loops: map[string]config.LoopConfig{"analytics": {
+				Enabled: true, Cadence: config.Duration(time.Minute), Window: config.Duration(50 * time.Minute),
+				BucketSettle: config.Duration(3 * time.Minute), BootstrapLookback: config.Duration(50 * time.Minute),
+				MaxBackfill: config.Duration(55 * time.Minute), MetricPrefix: "portkey_api",
+				Graphs:   []string{"requests"},
+				Settings: map[string]string{"expected_workspace": "ws-acme-001"},
+			}},
+		}
+		src, err := New(cfg, source.Deps{OnAuthError: func(loop, s string) { auth = append(auth, [2]string{loop, s}) }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lp := src.Loops()[0].(*analyticsLoop)
+		lp.now = func() time.Time { return now }
+		if _, err := lp.Collect(context.Background(), model.Watermark{}); err == nil {
+			t.Fatal("a 401 scope probe must make Collect refuse to emit (error)")
+		}
+		if len(auth) != 1 || auth[0] != [2]string{"analytics", "pk-test"} {
+			t.Fatalf("OnAuthError want one (analytics,pk-test), got %v", auth)
+		}
+	})
+}
+
 // TestVerifyScopeForCollect: the Collect-path wrapper — match ⇒ (true,nil); mismatch ⇒ (false,err) AND
 // fires the alertable hook; undeterminable ⇒ (false,nil) proceed unverified; transient ⇒ (false,err) no hook.
 func TestVerifyScopeForCollect(t *testing.T) {
@@ -106,7 +172,7 @@ func TestVerifyScopeForCollect(t *testing.T) {
 		srv := wsServer(t, 200, "ws-acme-001")
 		defer srv.Close()
 		var hookFired bool
-		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "analytics", now, func(string, string) { hookFired = true })
+		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "analytics", "pk-test", now, func(string, string) { hookFired = true }, nil)
 		if !ok || err != nil || hookFired {
 			t.Fatalf("match: ok=%v err=%v hook=%v", ok, err, hookFired)
 		}
@@ -115,7 +181,7 @@ func TestVerifyScopeForCollect(t *testing.T) {
 		srv := wsServer(t, 200, "ws-global-admin")
 		defer srv.Close()
 		var gotLoop, gotGraph string
-		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "analytics", now, func(l, g string) { gotLoop, gotGraph = l, g })
+		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "analytics", "pk-test", now, func(l, g string) { gotLoop, gotGraph = l, g }, nil)
 		if ok || err == nil {
 			t.Fatalf("mismatch must refuse: ok=%v err=%v", ok, err)
 		}
@@ -127,7 +193,7 @@ func TestVerifyScopeForCollect(t *testing.T) {
 		srv := wsServer(t, 200)
 		defer srv.Close()
 		var hookFired bool
-		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "groups", now, func(string, string) { hookFired = true })
+		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "groups", "pk-test", now, func(string, string) { hookFired = true }, nil)
 		if ok || err != nil || hookFired {
 			t.Fatalf("undeterminable: want (false,nil,no-hook), got ok=%v err=%v hook=%v", ok, err, hookFired)
 		}
@@ -136,7 +202,7 @@ func TestVerifyScopeForCollect(t *testing.T) {
 		srv := wsServer(t, 503)
 		defer srv.Close()
 		var hookFired bool
-		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "groups", now, func(string, string) { hookFired = true })
+		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "groups", "pk-test", now, func(string, string) { hookFired = true }, nil)
 		if ok || err == nil || hookFired {
 			t.Fatalf("transient: want (false,err,no-hook), got ok=%v err=%v hook=%v", ok, err, hookFired)
 		}

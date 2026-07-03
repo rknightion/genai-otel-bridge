@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // scopeProbeWindow is the lookback for the workspace-scope assertion. Wide (7d) so a correctly-scoped but
@@ -38,7 +39,7 @@ const (
 // into one environment's metrics. Returns (result, detail, err): err != nil is a TRANSIENT probe failure
 // (unreachable / non-200 / decode) — the caller must RETRY, never treat it as a mismatch (no false alarm
 // on a Portkey blip). `detail` is the observed workspace set, for the mismatch log.
-func checkWorkspaceScope(ctx context.Context, hc *httpx.Client, baseURL, authHdr, authVal, expected string, now time.Time) (workspaceScopeResult, string, error) {
+func checkWorkspaceScope(ctx context.Context, hc *httpx.Client, baseURL, authHdr, authVal, expected, loop, sourceInstance string, now time.Time, onAuthError func(loop, source string)) (workspaceScopeResult, string, error) {
 	u, err := url.Parse(baseURL + "/analytics/groups/workspace")
 	if err != nil {
 		return scopeUndeterminable, "", err
@@ -62,6 +63,13 @@ func checkWorkspaceScope(ctx context.Context, hc *httpx.Client, baseURL, authHdr
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
+		// A 401/403 here is a credential failure (revoked/expired/misconfigured key), not a transient blip.
+		// The probe runs BEFORE the fetch path that carries the usual onAuthError instrumentation, so
+		// without firing it here a bad key with expected_workspace set never increments auth_errors_total
+		// while scope is unverified (fresh deploy / restart / failover / no-traffic re-probe) — #103.
+		if source.IsAuthStatus(resp.StatusCode) && onAuthError != nil {
+			onAuthError(loop, sourceInstance)
+		}
 		return scopeUndeterminable, "", fmt.Errorf("workspace scope probe: status %d", resp.StatusCode)
 	}
 	var gr groupsResponse
@@ -103,8 +111,8 @@ func checkWorkspaceScope(ctx context.Context, hc *httpx.Client, baseURL, authHdr
 //   - undeterminable (no traffic) ⇒ (false, nil): proceed unverified, re-check next tick (don't block a
 //     legitimately-quiet workspace).
 //   - transient probe failure     ⇒ (false, err) WITHOUT the hook: retryable, not a real mismatch.
-func verifyScopeForCollect(ctx context.Context, hc *httpx.Client, baseURL, authHdr, authVal, expected, loop string, now time.Time, onGraphSkipped func(loop, graph string)) (bool, error) {
-	res, detail, err := checkWorkspaceScope(ctx, hc, baseURL, authHdr, authVal, expected, now)
+func verifyScopeForCollect(ctx context.Context, hc *httpx.Client, baseURL, authHdr, authVal, expected, loop, sourceInstance string, now time.Time, onGraphSkipped func(loop, graph string), onAuthError func(loop, source string)) (bool, error) {
+	res, detail, err := checkWorkspaceScope(ctx, hc, baseURL, authHdr, authVal, expected, loop, sourceInstance, now, onAuthError)
 	if err != nil {
 		return false, fmt.Errorf("portkey %s: workspace scope probe failed (transient; retrying): %w", loop, err)
 	}

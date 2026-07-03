@@ -66,6 +66,46 @@ func TestNewParsesSettings(t *testing.T) {
 	}
 }
 
+// TestSessionLabelValueEnum (#102): session_label_value must be exactly "id" or "name"; any other value
+// (incl. a case typo) is a hard error, not a silent fall-back to id — for BOTH the sessions and usage
+// apply functions (shared validator). This enforces the same malformed=hard-error contract as the rest
+// of the file, so operator intent (human-readable names) is never silently discarded.
+func TestSessionLabelValueEnum(t *testing.T) {
+	cases := []struct {
+		v       string
+		wantErr bool
+	}{
+		{"id", false},
+		{"name", false},
+		{"Name", true},  // case typo — previously silently meant "id"
+		{"names", true}, // plural typo
+		{"NAME", true},
+		{"", true},
+	}
+	for _, tc := range cases {
+		t.Run("sessions/"+tc.v, func(t *testing.T) {
+			cfg := Config{}
+			err := applySettings(&cfg, map[string]string{"session_label_value": tc.v})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("applySettings(%q): err=%v wantErr=%v", tc.v, err, tc.wantErr)
+			}
+			if !tc.wantErr && cfg.SessionLabelValue != tc.v {
+				t.Fatalf("valid value %q must be assigned, got %q", tc.v, cfg.SessionLabelValue)
+			}
+		})
+		t.Run("usage/"+tc.v, func(t *testing.T) {
+			cfg := usageConfig{}
+			err := applyUsageSettings(&cfg, map[string]string{"session_label_value": tc.v})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("applyUsageSettings(%q): err=%v wantErr=%v", tc.v, err, tc.wantErr)
+			}
+			if !tc.wantErr && cfg.SessionLabelValue != tc.v {
+				t.Fatalf("valid value %q must be assigned, got %q", tc.v, cfg.SessionLabelValue)
+			}
+		})
+	}
+}
+
 // TestExampleSourceBuilds asserts the chart example the generator renders is itself a valid, buildable
 // LangSmith source (so the documented example can't drift into an unbuildable shape).
 func TestExampleSourceBuilds(t *testing.T) {

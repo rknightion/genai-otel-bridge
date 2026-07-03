@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/rknightion/genai-otel-bridge/internal/httpx"
@@ -204,8 +203,8 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 }
 
 // fetchPage GETs one offset/limit page of /sessions with include_stats, decoding only the usage fields.
-// Mirrors the sessions loop's fetchPage query shape (sort_by=start_time is required — a bare offset 403s
-// on the real Cloudflare-fronted instance).
+// Shares the sessions/discovery /sessions query shape via setSessionsPageQuery (sort_by=start_time is
+// required — a bare offset 403s on the real Cloudflare-fronted instance, live-probed; #54).
 func (l *usageLoop) fetchPage(ctx context.Context, statsStart time.Time, offset int) ([]usageSession, int, error) {
 	u, err := url.Parse(l.baseURL + "/sessions")
 	if err != nil {
@@ -214,13 +213,7 @@ func (l *usageLoop) fetchPage(ctx context.Context, statsStart time.Time, offset 
 	q := url.Values{}
 	q.Set("include_stats", "true")
 	q.Set("stats_start_time", statsStart.UTC().Format(time.RFC3339))
-	q.Set("sort_by", "start_time")
-	q.Set("sort_by_desc", "true")
-	q.Set("limit", strconv.Itoa(l.pageLimit))
-	q.Set("offset", strconv.Itoa(offset))
-	if l.sessionFilter != "" {
-		q.Set("filter", l.sessionFilter)
-	}
+	setSessionsPageQuery(q, l.pageLimit, offset, l.sessionFilter)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)

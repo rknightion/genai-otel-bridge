@@ -10,10 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/rknightion/genai-otel-bridge/internal/httpx"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // resolveSessions returns the project-UUID scope for runs/query. Static settings.session_ids wins; else
@@ -56,11 +56,10 @@ func (l *runsLoop) listSessionIDs(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		q := url.Values{}
-		q.Set("limit", strconv.Itoa(pageLimit))
-		q.Set("offset", strconv.Itoa(offset))
-		if l.sessionFilter != "" {
-			q.Set("filter", l.sessionFilter)
-		}
+		// Share the sibling loops' /sessions query shape (incl. the REQUIRED sort_by=start_time — a bare
+		// offset 403s on the real Cloudflare-fronted instance, live-probed). Centralised so the three call
+		// sites can't drift (#54).
+		setSessionsPageQuery(q, pageLimit, offset, l.sessionFilter)
 		u.RawQuery = q.Encode()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if err != nil {
@@ -70,6 +69,14 @@ func (l *runsLoop) listSessionIDs(ctx context.Context) ([]string, error) {
 		resp, err := l.hc.Do(req)
 		if err != nil {
 			return nil, err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			// Same shared ~10req/10s tenant budget as queryRuns/sessions/usage — map 429 to the quota
+			// sentinel so the scheduler counts samples_skipped{reason=quota_exceeded}, not a generic
+			// collect error (#101). The taxonomy must match the sibling /sessions call sites.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
+			_ = resp.Body.Close()
+			return nil, source.ErrQuotaExceeded
 		}
 		if resp.StatusCode != http.StatusOK {
 			snip := httpx.ErrSnippet(resp)

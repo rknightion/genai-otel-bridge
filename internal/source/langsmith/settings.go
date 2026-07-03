@@ -51,6 +51,17 @@ func defaultUsageSettings() usageDefaults {
 	}
 }
 
+// validateSessionLabelValue enforces the {"id","name"} enum shared by the sessions AND usage apply
+// functions. The only consumer is `useName == "name"`, so ANY other value (incl. "Name"/"names"/"NAME")
+// silently degrades to "id" — a violation of the "malformed value = hard error, never hide operator
+// intent" contract stated in applySettings (#102). Validated in one place so both loops stay consistent.
+func validateSessionLabelValue(v string) error {
+	if v != "id" && v != "name" {
+		return fmt.Errorf("session_label_value must be \"id\" or \"name\"")
+	}
+	return nil
+}
+
 // applyUsageSettings overlays the decoupled per-loop `settings` map onto the usage config. Mirrors
 // applySettings: unknown key ⇒ warn (forward-compatible); malformed known value ⇒ hard error.
 func applyUsageSettings(cfg *usageConfig, s map[string]string) error {
@@ -62,7 +73,9 @@ func applyUsageSettings(cfg *usageConfig, s map[string]string) error {
 		case "session_filter":
 			cfg.SessionFilter = v
 		case "session_label_value":
-			cfg.SessionLabelValue = v
+			if err = validateSessionLabelValue(v); err == nil {
+				cfg.SessionLabelValue = v
+			}
 		case "page_limit":
 			if cfg.PageLimit, err = strconv.Atoi(v); err == nil && cfg.PageLimit <= 0 {
 				err = fmt.Errorf("must be > 0")
@@ -103,7 +116,9 @@ func applySettings(cfg *Config, s map[string]string) error {
 		// dropped by the default-deny guard if it didn't match (AR-MED). Cardinality is tuned via
 		// session_label_value (id|name) + session_filter + max_sessions, not by renaming the label.
 		case "session_label_value":
-			cfg.SessionLabelValue = v
+			if err = validateSessionLabelValue(v); err == nil {
+				cfg.SessionLabelValue = v
+			}
 		case "page_limit":
 			if cfg.PageLimit, err = strconv.Atoi(v); err == nil && cfg.PageLimit <= 0 {
 				err = fmt.Errorf("must be > 0")

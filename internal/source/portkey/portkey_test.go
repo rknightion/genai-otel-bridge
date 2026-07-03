@@ -297,6 +297,46 @@ func TestNewRejectsZeroWindow(t *testing.T) {
 	}
 }
 
+// TestNewRejectsSilentNoOpAnalyticsConfig guards #57: a raw-YAML analytics config (config.Load applies no
+// defaults for these knobs) where max_backfill is omitted/0, or bootstrap_lookback <= bucket_settle, would
+// make Collect return an empty batch with an un-advancing (zero) watermark EVERY tick — a permanent, fully
+// silent data gap (window_lag skipped on zero watermark, no samples, no errors). New must fail fast so the
+// zero-value config can never reach the silent empty-Collect loop.
+func TestNewRejectsSilentNoOpAnalyticsConfig(t *testing.T) {
+	mk := func(bootstrap, maxBackfill, settle time.Duration) config.SourceConfig {
+		return config.SourceConfig{
+			Type: "portkey", Enabled: true, BaseURL: "https://api.portkey.ai/v1", SourceInstance: "pk",
+			Auth:      config.AuthConfig{Header: "x-portkey-api-key", Value: "k"},
+			RateLimit: config.RateLimitConfig{RPS: 1, Burst: 1},
+			Loops: map[string]config.LoopConfig{"analytics": {
+				Enabled: true, Cadence: config.Duration(time.Minute), Window: config.Duration(50 * time.Minute),
+				BucketSettle: config.Duration(settle), BootstrapLookback: config.Duration(bootstrap),
+				MaxBackfill: config.Duration(maxBackfill), Graphs: []string{"requests"},
+			}},
+		}
+	}
+	cases := []struct {
+		name                           string
+		bootstrap, maxBackfill, settle time.Duration
+		wantErr                        bool
+	}{
+		{"max_backfill omitted (0)", 50 * time.Minute, 0, 10 * time.Minute, true},
+		{"max_backfill <= settle", 50 * time.Minute, 10 * time.Minute, 10 * time.Minute, true},
+		{"bootstrap == settle", 10 * time.Minute, 90 * time.Minute, 10 * time.Minute, true},
+		{"bootstrap < settle", 5 * time.Minute, 90 * time.Minute, 10 * time.Minute, true},
+		{"both zero", 0, 0, 0, true},
+		{"valid (chart defaults)", 50 * time.Minute, 90 * time.Minute, 10 * time.Minute, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(mk(tc.bootstrap, tc.maxBackfill, tc.settle), source.Deps{})
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("wantErr=%v got err=%v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestCollectDerivesAndForwardOnly(t *testing.T) {
 	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	now := base.Add(10 * time.Minute)

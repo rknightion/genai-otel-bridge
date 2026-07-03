@@ -38,7 +38,9 @@ func TestValidateOwnershipWithUseCases(t *testing.T) {
 		Loops: map[string]config.LoopConfig{
 			"analytics": {
 				Enabled: true, Window: config.Duration(50 * time.Minute),
-				Graphs: []string{"requests"},
+				BucketSettle: config.Duration(10 * time.Minute), BootstrapLookback: config.Duration(50 * time.Minute),
+				MaxBackfill: config.Duration(90 * time.Minute),
+				Graphs:      []string{"requests"},
 			},
 			"groups": {
 				Enabled: true,

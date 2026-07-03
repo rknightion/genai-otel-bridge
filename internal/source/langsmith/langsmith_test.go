@@ -365,3 +365,31 @@ func TestNewFromSourceConfig(t *testing.T) {
 		t.Fatalf("disabled loop should yield 0 loops, got %d", len(src2.Loops()))
 	}
 }
+
+// TestNewRejectsStrayWindowOnSnapshotLoops (#56): the sessions/usage loops are aggregate-now snapshots,
+// so LoopConfig.Window MUST be 0. A stray non-zero window is silently ignored by the loop but flips the
+// scheduler into windowed semantics (via app.go's LoopSpec.Window copy), firing false
+// backfill_unstorable alarms every tick. New must reject it fast, pointing at settings.stats_window.
+func TestNewRejectsStrayWindowOnSnapshotLoops(t *testing.T) {
+	base := config.SourceConfig{
+		Type: "langsmith", Enabled: true, BaseURL: "https://api.smith.langchain.com/api/v1",
+		SourceInstance: "ls", Auth: config.AuthConfig{Header: "x-api-key", Value: "k"},
+		RateLimit: config.RateLimitConfig{RPS: 1, Burst: 1},
+	}
+	for _, loop := range []string{"sessions", "usage"} {
+		t.Run(loop, func(t *testing.T) {
+			sc := base
+			sc.Loops = map[string]config.LoopConfig{loop: {
+				Enabled: true, Cadence: config.Duration(time.Minute),
+				Window: config.Duration(50 * time.Minute), // stray — must be rejected
+			}}
+			_, err := New(sc, source.Deps{})
+			if err == nil {
+				t.Fatalf("New must reject a non-zero window on the %s snapshot loop", loop)
+			}
+			if !strings.Contains(err.Error(), "stats_window") {
+				t.Fatalf("error should point at settings.stats_window, got %v", err)
+			}
+		})
+	}
+}

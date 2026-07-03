@@ -82,6 +82,15 @@ there is a fatal startup error. Don't put live env-ref syntax in commented-out e
 - `emit.self.metric_interval` (Duration, optional) — self-obs PeriodicReader export period. Unset ⇒ 60s
   (provider default). **Must be ≥ 60s** (1DPM emission constraint); sub-minute is rejected. Honoured
   only for `emit.self` — the product plane's rate is gated by the per-loop bucket cadence.
+- **`emit.telemetry.metric_interval` is rejected** (#113) — `MetricInterval` is on the shared `OTLPTarget`,
+  so it parses under `KnownFields`, but it is never read (main only consults `emit.self`) or honoured on
+  the product plane. A non-zero value is a dead knob, so `Validate` rejects it (put the self-telemetry
+  period under `emit.self.metric_interval`). Matches the "config lies about intent" profiling cross-checks.
+- **`queue.max_batches` / `queue.max_batch_bytes` default in `Load`** (#114) — unset/0 ⇒ `256` / `1048576`
+  (1 MiB), mirroring the `QueueConfig` helm render tags and the `governance.*` defaulting pattern. 0 is not
+  a safe silent default: `max_batches` 0 falls through to the runner's depth-1 clamp (≈1m of buffering, not
+  the documented ~4h) and `max_batch_bytes` 0 disables the emitter's proactive over-cap split (only the
+  reactive 413 path survives). The runner/emitter clamps stay as defence-in-depth for struct-built configs.
 - A source `base_url` must be https:// unless `http.allow_private=true` (in-VPC exception).
 - **`ha.checkpoint=file` + `ha.coordinator=lease` is forbidden** (file checkpoint is per-pod, not
   shared — would lose the watermark, CP-H11).

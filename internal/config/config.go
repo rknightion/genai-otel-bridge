@@ -76,6 +76,17 @@ const (
 	defaultRateLimitBurst = 3
 )
 
+// Queue depth defaults — applied in Load when max_batches/max_batch_bytes is unset (0). They mirror the
+// QueueConfig helm:"default=..." render tags (the chart SSOT). A hand-written or env-injected config
+// (e.g. the ECS delivery) that sets only the mandatory emit_workers must NOT run with the zero value:
+// max_batches 0 falls through to the runner's depth-1 clamp (~1 minute of buffering instead of the
+// documented ~4h), and max_batch_bytes 0 disables the emitter's proactive over-cap split entirely (only
+// the reactive 413 path survives). 0 is never a safe silent default here — same reasoning as governance.* (#114).
+const (
+	defaultQueueMaxBatches    = 256
+	defaultQueueMaxBatchBytes = 1 << 20 // 1 MiB
+)
+
 // defaultBucketSettle is applied per loop in Load when bucket_settle is unset (0). It mirrors the
 // LoopConfig.BucketSettle helm:"default=10m" render tag (live-measured; 3m was insufficient). 0 is not
 // a safe silent default: settle=0 emits a bucket the instant it closes — before late arrivals settle
@@ -208,6 +219,8 @@ type OTLPTarget struct {
 	// MetricInterval is the self-telemetry export period — honoured only for emit.self (the product
 	// plane's rate is gated by the per-loop bucket cadence, structurally 1 point/min). Unset ⇒ 60s
 	// (selfobs provider default). Must be ≥ 60s to honour the 1-data-point-per-minute (1DPM) constraint.
+	// It parses on emit.telemetry too (shared struct) but is a dead knob there, so Validate REJECTS a
+	// non-zero emit.telemetry.metric_interval rather than silently ignore it (#113).
 	MetricInterval Duration `yaml:"metric_interval" helm:"omit"`
 }
 type OTLPConn struct {
@@ -403,6 +416,12 @@ func LoadBytes(raw []byte) (*Config, error) {
 	if cfg.Governance.MaxStreamLabelKeys == 0 { // unset ⇒ GC Loki max_label_names_per_series default (15)
 		cfg.Governance.MaxStreamLabelKeys = DefaultMaxStreamLabelKeys
 	}
+	if cfg.Queue.MaxBatches == 0 { // #114: unset ⇒ 256 (else runner clamps depth to 1, ≈1m of buffering)
+		cfg.Queue.MaxBatches = defaultQueueMaxBatches
+	}
+	if cfg.Queue.MaxBatchBytes == 0 { // #114: unset ⇒ 1 MiB (else the proactive over-cap split is disabled)
+		cfg.Queue.MaxBatchBytes = defaultQueueMaxBatchBytes
+	}
 	if cfg.Selfobs.Profiling.Enabled {
 		if cfg.Selfobs.Profiling.Mode == "" {
 			cfg.Selfobs.Profiling.Mode = "pull" // default mode: zero new egress / dependency surface
@@ -580,6 +599,14 @@ func (c *Config) Validate(known map[string]struct{}) error {
 		}
 	}
 	errs = append(errs, validateEmitEndpoint("emit.telemetry.otlp", c.Emit.Telemetry.OTLP)...) // [CP-M7]
+	// #113: MetricInterval lives on the shared OTLPTarget so emit.telemetry.metric_interval parses under
+	// KnownFields, but it is never read (main.go only consults emit.self) or validated — a silently dead
+	// knob. The product plane's export rate is structurally gated by the per-loop bucket cadence (1DPM),
+	// not this field. Reject a non-zero value rather than let it lie about intent (matches the profiling
+	// pull/push cross-checks); the self-telemetry interval belongs under emit.self.metric_interval.
+	if time.Duration(c.Emit.Telemetry.MetricInterval) != 0 {
+		errs = append(errs, errors.New("emit.telemetry.metric_interval is not honoured (the product plane's export rate is gated by the per-loop bucket cadence, 1DPM) — set the self-telemetry export period under emit.self.metric_interval instead"))
+	}
 	// [round3 MEDIUM-1] the optional self-telemetry endpoint carries the same instance_id:token Basic
 	// auth, so the same cleartext-credential gate applies.
 	if c.Emit.Self != nil {

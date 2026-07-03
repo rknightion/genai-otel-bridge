@@ -601,3 +601,139 @@ func TestLoadBytesResolvesEnv(t *testing.T) {
 		t.Fatalf("endpoint=%q, want the resolved env value", got)
 	}
 }
+
+// TestQueueDepthDefaults (#114): a config that sets the mandatory queue.emit_workers but omits
+// max_batches/max_batch_bytes must load with the documented 256 / 1 MiB defaults (mirroring the helm
+// render tags and the governance defaulting pattern) — NOT the runner's depth-1 clamp or a disabled
+// proactive over-cap split (MaxBytes 0). Struct/env-injected configs bypass helm's tag defaults.
+func TestQueueDepthDefaults(t *testing.T) {
+	setEnv(t)
+	const y = `
+emit:
+  telemetry:
+    otlp:
+      endpoint: ${GC_OTLP_ENDPOINT}
+      instance_id: ${GC_INSTANCE_ID}
+      token: ${GC_OTLP_TOKEN}
+identity:
+  deployment_environment: ${ENV}
+ha:
+  coordinator: lease
+  checkpoint: configmap
+queue:
+  emit_workers: 1
+sources:
+  - type: portkey
+    enabled: true
+    base_url: https://api.portkey.ai/v1
+    source_instance: portkey-${ENV}
+    auth: { header: x-portkey-api-key, value: ${PORTKEY_API_KEY} }
+    loops:
+      analytics:
+        enabled: true
+        cadence: 60s
+        window: 50m
+`
+	cfg, err := LoadBytes([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Queue.MaxBatches != 256 {
+		t.Fatalf("omitted queue.max_batches should default to 256 (not the runner depth-1 clamp), got %d", cfg.Queue.MaxBatches)
+	}
+	if cfg.Queue.MaxBatchBytes != 1048576 {
+		t.Fatalf("omitted queue.max_batch_bytes should default to 1048576 (not 0 = disabled proactive split), got %d", cfg.Queue.MaxBatchBytes)
+	}
+	if err := cfg.Validate(map[string]struct{}{"portkey": {}}); err != nil {
+		t.Fatalf("defaulted config should validate, got %v", err)
+	}
+}
+
+// TestQueueDepthExplicitPreserved (#114): explicitly-set queue depths are preserved (defaulting only
+// fires on the zero value).
+func TestQueueDepthExplicitPreserved(t *testing.T) {
+	setEnv(t)
+	const y = `
+emit:
+  telemetry:
+    otlp:
+      endpoint: ${GC_OTLP_ENDPOINT}
+      instance_id: ${GC_INSTANCE_ID}
+      token: ${GC_OTLP_TOKEN}
+identity:
+  deployment_environment: ${ENV}
+ha:
+  coordinator: lease
+  checkpoint: configmap
+queue:
+  max_batches: 10
+  max_batch_bytes: 2048
+  emit_workers: 1
+sources:
+  - type: portkey
+    enabled: true
+    base_url: https://api.portkey.ai/v1
+    source_instance: portkey-${ENV}
+    auth: { header: x-portkey-api-key, value: ${PORTKEY_API_KEY} }
+    loops:
+      analytics:
+        enabled: true
+        cadence: 60s
+        window: 50m
+`
+	cfg, err := LoadBytes([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Queue.MaxBatches != 10 || cfg.Queue.MaxBatchBytes != 2048 {
+		t.Fatalf("explicit queue depths should be preserved, got max_batches=%d max_batch_bytes=%d", cfg.Queue.MaxBatches, cfg.Queue.MaxBatchBytes)
+	}
+}
+
+// TestValidateRejectsTelemetryMetricInterval (#113): emit.telemetry.metric_interval parses under
+// KnownFields (MetricInterval lives on the shared OTLPTarget) but is never read or validated — only
+// emit.self.metric_interval is honoured. A non-zero value is a dead knob (the operator misdiagnoses
+// their DPM bill), so reject it, matching the "config lies about intent" cross-checks. Unset ⇒ fine.
+func TestValidateRejectsTelemetryMetricInterval(t *testing.T) {
+	setEnv(t)
+	// Accepted by the schema (proves the silent-parse path), then rejected by Validate.
+	const y = `
+emit:
+  telemetry:
+    metric_interval: 300s
+    otlp:
+      endpoint: ${GC_OTLP_ENDPOINT}
+      instance_id: ${GC_INSTANCE_ID}
+      token: ${GC_OTLP_TOKEN}
+identity:
+  deployment_environment: ${ENV}
+ha:
+  coordinator: lease
+  checkpoint: configmap
+queue:
+  emit_workers: 1
+sources:
+  - type: portkey
+    enabled: true
+    base_url: https://api.portkey.ai/v1
+    source_instance: portkey-${ENV}
+    auth: { header: x-portkey-api-key, value: ${PORTKEY_API_KEY} }
+    loops:
+      analytics:
+        enabled: true
+        cadence: 60s
+        window: 50m
+`
+	cfg, err := LoadBytes([]byte(y))
+	if err != nil {
+		t.Fatalf("emit.telemetry.metric_interval should parse under KnownFields: %v", err)
+	}
+	if err := cfg.Validate(map[string]struct{}{"portkey": {}}); err == nil || !strings.Contains(err.Error(), "emit.telemetry.metric_interval") {
+		t.Fatalf("expected non-zero emit.telemetry.metric_interval to be rejected (silently ignored dead knob), got %v", err)
+	}
+	// Unset (0) ⇒ valid.
+	ok, _ := Load("testdata/valid.yaml")
+	if err := ok.Validate(map[string]struct{}{"portkey": {}}); err != nil {
+		t.Fatalf("unset emit.telemetry.metric_interval should pass: %v", err)
+	}
+}

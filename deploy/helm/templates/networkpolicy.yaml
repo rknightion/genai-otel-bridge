@@ -25,6 +25,10 @@
 #            - toFQDNs:
 #                - matchName: "api.portkey.ai"
 #                - matchName: "otlp-gateway-<region>.grafana.net"   # your Grafana Cloud OTLP host
+#                - matchName: "<your-signed-url-host>"   # Portkey logs_export's S3 signed-download
+#                                                          # host (DIFFERENT from api.portkey.ai —
+#                                                          # see config sources[].signed_url_allow_hosts
+#                                                          # and values.yaml networkPolicy.exportEgressCIDR)
 #              toPorts:
 #                - ports:
 #                    - port: "443"
@@ -58,37 +62,51 @@ spec:
     - Ingress
     - Egress
 
-  # Ingress: deny everything EXCEPT the health port (and pprof in pull mode). The pod serves no
-  # other listener — self-metrics are PUSHED via OTLP (selfobs PeriodicReader), nothing scrapes it —
-  # so the only legitimate inbound is the kubelet's liveness/readiness probe on 8080.
+  # Ingress: deny everything EXCEPT the health port (open to all, CP-H10c) and, in pull-mode
+  # profiling, the pprof port (open ONLY to profiling.pullFrom — see below). The pod serves no other
+  # listener — self-metrics are PUSHED via OTLP (selfobs PeriodicReader), nothing scrapes it — so the
+  # only legitimate from-anywhere inbound is the kubelet's liveness/readiness probe on 8080.
   #
   # [CP-H10c] We allow the health port from ALL sources (empty `from:`) rather than default-deny-all
   # ingress. kubelet probes originate from the node's host netns; whether a default-deny ingress rule
   # blocks them is CNI-dependent (a documented Cilium/VPC-CNI footgun), and there is no portable
-  # selector for "the node". Allowing only the health/pprof ports keeps probes working on every CNI
-  # while denying all other inbound — the same don't-rely-on-fragile-matching lesson as the DNS rule.
+  # selector for "the node".
+  #
+  # [issue #127] The above justification does NOT extend to pprof: unlike the kubelet, pprof is
+  # scraped by a normal cluster pod (a Grafana Alloy/k8s-monitoring pod, typically) that IS
+  # selectable by namespace/pod labels. Appending pprof to the same empty-`from:` health rule let ANY
+  # pod in the cluster hit /debug/pprof/* — cheap CPU-profile-triggered DoS or recon of a process
+  # holding vendor API keys in memory. So pprof is rendered as its OWN ingress rule with a `from:`
+  # peer selector (profiling.pullFrom), never appended to the from-anywhere health rule.
   # Numeric ports (not named): NetworkPolicy named-port resolution is inconsistent across CNIs, so we
   # match the literal port the way the egress rules do. networkPolicy.ingressPorts defaults to just the
   # integrator's health listener (8080); widen it only for extra sidecar listeners that the kubelet (or
-  # another pod) must reach — e.g. the e2e's loopback sink/mock probe ports. The pprof port is appended
-  # automatically in pull mode.
+  # another pod) must reach — e.g. the e2e's loopback sink/mock probe ports.
   # [CP-H10d] An empty ingressPorts list MUST mean deny-all, not allow-all. A NetworkPolicy ingress
   # rule with a null/empty `ports:` (and no `from:`) matches ALL ports from ALL peers — the exact
-  # inverse of the intent. So render the port-scoped rule ONLY when there is at least one port to allow
-  # (ingressPorts non-empty, or pprof appended in pull mode); otherwise emit `ingress: []`, which with
-  # policyTypes:[Ingress] is a true default-deny-all-ingress.
+  # inverse of the intent. So render the health-port rule ONLY when ingressPorts is non-empty; emit
+  # `ingress: []` only when there is NOTHING to allow (no ingressPorts AND pprof not enabled), which
+  # with policyTypes:[Ingress] is a true default-deny-all-ingress.
   {{- $pprofIngress := and .Values.profiling.enabled (eq .Values.profiling.mode "pull") }}
   {{- if or .Values.networkPolicy.ingressPorts $pprofIngress }}
   ingress:
+  {{- if .Values.networkPolicy.ingressPorts }}
     - ports:
     {{- range .Values.networkPolicy.ingressPorts }}
         - protocol: TCP
           port: {{ . }}
     {{- end }}
-    {{- if $pprofIngress }}
+  {{- end }}
+  {{- if $pprofIngress }}
+    - from:
+        - namespaceSelector:
+            {{- toYaml (.Values.profiling.pullFrom.namespaceSelector | default dict) | nindent 12 }}
+          podSelector:
+            {{- toYaml (.Values.profiling.pullFrom.podSelector | default dict) | nindent 12 }}
+      ports:
         - protocol: TCP
           port: {{ .Values.profiling.pullPort }}
-    {{- end }}
+  {{- end }}
   {{- else }}
   ingress: []
   {{- end }}
@@ -147,12 +165,30 @@ spec:
     # Source API egress (e.g. Portkey public Analytics API, in-VPC LangSmith, etc.).
     # Replace values.networkPolicy.sourceEgressCIDR with the CIDR of your source endpoints.
     # For FQDN-based control (api.portkey.ai), use Cilium toFQDNs — see header comment above.
+    # [issue #128] Portkey's logs_export loop downloads export objects from a signed S3 URL on a
+    # DIFFERENT host than the control-plane API matched here (config sources[].signed_url_allow_hosts;
+    # see internal/source/portkey/CLAUDE.md and docs/DESIGN.md §4.7). Tightening this CIDR to just the
+    # control-plane API's range WITHOUT also allowing that S3 host stalls logs_export downloads — set
+    # networkPolicy.exportEgressCIDR below to cover it as a separate, independently-tightenable rule.
     - to:
         - ipBlock:
             cidr: {{ .Values.networkPolicy.sourceEgressCIDR }}
       ports:
         - protocol: TCP
           port: {{ .Values.networkPolicy.sourcePort }}
+{{- with .Values.networkPolicy.exportEgressCIDR }}
+
+    # Source export/download egress — the vendor's signed-URL object store (e.g. Portkey
+    # logs_export's S3 download host, distinct from the sourceEgressCIDR control-plane API above).
+    # Rendered only when set; otherwise the download rides the sourceEgressCIDR rule (fine only while
+    # that stays broad, e.g. its 0.0.0.0/0 default). See values.yaml networkPolicy.exportEgressCIDR.
+    - to:
+        - ipBlock:
+            cidr: {{ . }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.networkPolicy.exportPort }}
+{{- end }}
 {{- if and .Values.profiling.enabled (eq .Values.profiling.mode "push") }}
 
     # Grafana Cloud Profiles ingest egress (self-profiling push mode only).

@@ -1,0 +1,65 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: genai-otel-bridge-source-graph-unavailable
+  annotations:
+    grafana.app/folder: genai-otel-bridge
+  labels:
+    grafana.app/folder: genai-otel-bridge
+spec:
+  title: GenaiOtelBridgeSourceGraphUnavailable
+  # genai_otel_bridge_source_graph_unavailable_total{graph=...} fires OnGraphSkipped for several
+  # distinct failure states, but only graph="window_truncated" had a dedicated alert
+  # (alertrule-window-truncated.yaml) — export_failed/export_stuck (Portkey export-job lifecycle
+  # failures, i.e. the logs plane stalled) and workspace_scope_mismatch (the scope guardrail
+  # deliberately refusing to emit ANY analytics/groups data) had only a dashboard panel, so a
+  # persistent condition fell to the self-relative PollerStale warning — slow and un-attributed,
+  # especially for loops whose own staleness baseline is already long. Deliberately EXCLUDES
+  # capability-detection 404 graph skips and trace_id_unparsed (expected/quality signals, not
+  # failures) by naming the three graph values explicitly rather than matching everything.
+  execErrState: Ok
+  noDataState: Ok
+  for: 0s
+  trigger:
+    interval: 1m
+  labels:
+    # critical: unlike window_truncated (some records dropped, loop still progressing), all three
+    # graph values here mean a loop is producing ZERO data for its target (export_failed/export_stuck:
+    # the logs plane is down; workspace_scope_mismatch: analytics/groups refuse to emit by design).
+    severity: critical
+  annotations:
+    summary: "genai-otel-bridge {{ $labels.loop }} loop hit an unrecoverable source_graph_unavailable condition ({{ $labels.graph }})"
+    description: "genai_otel_bridge_source_graph_unavailable_total{graph=\"{{ $labels.graph }}\"} increased for the {{ $labels.loop }} loop in the last 15m. export_failed/export_stuck: the Portkey export-job lifecycle (logs_export, the logs plane) is failing or stuck — check the export-job status and retry/backoff behaviour. workspace_scope_mismatch: the configured API key's workspace does not match the loop's expected_workspace — the loop is deliberately refusing to emit ANY analytics/groups data until the credential/config is corrected (check for a recent key rotation). See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 16m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum by (loop, graph) (increase(genai_otel_bridge_source_graph_unavailable_total{graph=~"export_failed|export_stuck|workspace_scope_mismatch"}[15m])) > 0'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

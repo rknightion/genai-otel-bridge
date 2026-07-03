@@ -30,4 +30,10 @@ COPY --from=builder /build/THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 USER 65532:65532
 EXPOSE 8080
+# Exec form (no shell in distroless): reuses the binary's own shell-free -healthcheck probe mode
+# (cmd/genai-otel-bridge/main.go) — gives plain `docker run`/compose/podman/EC2-Docker deployments a
+# health signal. Kubernetes ignores image HEALTHCHECK (the Helm chart's liveness/readiness probes
+# cover that path) and the ECS Terraform module sets its own task-def healthCheck, so this is purely
+# for non-orchestrated docker/podman use.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD ["/genai-otel-bridge", "-healthcheck"]
 ENTRYPOINT ["/genai-otel-bridge"]

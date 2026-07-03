@@ -136,7 +136,12 @@ resource "aws_security_group" "this" {
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "HTTPS: OTLP endpoint + vendor APIs (Portkey/LangSmith) + DynamoDB public endpoint"
+    # [issue #128] "vendor APIs" here covers BOTH the Portkey control-plane API (api.portkey.ai) AND
+    # the DIFFERENT host the logs_export loop downloads export objects from (a signed S3 URL — see
+    # config sources[].signed_url_allow_hosts, internal/source/portkey/CLAUDE.md, docs/DESIGN.md §4.7).
+    # This rule is already 0.0.0.0/0 so both are reachable today; if you ever narrow it to specific
+    # CIDRs, you must include the S3 signed-URL host's range or logs_export downloads stall silently.
+    description = "HTTPS: OTLP endpoint + vendor APIs (Portkey control-plane API + its S3 signed-URL export/download host + LangSmith) + DynamoDB public endpoint"
   }
 
   egress {
@@ -315,6 +320,11 @@ module "service" {
       # MEM_LIMIT: informational only — the same byte value is passed to -container-mem-bytes above
       #   (which is what actually sets GOMEMLIMIT = 0.9 × it); kept for parity/visibility with Helm.
       # ENV: resolves ${ENV} in the config (identity.deployment_environment, source_instance).
+      # GENAI_OTEL_BRIDGE_REPLICAS: mirrors the Helm chart's deployment.yaml injection — gives the
+      #   binary's all-leader double-emit guard (main.go, ha.coordinator=none + replicas>1 ⇒ fatal at
+      #   startup) the same defence-in-depth on ECS. The DynamoDB CAS lock is the real anti-double-emit
+      #   guarantee when ha.coordinator=dynamodb (the module default); this only catches an operator who
+      #   deliberately mis-sets coordinator=none with desired_count>1 (issue #125).
       # AWS_REGION (only when var.aws_region is set): lets the DynamoDB SDK resolve the region when the
       #   config omits ha.dynamodb.region (the bundled default does).
       environment = concat([
@@ -329,6 +339,10 @@ module "service" {
         {
           name  = "ENV"
           value = var.deployment_environment
+        },
+        {
+          name  = "GENAI_OTEL_BRIDGE_REPLICAS"
+          value = tostring(var.desired_count)
         },
         ], var.aws_region != null ? [{
           name  = "AWS_REGION"

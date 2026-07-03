@@ -37,4 +37,6 @@ COPY --from=builder /build/THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 USER 65532:65532
 EXPOSE 8080
+# Kept in sync with ./Dockerfile (see its comment for rationale).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD ["/genai-otel-bridge", "-healthcheck"]
 ENTRYPOINT ["/genai-otel-bridge"]

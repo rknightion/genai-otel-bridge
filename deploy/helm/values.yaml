@@ -94,8 +94,21 @@ networkPolicy:
   # available over PrivateLink, so this is typically public-FQDN egress via NAT — for tighter control use
   # a Cilium CiliumNetworkPolicy toFQDNs (see networkpolicy.yaml). A self-hosted / in-VPC source (e.g. a
   # private LangSmith) would instead be the VPC/endpoint CIDR.
+  # IMPORTANT (issue #128): the logs_export loop downloads export objects from a signed S3 URL on a
+  # DIFFERENT host than the control-plane API above (config sources[].signed_url_allow_hosts; see
+  # internal/source/portkey/CLAUDE.md and docs/DESIGN.md §4.7). Tightening sourceEgressCIDR to just
+  # the control-plane API's CIDR WITHOUT also covering that S3 host stalls logs_export downloads. Set
+  # exportEgressCIDR (below) to the S3 host's CIDR to express both independently instead of leaving
+  # this at 0.0.0.0/0.
   sourceEgressCIDR: "0.0.0.0/0"
   sourcePort: 443
+  # Optional SEPARATE egress rule for the vendor's signed-URL export/download host (e.g. Portkey
+  # logs_export's S3 bucket — see the sourceEgressCIDR comment above). Leave empty (default) and the
+  # download rides the sourceEgressCIDR rule instead (fine only while sourceEgressCIDR stays broad,
+  # e.g. its 0.0.0.0/0 default); set both this and a tightened sourceEgressCIDR to express "control
+  # plane API + S3 export bucket" as two distinct CIDRs without falling back to 0.0.0.0/0.
+  exportEgressCIDR: ""
+  exportPort: 443
 
   # ── Self-o11y egress (the -meta stack) ─────────────────────────────────────────────────────────────
   # These two are ONLY for the integrator's own observability (emit.self + self-profiles); product
@@ -448,6 +461,20 @@ profiling:
   enabled: false
   mode: pull
   pullPort: 6060
+  # Peer selector restricting /debug/pprof/* ingress (pull mode) to the actual scraper — see
+  # templates/networkpolicy.yaml. Without this, pprof was reachable from ANY pod in the cluster
+  # (cheap DoS/recon of a process holding vendor API keys in memory — issue #127). Both fields are
+  # raw NetworkPolicyPeer selector maps (standard k8s label-selector match syntax, e.g.
+  # `matchLabels: {...}` / `matchExpressions: [...]`), combined into a single `from:` peer — an empty
+  # namespaceSelector ({}) matches ALL namespaces and an empty podSelector ({}) matches ALL pods in
+  # the matched namespace(s), so leaving both at `{}` reopens pprof to the whole cluster. The default
+  # below scopes it to the conventional Grafana Alloy/k8s-monitoring namespace; override
+  # namespaceSelector/podSelector for your actual scraper's real labels.
+  pullFrom:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: k8s-monitoring
+    podSelector: {}
 
 # Uninstall cleanup. The binary creates the leader-election Lease and the watermark-checkpoint
 # ConfigMap at runtime, so `helm uninstall` does not track them and would orphan them. When enabled

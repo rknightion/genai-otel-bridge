@@ -76,11 +76,13 @@ Alert/recording rules **and dashboards** live as **gcx-native resource manifests
   - **Dashboard** `genai-otel-bridge-self-obs`: v2 `TabsLayout` + responsive `AutoGridLayout`, 7 tabs (Overview/SLO,
     Liveness, Emit pipeline, Upstream, Cardinality, Logs, Profiling), 3 datasource vars (Prometheus/Loki/
     Pyroscope) + `$loop`. Generated from `gen_dashboard.py` (tracked Python; `make gen-dashboard` → commit YAML).
-  - **11 alerts**: LeaderAbsent, PollerStale (**self-relative**: 2× the loop's own 6h-p90 staleness baseline,
+  - **12 alerts**: LeaderAbsent, PollerStale (**self-relative**: 2× the loop's own 6h-p90 staleness baseline,
     not a flat threshold — flat false-positived ~100×/day on the log-export loops), EmitFailing, AuthErrors,
-    UpstreamErrorBudget, WindowTruncatedDroppingRecords, DataLoss, BucketRevisedAfterSettle, QueueBackpressure,
-    CardinalitySpike, NoStandby. Self-contained (no rule dependency); `noDataState: Ok` (NB the enum is `Ok`/
-    `NoData`, **not** `OK` — gcx 403s on `OK`).
+    UpstreamErrorBudget, WindowTruncatedDroppingRecords, SourceGraphUnavailable (`export_failed`/
+    `export_stuck`/`workspace_scope_mismatch` — the other `source_graph_unavailable_total` graph values,
+    distinct from WindowTruncatedDroppingRecords's `window_truncated`), DataLoss, BucketRevisedAfterSettle,
+    QueueBackpressure, CardinalitySpike, NoStandby. Self-contained (no rule dependency); `noDataState: Ok`
+    (NB the enum is `Ok`/`NoData`, **not** `OK` — gcx 403s on `OK`).
   - **recording rules**: `genai-otel-bridge:last_success_age:seconds`, `:baseline6h`, `genai-otel-bridge:freshness_ratio`,
     `genai-otel-bridge:upstream_error_ratio:5m` (the dynamic-threshold seam the dashboard colours on) + the originals
     `genai-otel-bridge:window_truncated:rate5m`, `genai-otel-bridge:scrape_healthy`, `genai-otel-bridge:scrape_present`.

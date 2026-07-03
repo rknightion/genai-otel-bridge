@@ -8,3 +8,9 @@ docs/superpowers
 .github
 .forgejo
 .gitlab-ci.yml
+# Local-only build artifacts (gitignored, but present on a dirty dev tree) — not needed by the
+# Docker build (which does its own `go build` from source) and were bloating the local build
+# context / invalidating the COPY layer cache on every rebuild (issue #124).
+/genai-otel-bridge
+coverage.out
+deploy/ecs/terraform/.terraform

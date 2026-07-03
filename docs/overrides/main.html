@@ -11,6 +11,21 @@
   them), and URLs are emitted without | e (which would escape "/").
 #}
 
+{% block htmltitle %}
+  {% set _home = page and page.canonical_url and page.canonical_url == config.site_url %}
+  {% if _home and page.meta and page.meta.title %}
+    <title>{{ page.meta.title }}</title>
+  {% elif _home and page.title %}
+    <title>{{ page.title | striptags }}</title>
+  {% elif page and page.meta and page.meta.title %}
+    <title>{{ page.meta.title }} - {{ config.site_name }}</title>
+  {% elif page and page.title %}
+    <title>{{ page.title | striptags }} - {{ config.site_name }}</title>
+  {% else %}
+    <title>{{ config.site_name }}</title>
+  {% endif %}
+{% endblock %}
+
 {% block extrahead %}
   {{ super() }}
 

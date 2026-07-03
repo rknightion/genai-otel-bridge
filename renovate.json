@@ -70,5 +70,70 @@
       "matchManagers": ["github-actions"],
       "groupName": "ci actions"
     }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "golangci-lint pinned install version (Makefile) — tracks GitHub releases so the pin never rots silently.",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": ["GOLANGCI_LINT_VERSION\\s*\\?=\\s*(?<currentValue>\\S+)"],
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "helm pinned install version (Makefile) — tracks GitHub releases; the tarball download is sha256-verified against this same release.",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": ["HELM_VERSION\\s*\\?=\\s*(?<currentValue>\\S+)"],
+      "depNameTemplate": "helm/helm",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "k3d pinned install version (Makefile) — tracks GitHub releases; the binary download is sha256-verified against this same release's checksums.txt.",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": ["K3D_VERSION\\s*\\?=\\s*(?<currentValue>\\S+)"],
+      "depNameTemplate": "k3d-io/k3d",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "k3s image used by the k3d e2e cluster (Makefile) — kept in step with k3d/Kubernetes support.",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": ["K3S_IMAGE\\s*\\?=\\s*rancher/k3s:(?<currentValue>\\S+)"],
+      "depNameTemplate": "rancher/k3s",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "go-licenses pinned install version (Makefile), installed via `go install ...@version`.",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": ["GO_LICENSES_VERSION\\s*\\?=\\s*(?<currentValue>\\S+)"],
+      "depNameTemplate": "google/go-licenses",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "syft pinned install version (Makefile), installed via `go install ...@version`.",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": ["SYFT_VERSION\\s*\\?=\\s*(?<currentValue>\\S+)"],
+      "depNameTemplate": "anchore/syft",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "gitleaks pinned version (ci.yml secret-scan job) — the tarball download is sha256-verified against this same release's checksums.txt.",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": ["GITLEAKS_VERSION:\\s*(?<currentValue>\\S+)"],
+      "depNameTemplate": "gitleaks/gitleaks",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$",
+      "versioningTemplate": "semver"
+    }
   ]
 }

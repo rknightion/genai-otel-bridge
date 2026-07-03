@@ -20,17 +20,8 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/lib/private-paths.sh
 . scripts/lib/private-paths.sh
-
-# (1) Built-in credential shapes — public, non-sensitive patterns; always scanned.
-BASE_PATTERN='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ghp_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{40,}|glpat-[0-9A-Za-z_-]{20}|xox[baprs]-[0-9A-Za-z-]{10,}'
-
-# (2) Deployment-specific identifiers (sensitive): env var wins, else the gitignored local file.
-TERMS="${FORBIDDEN_WORDS_PATTERN:-}"
-if [ -z "$TERMS" ] && [ -f scripts/forbidden-words.local ]; then
-  TERMS="$(grep -vE '^[[:space:]]*(#|$)' scripts/forbidden-words.local | paste -sd'|' -)"
-fi
-
-if [ -n "$TERMS" ]; then PATTERN="${BASE_PATTERN}|${TERMS}"; else PATTERN="$BASE_PATTERN"; fi
+# shellcheck source=scripts/lib/forbidden-words-pattern.sh
+. scripts/lib/forbidden-words-pattern.sh   # sets $PATTERN (shared with forbidden-words-diff.sh)
 
 list_candidates() {
   if [ "$#" -gt 0 ]; then printf '%s\n' "$@"; else git ls-files; fi

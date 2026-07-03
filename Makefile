@@ -86,13 +86,35 @@ tools-e2e:
 	@# Probe each cached binary actually executes on this arch (not just `test -x`): a CI cache restored
 	@# across architectures leaves a wrong-arch binary that passes `test -x` but dies ("Exec format error",
 	@# or a shell "Syntax error" when sh tries to interpret it). Re-install when missing OR not runnable.
+	@# helm/k3d/kubectl are fetched as raw binaries/tarballs (never curl|bash of a script) from the SAME
+	@# pinned release as the version var, and sha256-verified against that release's own checksum file
+	@# before install — no mutable branch ref is ever executed, and a corrupted/tampered download fails
+	@# the build instead of silently installing.
 	@{ test -x $(TOOLS_DIR)/helm && $(TOOLS_DIR)/helm version --short >/dev/null 2>&1; } || \
-	  (curl -sSfL https://get.helm.sh/helm-$(HELM_VERSION)-$$($(GO) env GOOS)-$$($(GO) env GOARCH).tar.gz | tar -xz -C /tmp && \
-	   mv /tmp/$$($(GO) env GOOS)-$$($(GO) env GOARCH)/helm $(TOOLS_DIR)/helm)
+	  ( set -e; \
+	    os=$$($(GO) env GOOS); arch=$$($(GO) env GOARCH); \
+	    tarball="helm-$(HELM_VERSION)-$$os-$$arch.tar.gz"; \
+	    curl -sSfLo "/tmp/$$tarball" "https://get.helm.sh/$$tarball"; \
+	    curl -sSfLo "/tmp/$$tarball.sha256sum" "https://get.helm.sh/$$tarball.sha256sum"; \
+	    (cd /tmp && sha256sum -c "$$tarball.sha256sum"); \
+	    tar -xzf "/tmp/$$tarball" -C /tmp && \
+	    mv "/tmp/$$os-$$arch/helm" $(TOOLS_DIR)/helm )
 	@{ test -x $(TOOLS_DIR)/k3d && $(TOOLS_DIR)/k3d version >/dev/null 2>&1; } || \
-	  (curl -sSfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=$(K3D_VERSION) K3D_INSTALL_DIR=$(TOOLS_DIR) USE_SUDO=false bash)
+	  ( set -e; \
+	    os=$$($(GO) env GOOS); arch=$$($(GO) env GOARCH); \
+	    curl -sSfLo /tmp/k3d-checksums.txt "https://github.com/k3d-io/k3d/releases/download/$(K3D_VERSION)/checksums.txt"; \
+	    curl -sSfLo /tmp/k3d-bin "https://github.com/k3d-io/k3d/releases/download/$(K3D_VERSION)/k3d-$$os-$$arch"; \
+	    want=$$(grep "k3d-$$os-$$arch$$" /tmp/k3d-checksums.txt | awk '{print $$1}'); \
+	    test -n "$$want" || { echo "k3d: no checksum entry for $$os-$$arch in checksums.txt"; exit 1; }; \
+	    echo "$$want  /tmp/k3d-bin" | sha256sum -c -; \
+	    install -m 0755 /tmp/k3d-bin $(TOOLS_DIR)/k3d )
 	@{ test -x $(TOOLS_DIR)/kubectl && $(TOOLS_DIR)/kubectl version --client >/dev/null 2>&1; } || \
-	  (curl -sSfLo $(TOOLS_DIR)/kubectl "https://dl.k8s.io/release/v$(ENVTEST_K8S_VERSION)/bin/$$($(GO) env GOOS)/$$($(GO) env GOARCH)/kubectl" && chmod +x $(TOOLS_DIR)/kubectl)
+	  ( set -e; \
+	    os=$$($(GO) env GOOS); arch=$$($(GO) env GOARCH); \
+	    curl -sSfLo /tmp/kubectl-bin "https://dl.k8s.io/release/v$(ENVTEST_K8S_VERSION)/bin/$$os/$$arch/kubectl"; \
+	    curl -sSfLo /tmp/kubectl-bin.sha256 "https://dl.k8s.io/release/v$(ENVTEST_K8S_VERSION)/bin/$$os/$$arch/kubectl.sha256"; \
+	    echo "$$(cat /tmp/kubectl-bin.sha256)  /tmp/kubectl-bin" | sha256sum -c -; \
+	    install -m 0755 /tmp/kubectl-bin $(TOOLS_DIR)/kubectl )
 
 # ── fast gate (no Docker) ─────────────────────────────────────────────────────
 ci-build:

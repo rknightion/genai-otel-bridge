@@ -86,8 +86,16 @@ jobs:
       - name: gitleaks
         env:
           GITLEAKS_VERSION: 8.21.2
+        # Download the tarball + the SAME release's own checksums.txt (never a mutable ref) and verify
+        # before extracting — a corrupted/tampered asset fails the build instead of running unverified.
         run: |
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz gitleaks
+          set -euo pipefail
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -sSfLo "$asset" "${base}/${asset}"
+          curl -sSfLo checksums.txt "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " ${asset}\$" checksums.txt | sha256sum -c -
+          tar -xzf "$asset" gitleaks
           ./gitleaks detect --source . --redact --no-banner
 
   # DynamoDB backend integration tests (coordinate + checkpoint packages + acceptance gate).

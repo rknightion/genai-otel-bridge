@@ -48,5 +48,8 @@ jobs:
       id-token: write         # cosign keyless signing + provenance attestation
       attestations: write
       security-events: write  # Trivy SARIF upload
+      checks: read            # publish.yml's wait-for-ci job reads the ci-success check; a called
+                              # workflow's job perms must be within the caller's grant or the whole
+                              # run dies at startup (startup_failure), even though wait-for-ci is skipped here
     with:
       release_tag: ${{ needs.release-please.outputs.tag_name }}

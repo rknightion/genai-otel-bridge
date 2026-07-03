@@ -21,7 +21,7 @@ cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/lib/private-paths.sh
 . scripts/lib/private-paths.sh
 # shellcheck source=scripts/lib/forbidden-words-pattern.sh
-. scripts/lib/forbidden-words-pattern.sh   # sets $PATTERN (shared with forbidden-words-diff.sh)
+. scripts/lib/forbidden-words-pattern.sh   # sets $PATTERN
 
 list_candidates() {
   if [ "$#" -gt 0 ]; then printf '%s\n' "$@"; else git ls-files; fi

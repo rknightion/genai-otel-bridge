@@ -7,8 +7,8 @@
 
   Uniform across every project repo: reads only standard config + config.extra.*,
   so the same file drops into any site unchanged. MiniJinja only — no Python
-  string methods (the hub build reverts main.html if it finds startswith/rstrip/
-  lstrip), and URLs are emitted without | e (which would escape "/").
+  string methods (the hub build regenerates a blank passthrough if it detects
+  them), and URLs are emitted without | e (which would escape "/").
 #}
 
 {% block extrahead %}

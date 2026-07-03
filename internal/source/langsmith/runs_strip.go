@@ -135,6 +135,28 @@ func (p runsFieldPolicy) selectKeys() []string {
 	return out
 }
 
+// validLangsmithSelectEnum is the set of `select` values the live self-hosted LangSmith 0.13.5 accepts on
+// POST /runs/query — captured verbatim from the server's 422 validation error (2026-06-21 live probe).
+// `select` IS enum-validated server-side: ANY value outside this set 422s the WHOLE query, killing every
+// run page (a single bad field takes down the entire runs loop). It is the SINGLE SOURCE OF TRUTH shared
+// by two guards: (1) TestRunsSelectFieldsAreValidServerEnum pins the default+opt-in policy's projection
+// to a subset of it, and (2) validateRunsSettings rejects an extra_record_fields/extra_indexed_fields
+// opt-in outside it at config-load time (#65 — a typo would otherwise 422 every runs/query at runtime,
+// a whole-loop outage from a one-character config error). Other LangSmith versions may accept more —
+// refresh from a new 422 probe if the server changes.
+var validLangsmithSelectEnum = set(
+	"id", "name", "run_type", "start_time", "end_time", "status", "error", "extra", "events", "inputs",
+	"inputs_preview", "inputs_s3_urls", "inputs_or_signed_url", "outputs", "outputs_preview", "outputs_s3_urls",
+	"outputs_or_signed_url", "s3_urls", "error_or_signed_url", "events_or_signed_url", "extra_or_signed_url",
+	"serialized_or_signed_url", "parent_run_id", "manifest_id", "manifest_s3_id", "manifest", "session_id",
+	"serialized", "reference_example_id", "reference_dataset_id", "total_tokens", "prompt_tokens",
+	"prompt_token_details", "completion_tokens", "completion_token_details", "total_cost", "prompt_cost",
+	"prompt_cost_details", "completion_cost", "completion_cost_details", "price_model_id", "first_token_time",
+	"trace_id", "dotted_order", "last_queued_at", "feedback_stats", "child_run_ids", "parent_run_ids", "tags",
+	"in_dataset", "app_path", "share_token", "trace_tier", "trace_first_received_at", "ttl_seconds",
+	"trace_upgrade", "thread_id", "trace_min_max_start_time", "messages", "inserted_at",
+)
+
 // strip maps a raw run record to a content-free LogRecord. Body is NEVER set (FR10). Timestamp = parsed
 // start_time (naive UTC), else fallbackTS. Severity derived from status. Nested objects/arrays under an
 // allow-listed key (token/cost _details, feedback_stats, and any object/array value) are SKIPPED — never

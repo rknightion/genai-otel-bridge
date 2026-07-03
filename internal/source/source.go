@@ -97,8 +97,17 @@ type Registry struct{ m map[string]Constructor }
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry { return &Registry{m: map[string]Constructor{}} }
 
-// Register associates typ with its Constructor.
-func (r *Registry) Register(typ string, c Constructor) { r.m[typ] = c }
+// Register associates typ with its Constructor. A duplicate type registration PANICS: registration runs
+// exactly once at composition time (app.go), so a copy-paste that reuses an existing type string (the
+// documented "Adding a new source" workflow is copy-the-pattern) would otherwise SILENTLY shadow the
+// original vendor — every configured source of that type would build the wrong vendor's loops, discovered
+// only when the emitted data is wrong. Fail loud + free at startup (#133).
+func (r *Registry) Register(typ string, c Constructor) {
+	if _, dup := r.m[typ]; dup {
+		panic(fmt.Sprintf("source: duplicate registration of type %q (a source type may be registered only once)", typ))
+	}
+	r.m[typ] = c
+}
 
 // Known returns a snapshot of registered types — passed to config.Validate to catch unknown types.
 func (r *Registry) Known() map[string]struct{} {
@@ -120,13 +129,20 @@ func (r *Registry) Build(cfg config.SourceConfig, deps Deps) (Source, error) {
 
 // ValidateOwnership fails if two loops declare the same normalized (post-gateway) series name
 // (F42) — config validation alone can't catch a data-dependent duplicate-timestamp clash (M7).
+//
+// [#63] Every loop MUST implement SeriesDeclarer — a metric loop that emits Samples but forgets
+// SeriesNames() would otherwise be SILENTLY exempt from this ownership check, and a post-normalisation
+// series collision with another loop would surface only at runtime as an endless stream of duplicate-
+// timestamp rejects (one loop's data permanently lost as counted gaps), with nothing pointing at the
+// ownership collision as the cause. A logs-only loop that emits no metric series declares an EMPTY slice
+// (logsExportLoop/runsLoop do so) — so a non-declaring loop is a wiring bug, rejected loud at startup.
 func ValidateOwnership(sources []Source) error {
 	owner := map[string]string{}
 	for _, s := range sources {
 		for _, lp := range s.Loops() {
 			sd, ok := lp.(SeriesDeclarer)
 			if !ok {
-				continue
+				return fmt.Errorf("loop %q does not declare its series (source.SeriesDeclarer): a sample-emitting loop must declare SeriesNames() for the ownership check; a logs-only loop must declare an empty slice", lp.Key().String())
 			}
 			for _, n := range sd.SeriesNames() {
 				norm := NormalizeSeriesName(n)

@@ -104,6 +104,12 @@ type runsLoop struct {
 
 func (l *runsLoop) Cadence() time.Duration { return l.cadence }
 
+// SeriesNames declares NO metric series: the runs loop emits OTLP logs, not metric samples. It implements
+// SeriesDeclarer (returning an empty slice) so source.ValidateOwnership can require EVERY loop to declare —
+// a sample-emitting loop that forgets to declare is a wiring bug, rejected loud rather than silently
+// exempted from the ownership check (#63). The log schema fingerprint is IndexedKeys(), not this.
+func (l *runsLoop) SeriesNames() []string { return nil }
+
 // IndexedKeys returns the full set of record fields this loop promotes to LogRecord.IndexedAttributes
 // (OTLP resource attrs → Loki stream labels via GS1): the base content-free allow-list ∪
 // settings.extra_indexed_fields (already merged into l.policy.indexed at construction). Sorted, for a
@@ -246,4 +252,7 @@ func (l *runsLoop) Collect(ctx context.Context, since model.Watermark) (model.Ba
 	return model.Batch{Key: l.Key(), Logs: logs, Watermark: model.Watermark{Time: winMax}}, nil
 }
 
-var _ source.Loop = (*runsLoop)(nil)
+var (
+	_ source.Loop           = (*runsLoop)(nil)
+	_ source.SeriesDeclarer = (*runsLoop)(nil) // declares an EMPTY series set (logs-only) so ValidateOwnership can require every loop to declare (#63)
+)

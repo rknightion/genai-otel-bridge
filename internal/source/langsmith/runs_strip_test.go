@@ -46,23 +46,8 @@ func TestSeverityFor(t *testing.T) {
 	}
 }
 
-// validLangsmithSelectEnum is the set of `select` values the live self-hosted LangSmith 0.13.5 accepts on
-// POST /runs/query — captured verbatim from the server's 422 validation error (2026-06-21 live probe).
-// `select` IS enum-validated server-side: ANY value outside this set 422s the WHOLE query, killing every
-// run page (a single bad field takes down the entire runs loop). So the loop's select projection MUST be
-// a subset of this. Other LangSmith versions may differ — refresh from a new 422 probe if the server changes.
-var validLangsmithSelectEnum = set(
-	"id", "name", "run_type", "start_time", "end_time", "status", "error", "extra", "events", "inputs",
-	"inputs_preview", "inputs_s3_urls", "inputs_or_signed_url", "outputs", "outputs_preview", "outputs_s3_urls",
-	"outputs_or_signed_url", "s3_urls", "error_or_signed_url", "events_or_signed_url", "extra_or_signed_url",
-	"serialized_or_signed_url", "parent_run_id", "manifest_id", "manifest_s3_id", "manifest", "session_id",
-	"serialized", "reference_example_id", "reference_dataset_id", "total_tokens", "prompt_tokens",
-	"prompt_token_details", "completion_tokens", "completion_token_details", "total_cost", "prompt_cost",
-	"prompt_cost_details", "completion_cost", "completion_cost_details", "price_model_id", "first_token_time",
-	"trace_id", "dotted_order", "last_queued_at", "feedback_stats", "child_run_ids", "parent_run_ids", "tags",
-	"in_dataset", "app_path", "share_token", "trace_tier", "trace_first_received_at", "ttl_seconds",
-	"trace_upgrade", "thread_id", "trace_min_max_start_time", "messages", "inserted_at",
-)
+// validLangsmithSelectEnum now lives in runs_strip.go (promoted from this test file, #65) so production
+// validation (validateRunsSettings) and this test share ONE source of truth for the 0.13.5 select enum.
 
 // TestRunsSelectFieldsAreValidServerEnum guards against a select projection field the server rejects:
 // any such field 422s the entire runs/query (regression guard for the execution_order outage, 2026-06-21).

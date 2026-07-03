@@ -23,6 +23,7 @@ const (
 	phaseCreated     = "created"     // export job created (draft), not yet started
 	phasePolling     = "polling"     // job queued/in_progress — waiting for success
 	phaseDownloading = "downloading" // job success — streaming/chunking the signed-URL file
+	phaseBlocked     = "blocked"     // window exceeds max_pages_per_window — re-raise loud each tick, never re-create the draft (#141)
 )
 
 // exportCursor is the in-flight export job state for ONE window (one page at a time). Watermark.Time is
@@ -36,7 +37,8 @@ type exportCursor struct {
 	Page           int    `json:"page,omitempty"`             // current_page being processed (0-indexed)
 	Pages          int    `json:"pages,omitempty"`            // ceil(total_records/page_size), learned at create
 	TotalRecords   int    `json:"total_records,omitempty"`    // matched count, fixed at create
-	PageOffsetDone int    `json:"page_offset_done,omitempty"` // LINES of the current page already consumed (chunk resume)
+	PageOffsetDone int    `json:"page_offset_done,omitempty"` // LINES of the current page already consumed (chunk resume; the correctness fallback)
+	PageByteOffset int64  `json:"page_byte_offset,omitempty"` // [#61] BYTES of the current page already consumed (line-boundary) — sent as an HTTP Range on resume so a multi-chunk page does not re-transfer/re-scan the consumed prefix; degrades to PageOffsetDone line-skip if the server ignores Range
 	PollDeadline   string `json:"poll_deadline,omitempty"`    // RFC3339Nano — abandon (cancel+restart) a job still running past this
 }
 
@@ -85,6 +87,7 @@ type logsExportLoop struct {
 	chunkMaxRecords           int
 	downloadMaxBytes          int64 // 0 ⇒ defaultDownloadMaxBytes; a loop field so the truncation path is testable
 	maxLineBytes              int   // 0 ⇒ maxLogLineBytes; a loop field so the oversize-line skip path is testable without a multi-MiB fixture
+	allowPrivate              bool  // mirrors cfg.HTTP.AllowPrivate: gates the http:// signed-URL carve-out (#139) — https-only unless an in-VPC/self-hosted deployment opted into private/cleartext
 	jobPollTimeout            time.Duration
 	requestedData             []string
 	signedURLAllowHosts       []string
@@ -130,7 +133,27 @@ func (l *logsExportLoop) lineOversize() {
 	}
 }
 
+// lineMalformed counts a single JSONL export line that failed json.Unmarshal and was SKIPPED (the line
+// offset still advances, so the page always completes and the loop never re-attempts the bad bytes). Reuses
+// the graph-skipped self-metric (→ genai_otel_bridge_source_graph_unavailable_total{loop="logs_export",graph="line_unparseable"})
+// so a SYSTEMATIC upstream format change — every line failing to parse, zero records emitted while the
+// window completes cleanly — is alertable via rate(...)>0, not a silent 100% drop that only shows in a
+// Warn log the metrics-based self-obs stack never turns into an alert (#66). Mirrors lineOversize /
+// export_failed / trace_id_unparsed.
+func (l *logsExportLoop) lineMalformed() {
+	if l.onGraphSkipped != nil {
+		l.onGraphSkipped("logs_export", "line_unparseable")
+	}
+}
+
 func (l *logsExportLoop) Cadence() time.Duration { return l.cadence }
+
+// SeriesNames declares NO metric series: the logs_export loop emits OTLP logs, not metric samples, so it
+// owns nothing in the metric-name space. It implements SeriesDeclarer (returning an empty slice) so
+// source.ValidateOwnership can enforce that EVERY loop declares — a sample-emitting loop that forgets to
+// is a wiring bug, not silently exempted (#63). This does NOT make it a metric loop (Key() still emits no
+// SeriesDeclarer-derived fingerprint; the log schema fingerprint is IndexedKeys()).
+func (l *logsExportLoop) SeriesNames() []string { return nil }
 
 // IndexedKeys returns the full set of record fields this loop promotes to LogRecord.IndexedAttributes
 // (OTLP resource attrs → Loki stream labels via GS1): the base content-free allow-list ∪
@@ -181,6 +204,8 @@ func (l *logsExportLoop) Collect(ctx context.Context, since model.Watermark) (mo
 		return l.stepPolling(ctx, since, cur, now)
 	case phaseDownloading:
 		return l.stepDownloading(ctx, since, cur)
+	case phaseBlocked:
+		return l.stepBlocked(since, cur, now)
 	default: // phaseIdle (and any unrecognised phase, which decodeCursor already normalises to idle)
 		return l.stepIdle(ctx, since, now)
 	}
@@ -193,24 +218,19 @@ func (l *logsExportLoop) Collect(ctx context.Context, since model.Watermark) (mo
 // max_pages_per_window is a mis-sized window: error loudly (no silent tail-drop) so the operator shrinks
 // `window`. Time is unchanged on the created transition (the window isn't done yet).
 func (l *logsExportLoop) stepIdle(ctx context.Context, since model.Watermark, now time.Time) (model.Batch, error) {
-	winMin := since.Time
-	if winMin.IsZero() {
-		winMin = now.Add(-l.window) // bootstrap: the first window is the most recent one window back
-	}
 	// [backfill floor] A watermark older than now-maxBackfill is unstorable — its logs would be rejected
-	// by the Loki accept horizon (too-old), so creating an export for it is wasted work. Skip the
-	// unstorable span (loud) and resume at the floor, mirroring the analytics loop's max_backfill clamp
-	// (F25). The abandoned span is honestly logged; downstream too-old rejects would otherwise count it.
-	if floor := now.Add(-l.maxBackfill); winMin.Before(floor) {
-		slog.Warn("portkey logs_export: watermark older than max_backfill — skipping the unstorable span",
-			"from", winMin.UTC().Format(time.RFC3339), "floor", floor.UTC().Format(time.RFC3339), "source", l.sourceInstance)
-		winMin = floor
+	// by the Loki accept horizon (too-old), so creating an export for it is wasted work. windowBoundsFor
+	// clamps winMin to the floor; we log the skipped span here (loud), mirroring the analytics loop's
+	// max_backfill clamp (F25). The abandoned span is honestly logged; downstream too-old rejects would
+	// otherwise count it.
+	if raw := since.Time; !raw.IsZero() {
+		if floor := now.Add(-l.maxBackfill); raw.Before(floor) {
+			slog.Warn("portkey logs_export: watermark older than max_backfill — skipping the unstorable span",
+				"from", raw.UTC().Format(time.RFC3339), "floor", floor.UTC().Format(time.RFC3339), "source", l.sourceInstance)
+		}
 	}
-	winMax := winMin.Add(l.window)
-	if cutoff := now.Add(-l.settle); winMax.After(cutoff) {
-		winMax = cutoff
-	}
-	if !winMax.After(winMin) {
+	winMin, winMax, settled := l.windowBoundsFor(since.Time, now)
+	if !settled {
 		return model.Batch{Key: l.Key(), Watermark: since}, nil // nothing settled yet — empty, no advance
 	}
 	jobID, total, err := l.createExport(ctx, winMin, winMax, 0)
@@ -223,8 +243,24 @@ func (l *logsExportLoop) stepIdle(ctx context.Context, since model.Watermark, no
 		return model.Batch{Key: l.Key(), Watermark: model.Watermark{Time: winMax}}, nil
 	}
 	if l.maxPagesPerWindow > 0 && pages > l.maxPagesPerWindow {
-		return model.Batch{}, fmt.Errorf("portkey logs_export: window [%s..%s] needs %d pages > max_pages_per_window %d — shrink `window`",
-			winMin.UTC().Format(time.RFC3339), winMax.UTC().Format(time.RFC3339), pages, l.maxPagesPerWindow)
+		// [#141] The draft export for this window was JUST created server-side; Portkey has no delete API
+		// and cancel is invalid on a draft, so returning a bare error here (no cursor persisted) would make
+		// the next tick re-enter stepIdle with the identical window and create ANOTHER orphaned draft —
+		// forever, once per tick, each burning a shared rate-limiter token. Instead PARK the window: persist
+		// a blocked marker (bounds + learned pages) so subsequent ticks re-raise the loud error from cursor
+		// state via stepBlocked WITHOUT re-creating. Fire the alertable metric once on entry; the frontier
+		// does not advance (window_lag keeps growing — loud). The block clears automatically once the window
+		// changes (operator shrinks `window`) — see stepBlocked.
+		slog.Error("portkey logs_export: window exceeds max_pages_per_window — parking (loud, no advance, no re-create) until `window` is shrunk",
+			"win_min", winMin.UTC().Format(time.RFC3339), "win_max", winMax.UTC().Format(time.RFC3339),
+			"pages", pages, "max_pages_per_window", l.maxPagesPerWindow, "source", l.sourceInstance)
+		l.jobFailed("window_oversize")
+		cur := exportCursor{
+			Phase:  phaseBlocked,
+			WinMin: winMin.UTC().Format(time.RFC3339Nano), WinMax: winMax.UTC().Format(time.RFC3339Nano),
+			Pages: pages, TotalRecords: total,
+		}
+		return model.Batch{Key: l.Key(), Watermark: l.advanceCursor(since.Time, cur)}, nil
 	}
 	cur := exportCursor{
 		Phase: phaseCreated, JobID: jobID,
@@ -232,6 +268,42 @@ func (l *logsExportLoop) stepIdle(ctx context.Context, since model.Watermark, no
 		Page: 0, Pages: pages, TotalRecords: total,
 	}
 	return model.Batch{Key: l.Key(), Watermark: l.advanceCursor(since.Time, cur)}, nil
+}
+
+// windowBoundsFor computes the [winMin, winMax] export window for the last-emitted watermark time and now:
+// the bootstrap (zero → one window back), the max_backfill floor clamp, and the settled upper-bound clamp
+// (now-settle). settled=false ⇒ nothing has settled yet (winMax ≤ winMin). Shared by stepIdle and
+// stepBlocked so the block-recovery check sees the IDENTICAL window math (a mismatch there ⇒ the window
+// genuinely changed).
+func (l *logsExportLoop) windowBoundsFor(sinceTime, now time.Time) (winMin, winMax time.Time, settled bool) {
+	winMin = sinceTime
+	if winMin.IsZero() {
+		winMin = now.Add(-l.window)
+	}
+	if floor := now.Add(-l.maxBackfill); winMin.Before(floor) {
+		winMin = floor
+	}
+	winMax = winMin.Add(l.window)
+	if cutoff := now.Add(-l.settle); winMax.After(cutoff) {
+		winMax = cutoff
+	}
+	return winMin, winMax, winMax.After(winMin)
+}
+
+// stepBlocked re-surfaces a window-exceeds-max_pages_per_window stall each tick WITHOUT re-creating the
+// export draft (the orphan-spam fix, #141). It recomputes the window with the CURRENT settings/clock: if
+// it still resolves to the same [winMin, winMax] the block stands — re-raise the loud error (no advance,
+// window_lag grows). If the window has changed (operator shrank `window`, or the settled/backfill bounds
+// shifted) OR nothing settles now, drop the block and restart from idle so the (possibly smaller) window
+// is created + sized afresh next tick.
+func (l *logsExportLoop) stepBlocked(since model.Watermark, cur exportCursor, now time.Time) (model.Batch, error) {
+	winMin, winMax, settled := l.windowBoundsFor(since.Time, now)
+	curMin, curMax, ok := cur.windowBounds()
+	if !settled || !ok || !winMin.Equal(curMin) || !winMax.Equal(curMax) {
+		return model.Batch{Key: l.Key(), Watermark: l.resetIdle(since.Time)}, nil
+	}
+	return model.Batch{}, fmt.Errorf("portkey logs_export: window [%s..%s] needs %d pages > max_pages_per_window %d — shrink `window`",
+		winMin.UTC().Format(time.RFC3339), winMax.UTC().Format(time.RFC3339), cur.Pages, l.maxPagesPerWindow)
 }
 
 // stepCreated starts the in-flight job. JobID=="" means a page-rollover left a new page to CREATE first
@@ -325,18 +397,20 @@ func (l *logsExportLoop) stepDownloading(ctx context.Context, since model.Waterm
 		// never a silent skip or a fetch from an unvalidated host.
 		return model.Batch{}, fmt.Errorf("portkey logs_export: refusing download: %w", verr)
 	}
-	recs, lines, eof, err := l.downloadChunk(ctx, signedURL, cur.PageOffsetDone, l.chunkMaxRecords, winMax)
+	recs, lines, nextByte, eof, err := l.downloadChunk(ctx, signedURL, cur.PageOffsetDone, cur.PageByteOffset, l.chunkMaxRecords, winMax)
 	if err != nil {
 		return model.Batch{}, err
 	}
 	cur.PageOffsetDone += lines
+	cur.PageByteOffset = nextByte // #61: advance the byte cursor so the next chunk resumes via Range from here
 	if !eof {
 		return model.Batch{Key: l.Key(), Logs: recs, Watermark: l.advanceCursor(since.Time, cur)}, nil
 	}
 	if cur.Page+1 < cur.Pages {
 		cur.Page++
 		cur.PageOffsetDone = 0
-		cur.JobID = "" // defer the next page's create to stepCreated (no orphan on a failed chunk-emit)
+		cur.PageByteOffset = 0 // #61: a new page is a new object — reset the byte cursor
+		cur.JobID = ""         // defer the next page's create to stepCreated (no orphan on a failed chunk-emit)
 		cur.Phase = phaseCreated
 		return model.Batch{Key: l.Key(), Logs: recs, Watermark: l.advanceCursor(since.Time, cur)}, nil
 	}
@@ -375,4 +449,7 @@ func parseCursorTime(s string) (time.Time, bool) {
 	return t.UTC(), true
 }
 
-var _ source.Loop = (*logsExportLoop)(nil)
+var (
+	_ source.Loop           = (*logsExportLoop)(nil)
+	_ source.SeriesDeclarer = (*logsExportLoop)(nil) // declares an EMPTY series set (logs-only) so ValidateOwnership can require every loop to declare (#63)
+)

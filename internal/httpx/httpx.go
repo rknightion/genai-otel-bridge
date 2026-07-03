@@ -84,19 +84,38 @@ func New(cfg Config) *Client {
 			if len(via) >= 10 {
 				return fmt.Errorf("httpx: stopped after 10 redirects")
 			}
-			// [ext-review-14] Reject CROSS-HOST redirects. Go strips Authorization/Cookie on a
-			// cross-domain redirect but FORWARDS arbitrary custom headers, so a source's vendor auth
-			// header (e.g. x-portkey-api-key) would leak to a different origin. Source calls are API
-			// GETs to a fixed base_url, so a legitimate redirect is same-host (scheme/path
-			// canonicalisation) — anchor on the ORIGINAL request's host so the credential set there
-			// can never reach another host.
-			if len(via) > 0 && !strings.EqualFold(req.URL.Hostname(), via[0].URL.Hostname()) {
-				return fmt.Errorf("httpx: cross-host redirect to %q blocked (credentials must not leave the origin host)", req.URL.Hostname())
+			if err := checkRedirectCreds(req, via); err != nil {
+				return err
 			}
 			return cl.checkDest(req.Context(), req.URL)
 		},
 	}
 	return cl
+}
+
+// checkRedirectCreds blocks a redirect hop that would leak the source's custom vendor auth header.
+// Go's client strips Authorization/Cookie only on a CROSS-DOMAIN redirect and FORWARDS arbitrary custom
+// headers otherwise, so a source's vendor auth header (e.g. x-portkey-api-key) can egress two ways:
+//   - [ext-review-14] to a DIFFERENT origin host — blocked by anchoring on the ORIGINAL request's host
+//     (source calls are API GETs to a fixed base_url; a legitimate redirect is same-host path/scheme
+//     canonicalisation, never another origin).
+//   - [#62] over CLEARTEXT on a SAME-host https→http scheme DOWNGRADE — the cross-host rule does not
+//     fire (host unchanged), so anchor on the ORIGINAL request's scheme too: once the origin hop was
+//     https, no later hop may be plain http (the credential must never cross the wire unencrypted).
+//
+// A pure function of (req, via) so the policy is unit-testable without a live TLS handshake.
+func checkRedirectCreds(req *http.Request, via []*http.Request) error {
+	if len(via) == 0 {
+		return nil
+	}
+	origin := via[0].URL
+	if !strings.EqualFold(req.URL.Hostname(), origin.Hostname()) {
+		return fmt.Errorf("httpx: cross-host redirect to %q blocked (credentials must not leave the origin host)", req.URL.Hostname())
+	}
+	if strings.EqualFold(origin.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
+		return fmt.Errorf("httpx: redirect scheme downgrade https->%s to %q blocked (credentials must not be sent cleartext)", req.URL.Scheme, req.URL.Hostname())
+	}
+	return nil
 }
 
 // Do validates the destination (allow-list + egress guard), acquires the rate token (M6 — per

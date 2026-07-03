@@ -317,9 +317,25 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 // on an empty page (past the end), a short page (the last), the max_groups cap, or a page that adds no
 // NEW dimension value (a backstop against a server that ignores current_page, so we never loop forever).
 // apiKeyIDs is the per-pass UUID filter CSV (empty ⇒ workspace-wide, mirroring the legacy behaviour).
-func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, from, until time.Time, apiKeyIDs string) ([]groupRow, bool) {
-	var rows []groupRow
+func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, from, until time.Time, apiKeyIDs string) (rows []groupRow, ok bool) {
 	seen := map[string]bool{}
+	// [#140] Count rows dropped by the cross-page dedup. In normal operation (confirmed-string dim values,
+	// an offset-respecting server) this stays 0. It becomes >0 when either the server ignores current_page
+	// (returns overlapping pages) OR distinct dimension values COLLAPSE to the same string — most acutely
+	// when a non-string dim decode falls back to "" (groups_derive.go), which would otherwise silently
+	// discard every row after the first and report one arbitrary row's total as the whole endpoint. Report
+	// it (Warn + OnGraphSkipped) on success so the collapse is alertable, never silent — we keep dedup-by-
+	// first (NOT sum) so a genuinely repeated page can't double-count.
+	dupDropped := 0
+	defer func() {
+		if ok && dupDropped > 0 {
+			slog.Warn("portkey groups: dropped duplicate-dimension rows in cross-page dedup (possible dim-value collapse to \"\", or an offset-ignoring server)",
+				"endpoint", ep.label, "dropped", dupDropped, "source", l.sourceInstance)
+			if l.onGraphSkipped != nil {
+				l.onGraphSkipped(l.Key().Loop, ep.label+"_dup_dim")
+			}
+		}
+	}()
 	// [review-M1] Hard page cap = ceil(maxGroups/pageSize): the infinite-loop backstop for a server that
 	// IGNORES current_page (returns the same page forever). We do NOT terminate on "page added no new
 	// dimension value" — that heuristic would SILENTLY early-truncate if the (unconfirmed) metadata row
@@ -357,6 +373,7 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 		}
 		for _, r := range pageRows {
 			if seen[r.dimValue] {
+				dupDropped++ // #140: observable, not silent (see the defer)
 				continue
 			}
 			seen[r.dimValue] = true

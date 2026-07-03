@@ -129,6 +129,24 @@ func validateRunsSettings(rs *runsSettings) error {
 			return fmt.Errorf("langsmith runs: extra_indexed_fields cannot include %q — it is a hard-denied message-body field (a body must never become a Loki stream label)", f)
 		}
 	}
+	// [#65] Validate opt-ins against the known select enum. Both extra_record_fields and
+	// extra_indexed_fields are mirrored into the runs/query `select` projection (selectKeys), which the
+	// server enum-validates: ANY value outside the accepted set 422s the WHOLE query — the runs loop then
+	// emits zero logs and window_lag grows until a human decodes the 422 (a whole-loop outage from a
+	// one-character typo like "app-path"). A table lookup at config-load turns that silent runtime firehose
+	// into a loud fail-fast, consistent with the package's other fail-fast validations. The enum is the
+	// live 0.13.5 snapshot; a newer server may accept more — refresh validLangsmithSelectEnum from a fresh
+	// 422 probe if the server changes.
+	for _, f := range rs.extraRecordFields {
+		if !validLangsmithSelectEnum[f] {
+			return fmt.Errorf("langsmith runs: extra_record_fields value %q is not a known LangSmith 0.13.5 select field — it would 422 the entire runs/query at runtime (check for a typo, or refresh validLangsmithSelectEnum for a newer server)", f)
+		}
+	}
+	for _, f := range rs.extraIndexedFields {
+		if !validLangsmithSelectEnum[f] {
+			return fmt.Errorf("langsmith runs: extra_indexed_fields value %q is not a known LangSmith 0.13.5 select field — it would 422 the entire runs/query at runtime (check for a typo, or refresh validLangsmithSelectEnum for a newer server)", f)
+		}
+	}
 	if len(rs.extraIndexedFields) > 0 {
 		// Promoting fields to the INDEXED tier creates Loki streams; an un-bounded field explodes
 		// cardinality. The per-loop guard budget is the runtime backstop (over-budget indexed signatures

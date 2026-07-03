@@ -120,6 +120,38 @@ func TestGroupsCollectAuthErrorFiresHook(t *testing.T) {
 	}
 }
 
+// TestGroupsDedupCollapseIsObservable (#140): when distinct dimension values COLLAPSE to the same string
+// (here two rows whose ai_model is a NUMBER → parseGroupRows falls back to "" for both), the cross-page
+// dedup keeps only the first row and would otherwise SILENTLY discard the rest — reporting one arbitrary
+// row's total as the whole endpoint. The drop must now be counted/logged (OnGraphSkipped "<ep>_dup_dim"),
+// never silent, while the dedup itself is unchanged (still keeps-first, never sums/double-counts).
+func TestGroupsDedupCollapseIsObservable(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	collapse := groupsResponse{Object: "list"}
+	for i := range 2 {
+		collapse.Data = append(collapse.Data, map[string]json.RawMessage{
+			"ai_model": json.RawMessage(strconv.Itoa(i)), // non-string → "" after decode → both collapse
+			"requests": json.RawMessage(strconv.Itoa(100 + i)),
+		})
+		collapse.Total++
+	}
+	srv := fakeGroups(t, map[string][]groupsResponse{"ai-models": {collapse}}, nil, nil)
+	defer srv.Close()
+	var skipped []string
+	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "emit_prompts": "false"}),
+		source.Deps{OnGraphSkipped: func(_, g string) { skipped = append(skipped, g) }}, now)
+	b, err := gl.Collect(context.Background(), model.Watermark{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countByName(b.Samples)["portkey_api_requests_by_model"]; got != 1 {
+		t.Fatalf("collapsed rows dedup to 1 (keep-first, no double-count); got %d", got)
+	}
+	if len(skipped) != 1 || skipped[0] != "ai-models_dup_dim" {
+		t.Fatalf("the silent collapse must fire exactly one ai-models_dup_dim skip signal, got %v", skipped)
+	}
+}
+
 func countByName(samples []model.Sample) map[string]int {
 	m := map[string]int{}
 	for _, s := range samples {

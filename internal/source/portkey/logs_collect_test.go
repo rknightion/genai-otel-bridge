@@ -684,6 +684,77 @@ func TestLogsCollectResumesInFlightJobAcrossLeaderChange(t *testing.T) {
 	}
 }
 
+// TestLogsCollectOversizeWindowParksNoOrphanSpam (#141): a window whose page count exceeds
+// max_pages_per_window must create the draft export AT MOST ONCE, then re-raise the loud stall each tick
+// from the parked cursor WITHOUT creating another orphaned draft (Portkey can't delete a draft, so
+// re-creating every tick spams orphans + burns a rate token). The stall stays loud (error + no advance)
+// and recovers once `window` is shrunk.
+func TestLogsCollectOversizeWindowParksNoOrphanSpam(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	f := newFakeExport(t, 10, func(int) string { return nLines(2, "m") }) // total 10
+	var skips []string
+	deps := source.Deps{OnGraphSkipped: func(loop, g string) {
+		if loop == "logs_export" {
+			skips = append(skips, g)
+		}
+	}}
+	// page_size 2, total 10 ⇒ 5 pages > max_pages_per_window 1. since.Time = now-2h ⇒ a FULL, stable window.
+	l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{
+		"window": "1h", "settle": "10m", "page_size": "2", "max_pages_per_window": "1",
+	}), deps, now)
+
+	wm := model.Watermark{Time: now.Add(-2 * time.Hour)}
+	b, err := l.Collect(ctx, wm) // idle → create job-1 → park (blocked)
+	if err != nil {
+		t.Fatalf("entering blocked must persist the marker via a non-error batch, got %v", err)
+	}
+	if f.seq != 1 {
+		t.Fatalf("want exactly one create on entering blocked, got %d", f.seq)
+	}
+	if decodeCursor(b.Watermark.Cursor).Phase != phaseBlocked {
+		t.Fatalf("want phase blocked, got %q", decodeCursor(b.Watermark.Cursor).Phase)
+	}
+	if !b.Watermark.Time.Equal(wm.Time) {
+		t.Fatalf("blocked window must NOT advance the frontier, got %v", b.Watermark.Time)
+	}
+	blocked := b.Watermark // the persisted blocked cursor the scheduler re-pulls with each tick
+
+	// Several blocked ticks: each re-raises the loud error and creates NO new draft.
+	for i := range 5 {
+		if _, err := l.Collect(ctx, blocked); err == nil || !strings.Contains(err.Error(), "max_pages_per_window") {
+			t.Fatalf("tick %d: blocked window must re-raise the loud max_pages_per_window error, got %v", i, err)
+		}
+	}
+	if f.seq != 1 {
+		t.Fatalf("blocked window must NOT re-create a draft every tick; got %d creates (orphan spam)", f.seq)
+	}
+	if len(skips) != 1 || skips[0] != "window_oversize" {
+		t.Fatalf("the oversize window must fire exactly one window_oversize metric (on entry), got %v", skips)
+	}
+
+	// Recovery: operator shrinks `window` (and the smaller window now fits the page cap).
+	l.window = 30 * time.Minute
+	l.maxPagesPerWindow = 100
+	b2, err := l.Collect(ctx, blocked) // stepBlocked: window bounds changed → clear the block to idle
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodeCursor(b2.Watermark.Cursor).Phase != phaseIdle {
+		t.Fatalf("a changed window must clear the block back to idle, got %q", decodeCursor(b2.Watermark.Cursor).Phase)
+	}
+	b3, err := l.Collect(ctx, b2.Watermark) // idle → create the new (smaller) window → proceed
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.seq != 2 {
+		t.Fatalf("recovery must create the new window's export exactly once, got %d total creates", f.seq)
+	}
+	if decodeCursor(b3.Watermark.Cursor).Phase != phaseCreated {
+		t.Fatalf("recovered window must proceed to created, got %q", decodeCursor(b3.Watermark.Cursor).Phase)
+	}
+}
+
 // mkLogsLoopDeps mirrors mkLogsLoop but injects source.Deps (for hook assertions).
 func mkLogsLoopDeps(t *testing.T, cfg config.SourceConfig, deps source.Deps, now time.Time) *logsExportLoop {
 	t.Helper()

@@ -317,6 +317,7 @@ func newLogsExportLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps so
 		cadence: cadence, window: ls.window, settle: ls.settle, maxBackfill: ls.maxBackfill,
 		pageSize: ls.pageSize, maxPagesPerWindow: ls.maxPagesPerWindow, chunkMaxRecords: ls.chunkMaxRecords,
 		jobPollTimeout: ls.jobPollTimeout, requestedData: requested, signedURLAllowHosts: ls.signedURLAllowHosts,
+		allowPrivate:   cfg.HTTP.AllowPrivate, // #139: gates the http:// signed-URL carve-out (https-only otherwise)
 		policy:         policy,
 		useCase:        uc.slug,
 		apiKeyIDs:      uc.apiKeyIDsCSV,

@@ -107,6 +107,40 @@ func TestRunsExtraIndexedFields(t *testing.T) {
 	}
 }
 
+// TestRunsRejectsUnknownSelectField (#65): an extra_record_fields/extra_indexed_fields opt-in value that
+// is not in the known LangSmith 0.13.5 select enum is rejected at config-load time — otherwise it 422s the
+// WHOLE runs/query at runtime (a one-character typo → total loop outage). A valid enum value still passes.
+func TestRunsRejectsUnknownSelectField(t *testing.T) {
+	// A hyphen typo of a real field ("app_path" → "app-path") is not in the enum → fail fast.
+	if _, err := buildRunsSettings(map[string]string{
+		"session_ids": "s1", "extra_record_fields": "tags,app-path",
+	}); err == nil {
+		t.Fatal("a typo'd extra_record_fields value outside the select enum must be rejected (would 422 every query)")
+	}
+	// Same for the indexed-tier opt-in.
+	if _, err := buildRunsSettings(map[string]string{
+		"session_ids": "s1", "extra_indexed_fields": "not_a_real_select_field",
+	}); err == nil {
+		t.Fatal("a typo'd extra_indexed_fields value outside the select enum must be rejected")
+	}
+	// A genuine enum value still passes (no false positive on a valid opt-in).
+	if _, err := buildRunsSettings(map[string]string{
+		"session_ids": "s1", "extra_record_fields": "reference_example_id", "extra_indexed_fields": "app_path",
+	}); err != nil {
+		t.Fatalf("a valid select-enum opt-in must pass: %v", err)
+	}
+}
+
+// TestValidLangsmithSelectEnumIsSingleSource (#65): the production validator and the projection guard test
+// share ONE enum var (promoted out of the test file), so they cannot drift.
+func TestValidLangsmithSelectEnumIsSingleSource(t *testing.T) {
+	for _, f := range defaultRunsFieldPolicy().selectKeys() {
+		if !validLangsmithSelectEnum[f] {
+			t.Fatalf("default select field %q missing from validLangsmithSelectEnum", f)
+		}
+	}
+}
+
 // TestHardDeniedRunsFieldsCoversFloor guards against drift: every key the shared content floor denies
 // must also be rejected by the runs opt-in validation (else opting one in passes config then the guard
 // silently drops the whole record — review HIGH-2).

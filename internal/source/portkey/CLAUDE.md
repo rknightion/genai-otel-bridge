@@ -134,7 +134,8 @@ allow-list), `logs_settings.go` (decoupled knobs + `newLogsExportLoop`).
   `| api_key_use_case="data_gen"`, no GS1 stream-label promotion needed). `Key()` folds the slug into
   the naming component so each fan-out instance owns a distinct cursor watermark.
 - **State machine in `Watermark.Cursor`** (JSON: phase/job_id/win_min/win_max/page/pages/total_records/
-  page_offset_done/poll_deadline). One non-blocking step per `Collect`; `LoopConfig.Window==0` (the real
+  page_offset_done/page_byte_offset/poll_deadline; phases idle→created→polling→downloading, plus `blocked`
+  for an oversize window #141). One non-blocking step per `Collect`; `LoopConfig.Window==0` (the real
   window is `settings.window`) so the scheduler snapshot-gates it (no catch-up acceleration / no
   backfill count — correct: one window per tick, oldest-first). `Watermark.Time` = last fully-emitted
   window's win_max (forward-only); it advances ONLY when all pages of a window are emitted. The
@@ -162,8 +163,11 @@ allow-list), `logs_settings.go` (decoupled knobs + `newLogsExportLoop`).
   distinguishable in Loki as structured metadata (`| source="portkey"`). RECORD tier, not indexed — no
   stream-label budget / fingerprint impact. The langsmith runs strip mirrors it with `"langsmith"`.
 - **Signed-URL SSRF (§7):** the download URL is a SERVER-controlled input → `validateSignedURLHost`
-  exact-matches `settings.signed_url_allow_hosts` before any fetch, independent of the dlClient egress
-  guard (whose `AllowHosts` is the SAME list — belt-and-braces). `signed_url_allow_hosts` + `workspace_id`
+  exact-matches `settings.signed_url_allow_hosts` AND requires an `https` scheme before any fetch,
+  independent of the dlClient egress guard (whose `AllowHosts` is the SAME list — belt-and-braces; the
+  egress guard checks host/IP but NOT the scheme). A non-https signed URL is refused unless
+  `http.allow_private` is set (the in-VPC/self-hosted carve-out) — else the object + its embedded
+  `X-Amz-Signature` credential would transit cleartext (#139). `signed_url_allow_hosts` + `workspace_id`
   are REQUIRED (fail-fast at construction). `requested_data` is validated content-free.
 - **Streaming chunker:** the ≤page_size file is never buffered whole — a bounded `readLine` reader
   (`logs_download.go`, NOT `bufio.Scanner`) line-by-line, skip `page_offset_done`, take
@@ -174,9 +178,18 @@ allow-list), `logs_settings.go` (decoupled knobs + `newLogsExportLoop`).
   silent; a malformed (unparseable) line is `slog.Warn`-skipped. NB `bufio.Scanner` was deliberately
   replaced here: it aborts the WHOLE scan with `ErrTooLong` on one over-long line and cannot advance past
   it, which permanently stalled the window (issue #35). A download exceeding `download cap` errors loudly
-  (no silent truncation). Per-chunk re-download is the resume mechanism — bounded memory, but a
-  >chunk_max_records page re-GETs the whole object per chunk (tune `chunk_max_records`/`window` for
-  high-traffic windows).
+  (no silent truncation). A malformed (unparseable) line is skipped-loud AND fires
+  `OnGraphSkipped(logs_export,"line_unparseable")` (#66) — so a SYSTEMATIC upstream format change that
+  drops 100% of records is alertable via metrics, not just a `slog.Warn` the self-obs stack can't see.
+- **HTTP Range resume (#61):** per-chunk re-download is the resume mechanism (bounded memory), but a
+  `>chunk_max_records` page must not re-GET the whole object per chunk. The cursor carries a
+  `page_byte_offset` (line-boundary) alongside `page_offset_done`; on resume `downloadChunk` sends
+  `Range: bytes=<offset>-` so the server serves only the un-consumed tail (the consumed prefix is never
+  re-transferred or re-scanned — killing the O(page²) skip-scan + 10× S3 egress on a full 50k page). A
+  server/CDN that ignores Range (returns 200 + the full body) is detected via the status/Content-Range and
+  falls back to the `page_offset_done` line-skip — so correctness never depends on Range being honoured,
+  and a mid-page failover still resumes (byte offset in the cursor, or degrades to line-skip). Still tune
+  `chunk_max_records`/`window` for very high-traffic windows.
 - **Signed-URL secret redaction (§7 / issue #34):** a transport error on the signed-URL object download
   is a `*url.Error` whose string embeds the FULL URL — and the signed query is a live bearer credential
   (`X-Amz-Signature`/`X-Goog-Signature`/SAS token). `downloadChunk` routes every download transport /
@@ -185,10 +198,14 @@ allow-list), `logs_settings.go` (decoupled knobs + `newLogsExportLoop`).
   `httpx.ErrSnippet` (bounded body, no URL) and is unchanged.
 - **Failure honesty:** failed/stopped/stuck jobs `slog.Error` AND fire `Deps.OnGraphSkipped` (→
   `genai_otel_bridge_source_graph_unavailable_total{loop=logs_export,graph=export_failed|export_stuck}`);
-  a skipped over-long line reuses the same self-metric with `graph=line_oversize` (and an unparseable
-  trace-id value with `graph=trace_id_unparsed`).
-  `max_pages_per_window` over-size → loud error (no silent tail-drop). `max_backfill` floor skips an
-  unstorable old span loudly (mirrors analytics F25).
+  a skipped over-long line reuses the same self-metric with `graph=line_oversize`, an unparseable
+  trace-id value with `graph=trace_id_unparsed`, and an unparseable JSONL line with
+  `graph=line_unparseable` (#66).
+  `max_pages_per_window` over-size → the window is PARKED (phase `blocked`): the draft export is created
+  AT MOST ONCE, then each tick re-raises the loud error from cursor state WITHOUT re-creating (Portkey has
+  no delete API + cancel is invalid on a draft, so re-creating every tick would spam orphaned drafts +
+  burn a rate token), fires `graph=window_oversize` once on entry, and clears automatically once `window`
+  is shrunk (#141). `max_backfill` floor skips an unstorable old span loudly (mirrors analytics F25).
 - **Decoupled knobs** (`settings`, no `internal/config` change): `window`(1h) `settle`(10m)
   `max_backfill`(24h) `page_size`(≤50000) `max_pages_per_window`(50) `chunk_max_records`(5000)
   `job_poll_timeout`(30m — a full 50k page takes ~10-20m to generate server-side, live-probed §9)

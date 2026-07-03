@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +67,16 @@ func (l *logsExportLoop) validateSignedURLHost(signedURL string) error {
 	if host == "" {
 		return fmt.Errorf("signed url has no host")
 	}
+	// [#139] REQUIRE https on the (server-controlled) download URL. The host allow-list + httpx egress
+	// guard both validate host/IP but NOT the scheme, and the transport will happily issue plain http —
+	// so a downgraded signed URL (a self-hosted/misconfigured Portkey, or an attacker influencing the
+	// control-plane response when base_url is an http allow_private host) would transit the S3 object
+	// AND the embedded X-Amz-Signature credential material in cleartext. Reject a non-https scheme
+	// unless allow_private is set (the documented in-VPC/self-hosted carve-out, mirroring the base_url
+	// rule) — belt-and-braces with the CP-M7 cleartext-emit posture.
+	if !strings.EqualFold(u.Scheme, "https") && !l.allowPrivate {
+		return fmt.Errorf("signed-url scheme %q is not https (refusing cleartext download of the signed object + its credential; set http.allow_private for an in-VPC/self-hosted http source)", u.Scheme)
+	}
 	for _, h := range l.signedURLAllowHosts {
 		if strings.ToLower(h) == host {
 			return nil
@@ -84,12 +95,20 @@ func (l *logsExportLoop) validateSignedURLHost(signedURL string) error {
 //
 // page_offset_done counts LINES (file positions), not emitted records: a malformed line is skipped but
 // still advances the offset, so the next chunk resumes past it and we never re-attempt the bad line.
-func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, skip, max int, fallbackTS time.Time) (recs []model.LogRecord, linesRead int, eof bool, err error) {
+func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, skip int, byteOffset int64, max int, fallbackTS time.Time) (recs []model.LogRecord, linesRead int, nextByteOffset int64, eof bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signedURL, nil)
 	if err != nil {
 		// A NewRequest URL-parse error stringifies the raw signed URL (incl. its credential-bearing query),
 		// so redact the query before it can reach a log line (issue #34).
-		return nil, 0, false, httpx.RedactURLError(err)
+		return nil, 0, 0, false, httpx.RedactURLError(err)
+	}
+	// [#61] Resume by BYTE offset: on a re-download (byteOffset>0) request only the un-consumed tail via an
+	// HTTP Range header, so a multi-chunk page does not re-transfer AND re-scan (O(page²)) the already-
+	// consumed prefix on every chunk (10× S3 egress on a full 50k page). The LINE offset (skip) is retained
+	// as the correctness FALLBACK: a server/CDN that ignores Range returns 200 + the whole body, and we then
+	// skip `skip` lines exactly as before — so correctness never depends on Range being honoured.
+	if byteOffset > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", byteOffset))
 	}
 	resp, err := l.dlClient.Do(req)
 	if err != nil {
@@ -98,11 +117,26 @@ func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, sk
 		// X-Goog-Signature / SAS token) granting read of the raw, un-stripped export object. This error
 		// propagates to the scheduler's slog.Warn → stdout → Loki, so the query MUST be stripped before it
 		// can ever be rendered. The non-2xx path below uses ErrSnippet (bounded body, no URL) — already safe.
-		return nil, 0, false, fmt.Errorf("portkey logs_export: signed-url download: %w", httpx.RedactURLError(err))
+		return nil, 0, 0, false, fmt.Errorf("portkey logs_export: signed-url download: %w", httpx.RedactURLError(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, 0, false, fmt.Errorf("portkey logs_export: signed-url download status %d%s", resp.StatusCode, errBodySuffix(httpx.ErrSnippet(resp)))
+
+	// Decide whether the server honoured the Range. 206 + a Content-Range whose start == byteOffset ⇒ the
+	// body IS the tail from byteOffset, so we must NOT line-skip (the prefix is already absent). A 200 ⇒ the
+	// body starts at byte 0 (first chunk, or a server that ignored Range) ⇒ fall back to skipping `skip`
+	// lines. A 206 we can't verify is refused loudly (never risk byte-misaligned page corruption).
+	rangeHonored := false
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// full body from byte 0 — the line-skip fallback path below handles resume
+	case http.StatusPartialContent:
+		if start, ok := contentRangeStart(resp.Header.Get("Content-Range")); byteOffset > 0 && ok && start == byteOffset {
+			rangeHonored = true
+		} else {
+			return nil, 0, 0, false, fmt.Errorf("portkey logs_export: signed-url returned 206 with unexpected Content-Range %q (wanted start %d)", resp.Header.Get("Content-Range"), byteOffset)
+		}
+	default:
+		return nil, 0, 0, false, fmt.Errorf("portkey logs_export: signed-url download status %d%s", resp.StatusCode, errBodySuffix(httpx.ErrSnippet(resp)))
 	}
 
 	// Read at most downloadMaxBytes+1 through a counting reader: if the count reaches downloadMaxBytes+1
@@ -124,30 +158,42 @@ func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, sk
 	// page always completes and the bad line is counted, not fatal.
 	br := bufio.NewReaderSize(cr, lineReadBufBytes)
 
-	// Skip the already-consumed lines of this page (re-download resume). An over-long line in the skip
+	// consumed = raw bytes read from THIS response via readLine (advances the byte cursor). base is the
+	// file offset at which this response's body starts: byteOffset when the Range was honoured, else 0.
+	var consumed int64
+	base := int64(0)
+	skipLines := skip
+	if rangeHonored {
+		base = byteOffset // body starts at byteOffset ⇒ next offset = byteOffset + consumed
+		skipLines = 0     // the prefix is already absent — never line-skip a honoured Range
+	}
+
+	// Skip the already-consumed lines of this page (200-fallback resume). An over-long line in the skip
 	// region is drained like any other (its tooLong flag is ignored — it was counted when first read).
 	// One line at a time ⇒ bounded memory even across the skip.
-	for range skip {
-		_, _, rerr := readLine(br, lineCap)
+	for range skipLines {
+		_, _, c, rerr := readLine(br, lineCap)
+		consumed += int64(c)
 		if rerr == io.EOF {
 			// Fewer lines than the saved offset — the object ended early (shouldn't happen for a stable
 			// S3 object). Treat the page as exhausted rather than crash; the window's frontier won't
 			// advance unless this was the last page, so a genuine shortfall stays loud via window_lag.
-			return nil, skip, true, nil
+			return nil, skip, base + consumed, true, nil
 		}
 		if rerr != nil {
-			return nil, skip, false, fmt.Errorf("portkey logs_export: stream signed-url body: %w", rerr)
+			return nil, skip, 0, false, fmt.Errorf("portkey logs_export: stream signed-url body: %w", rerr)
 		}
 	}
 
 	recs = make([]model.LogRecord, 0, max)
 	for linesRead < max {
-		line, tooLong, rerr := readLine(br, lineCap)
+		line, tooLong, c, rerr := readLine(br, lineCap)
 		if rerr == io.EOF {
 			break
 		}
+		consumed += int64(c)
 		if rerr != nil {
-			return recs, linesRead, false, fmt.Errorf("portkey logs_export: stream signed-url body: %w", rerr)
+			return recs, linesRead, 0, false, fmt.Errorf("portkey logs_export: stream signed-url body: %w", rerr)
 		}
 		linesRead++ // count the line whether emitted or skipped — page_offset_done must advance PAST it
 		if tooLong {
@@ -162,10 +208,13 @@ func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, sk
 		var raw map[string]json.RawMessage
 		if uerr := json.Unmarshal(line, &raw); uerr != nil {
 			// Malformed line: re-download yields the same bytes (stable object), so retrying is futile.
-			// Skip it, loudly (alertable via the error log), and keep the page progressing — the line
-			// offset still advances so we never re-attempt this line.
+			// Skip it, loudly, and keep the page progressing — the line offset still advances so we never
+			// re-attempt this line. Fire the alertable self-metric (#66): a Warn log alone is invisible to
+			// the metrics-based self-obs stack, so a SYSTEMATIC format change dropping 100% of records would
+			// otherwise complete the window silently. Counted → rate(line_unparseable)>0 is alertable.
 			slog.Warn("portkey logs_export: skipping unparseable export line",
 				"source", l.sourceInstance, "line", skip+linesRead)
+			l.lineMalformed()
 			continue
 		}
 		rec := l.policy.strip(raw, fallbackTS)
@@ -183,13 +232,33 @@ func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, sk
 		// window over the dropped tail. (Edge: a non-final chunk that stops at chunk_max_records while the
 		// object is within ~one read of the cap could trip this slightly early; harmless — it's retryable,
 		// and a page legitimately near 512 MiB is itself a mis-sized window. Raise the cap / shrink window.)
-		return nil, 0, false, fmt.Errorf("portkey logs_export: signed-url object exceeds %d bytes (truncated) — raise download cap / shrink window", maxBytes)
+		return nil, 0, 0, false, fmt.Errorf("portkey logs_export: signed-url object exceeds %d bytes (truncated) — raise download cap / shrink window", maxBytes)
 	}
 	// Fewer than a full chunk ⇒ end of page. (When a page is an exact multiple of `max`, the final
 	// non-empty chunk reports eof=false and the NEXT chunk reads zero lines ⇒ eof=true — one extra,
 	// cheap, idempotent re-download. Correctness over micro-optimisation.)
 	eof = linesRead < max
-	return recs, linesRead, eof, nil
+	return recs, linesRead, base + consumed, eof, nil
+}
+
+// contentRangeStart parses the START byte of a `Content-Range: bytes START-END/TOTAL` header (RFC 7233).
+// Returns ok=false on any header we don't recognise, so an unverifiable 206 is refused rather than trusted.
+func contentRangeStart(h string) (int64, bool) {
+	h = strings.TrimSpace(h)
+	const p = "bytes "
+	if !strings.HasPrefix(h, p) {
+		return 0, false
+	}
+	rest := h[len(p):]
+	dash := strings.IndexByte(rest, '-')
+	if dash <= 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(rest[:dash]), 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // readLine reads ONE newline-terminated logical line from br, bounded so a pathologically long line can
@@ -199,11 +268,15 @@ func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, sk
 // aborting the whole scan the way bufio.Scanner does on ErrTooLong (issue #35). At a clean EOF with no
 // pending bytes it returns io.EOF; at EOF with a final unterminated line it returns that line. Any other
 // read error is returned verbatim. Peak memory is ~limit + one bufio buffer, regardless of line size.
-func readLine(br *bufio.Reader, limit int) (line []byte, tooLong bool, err error) {
+// It also returns `consumed`: the RAW bytes read from the stream for this line INCLUDING the trailing '\n'
+// (and including all drained bytes of an over-long line) — the caller sums these to advance the byte cursor
+// to the next line boundary for a Range-based resume (#61). At a clean EOF consumed is 0.
+func readLine(br *bufio.Reader, limit int) (line []byte, tooLong bool, consumed int, err error) {
 	var buf []byte
 	var total int // content bytes seen for this line so far (may exceed len(buf) once truncated)
 	for {
 		frag, e := br.ReadSlice('\n')
+		consumed += len(frag) // RAW bytes incl. the delimiter — advances the byte cursor
 		chunk := frag
 		if e == nil && len(chunk) > 0 && chunk[len(chunk)-1] == '\n' {
 			chunk = chunk[:len(chunk)-1] // strip the delimiter from the returned line
@@ -219,14 +292,14 @@ func readLine(br *bufio.Reader, limit int) (line []byte, tooLong bool, err error
 		case bufio.ErrBufferFull:
 			continue // more of this line remains in the stream
 		case nil:
-			return buf, tooLong, nil
+			return buf, tooLong, consumed, nil
 		case io.EOF:
 			if total == 0 {
-				return nil, false, io.EOF // clean end, nothing pending
+				return nil, false, consumed, io.EOF // clean end, nothing pending (consumed==0)
 			}
-			return buf, tooLong, nil // final unterminated line
+			return buf, tooLong, consumed, nil // final unterminated line
 		default:
-			return nil, false, e
+			return nil, false, consumed, e
 		}
 	}
 }

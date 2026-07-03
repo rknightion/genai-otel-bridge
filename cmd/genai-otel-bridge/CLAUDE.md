@@ -39,11 +39,13 @@ must match the chart RBAC `resourceNames`. Names are fixed (single-instance char
 
 - `signal.NotifyContext(SIGTERM, SIGINT)` cancels the root ctx → `app.Run` returns → graceful shutdown.
   If `app.Run` returns a **non-nil** error while ctx is **not** cancelled → fatal log + `os.Exit(1)`.
-  **Gotcha:** with the `lease` coordinator, losing leadership (a renewal lapse) while the root ctx is
-  still alive makes `Run` return `ctx.Err()` == `nil` (not an error) — so this guard does NOT fire; the
-  process logs "stopped" and exits **0**, relying on the orchestrator to restart it and rejoin the
-  election. The `dynamodb` coordinator is NOT symmetric here — it re-enters its own acquire loop
-  in-process on leadership loss instead of returning, so `app.Run` doesn't exit in that case at all.
+  **Leadership-loss handling ([#110]):** BOTH coordinators now re-campaign in-process on a genuine
+  renewal lapse (leadership lost while the root ctx is still alive) rather than returning — the `lease`
+  coordinator builds a fresh elector and re-enters its election loop (symmetric with the `dynamodb`
+  coordinator's acquire loop). So `app.Run` returns only when the root ctx is cancelled (SIGTERM/rollout
+  → clean exit **0**) or on a genuine non-nil error such as elector/backend construction failure (→ the
+  guard above fires, `os.Exit(1)`). A transient K8s-API/DynamoDB flap no longer exits the process
+  mid-pod-life; it just re-campaigns and a standby may take over for the gap.
 - `selfobs.SetMemoryLimit(0.9, *memLimit)` runs **before** config load (90% of the container limit;
   no-op if ≤ 0).
 - **Self-observability identity:** falls back to the telemetry endpoint if `cfg.Emit.Self` is nil;

@@ -602,6 +602,24 @@ func TestLoadBytesResolvesEnv(t *testing.T) {
 	}
 }
 
+// TestParseErrorRedactsResolvedSecret (#111): when a resolved secret value lands in a field that fails
+// to decode (here a duration field parameterised by a non-duration secret), the resulting error must
+// NOT contain the secret — otherwise it reaches stderr → the container log → Loki. It must be redacted.
+func TestParseErrorRedactsResolvedSecret(t *testing.T) {
+	const secret = "sk-supersecret-abc123-value"
+	t.Setenv("TEST_SETTLE", secret)
+	_, err := LoadBytes([]byte("sources:\n  - type: portkey\n    loops:\n      analytics:\n        bucket_settle: ${TEST_SETTLE}\n"))
+	if err == nil {
+		t.Fatal("expected a decode error for a non-duration secret value")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("config parse error leaked the resolved secret: %s", err)
+	}
+	if !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("expected the secret to be [redacted] in the error, got: %s", err)
+	}
+}
+
 // TestQueueDepthDefaults (#114): a config that sets the mandatory queue.emit_workers but omits
 // max_batches/max_batch_bytes must load with the documented 256 / 1 MiB defaults (mirroring the helm
 // render tags and the governance defaulting pattern) — NOT the runner's depth-1 clamp or a disabled

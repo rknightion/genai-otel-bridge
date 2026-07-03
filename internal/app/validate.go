@@ -36,14 +36,27 @@ func ValidateConfigFile(path string) error {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
 	// Placeholder any unset ${VAR} (scan raw text — refs can appear anywhere, even in comments, which
-	// config.Load also resolves). Never clobber a real value the caller has set.
+	// config.Load also resolves). Never clobber a real value the caller has set. [#112] Classify a var
+	// by the KEY it is assigned to, not just its name: an endpoint/url/base_url field parameterised by a
+	// generically-named env ref (e.g. `endpoint: ${OTLP_GATEWAY}`) still needs an https placeholder or
+	// the endpoint gate false-FAILs a valid overlay. (Duration/numeric fields parameterised by an unset
+	// ref still can't be meaningfully validated — the "x" placeholder fails ParseDuration; set those in
+	// CI env or don't env-parameterise them. The failure direction stays safe: false-FAIL, never
+	// false-PASS. Documented on this function.)
+	urlKey := regexp.MustCompile(`(?m)^\s*(?:-\s*)?([A-Za-z0-9_]+)\s*:\s*"?\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+	urlVars := map[string]bool{}
+	for _, m := range urlKey.FindAllStringSubmatch(string(raw), -1) {
+		if k := strings.ToLower(m[1]); k == "endpoint" || k == "url" || k == "base_url" {
+			urlVars[m[2]] = true
+		}
+	}
 	for _, m := range validateEnvRefRe.FindAllStringSubmatch(string(raw), -1) {
 		name := m[1]
 		if os.Getenv(name) != "" {
 			continue
 		}
 		val := "x"
-		if strings.Contains(name, "ENDPOINT") || strings.Contains(name, "URL") {
+		if urlVars[name] || strings.Contains(name, "ENDPOINT") || strings.Contains(name, "URL") || strings.Contains(name, "GATEWAY") {
 			val = "https://placeholder.example"
 		}
 		// #nosec G104 — Setenv on a validated key name; failure is non-fatal (Load will report the unset ref).

@@ -396,13 +396,17 @@ func LoadBytes(raw []byte) (*Config, error) {
 	}
 	resolved, err := yaml.Marshal(&root)
 	if err != nil {
-		return nil, fmt.Errorf("config: re-marshal after secret resolution: %w", err)
+		// [#111] `resolved` now carries the REAL secret values in scalar node values, so any error string
+		// derived from it could embed a secret (which then reaches stderr → container log → Loki). Redact.
+		return nil, redactSecretValues(fmt.Errorf("config: re-marshal after secret resolution: %w", err), placeholders)
 	}
 	var cfg Config
 	dec := yaml.NewDecoder(strings.NewReader(string(resolved)))
 	dec.KnownFields(true) // unknown YAML key ⇒ error
 	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("config: parse: %w", err)
+		// [#111] A decode/type/duration error (e.g. Duration.UnmarshalYAML's `invalid duration %q`) can
+		// echo a resolved secret value from `resolved` — redact every resolved-secret substring first.
+		return nil, redactSecretValues(fmt.Errorf("config: parse: %w", err), placeholders)
 	}
 	if cfg.Governance.PerMetricCardinalityBudget == 0 { // unset ⇒ safe default (never silent-unlimited)
 		cfg.Governance.PerMetricCardinalityBudget = defaultPerMetricCardinalityBudget
@@ -493,6 +497,25 @@ func injectEnvPlaceholders(s string) (string, map[string]string, error) {
 		return "", nil, firstErr
 	}
 	return out, ph, nil
+}
+
+// redactSecretValues replaces every resolved secret value (the VALUES of the placeholder map) with
+// "[redacted]" in err's message [#111]. After secret resolution, a YAML decode/type/duration error can
+// echo a resolved config value verbatim; unredacted it reaches stderr → the container log → Loki. This
+// is a fatal config-load path (the error is only printed), so the %w chain is intentionally dropped —
+// keeping it would re-expose the raw string. Values ≤3 chars are skipped to avoid mangling the message
+// with incidental substrings; a real credential is far longer.
+func redactSecretValues(err error, ph map[string]string) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	for _, v := range ph {
+		if len(v) > 3 {
+			msg = strings.ReplaceAll(msg, v, "[redacted]")
+		}
+	}
+	return errors.New(msg)
 }
 
 // resolveSecretsNode walks the parsed tree and, in scalar VALUES only, substitutes placeholders with

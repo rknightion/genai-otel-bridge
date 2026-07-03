@@ -17,9 +17,10 @@ type Metrics interface {
 	LastSuccess(loop string, t time.Time)
 	WindowLag(loop string, lag time.Duration)
 	NewLabelValue(series string)
-	SamplesCapped(loop string, n int)          // samples suppressed by the DPM cap (reason="dpm")
-	SourceGraphUnavailable(loop, graph string) // a configured graph skipped (404 capability/absence) this poll
-	AuthError(loop, source string)             // upstream responded 401/403 — credential failure, own alertable signal
+	SamplesCapped(loop string, n int)                // samples suppressed by the DPM cap (reason="dpm")
+	SourceGraphUnavailable(loop, graph string)       // a configured graph skipped (404 capability/absence) this poll
+	AuthError(loop, source string)                   // upstream responded 401/403 — credential failure, own alertable signal
+	LoopDegraded(loop, reason string, degraded bool) // [#120] 0/1 gauge: loop entered/left degraded (non-flapping state)
 }
 
 // NoopMetrics is the default (tests, dev).
@@ -38,3 +39,4 @@ func (NoopMetrics) NewLabelValue(string)                           {}
 func (NoopMetrics) SamplesCapped(string, int)                      {}
 func (NoopMetrics) SourceGraphUnavailable(string, string)          {}
 func (NoopMetrics) AuthError(string, string)                       {}
+func (NoopMetrics) LoopDegraded(string, string, bool)              {}

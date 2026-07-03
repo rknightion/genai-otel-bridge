@@ -247,6 +247,10 @@ func main() {
 		// Single source of truth (config.IdentityConfig.ProductIdentity) — the composition root counts the
 		// same keys against governance.max_stream_label_keys (Loki stream-label budget), so they can't drift.
 		Identity: cfg.Identity.ProductIdentity(),
+		// [#60] Emit-leg latency into selfobs (the emit client is outside the httpx observer chokepoint).
+		Observer: func(plane string, statusCode int, err error, d time.Duration) {
+			metrics.ObserveEmitRequest(plane, statusCode, err, d)
+		},
 	})
 
 	cp, coord := buildHA(ctx, cfg, *ns, *identity, *cpFile)

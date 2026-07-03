@@ -37,6 +37,11 @@ type Config struct {
 	Identity   map[string]string
 	MaxBytes   int
 	Retry      RetryPolicy
+	// Observer, if set, fires once per emit POST actually sent upstream with the plane
+	// ("metrics"/"logs"), the response status (0 on transport error), the transport error, and the
+	// request duration [#60]. It lets selfobs record emit-leg latency (the emit client is outside the
+	// httpx observer chokepoint). nil ⇒ no-op; the emitter stays decoupled from selfobs.
+	Observer func(plane string, statusCode int, err error, d time.Duration)
 }
 
 type Emitter struct {
@@ -278,11 +283,23 @@ func (e *Emitter) doOnce(ctx context.Context, url string, gz []byte) (int, strin
 	if e.auth != "" { // [CP-M7] omit the header entirely for a token-less endpoint
 		req.Header.Set("Authorization", e.auth)
 	}
+	start := e.now()
 	resp, err := e.hc.Do(req)
+	dur := e.now().Sub(start)
+	plane := "metrics"
+	if url == e.logsURL {
+		plane = "logs"
+	}
 	if err != nil {
+		if e.cfg.Observer != nil { // [#60] observe the transport-error attempt too
+			e.cfg.Observer(plane, 0, err, dur)
+		}
 		return 0, "", 0, err // transport error
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if e.cfg.Observer != nil { // [#60] emit-leg latency into selfobs
+		e.cfg.Observer(plane, resp.StatusCode, nil, dur)
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return resp.StatusCode, string(body), parseRetryAfter(resp.Header.Get("Retry-After"), e.now()), nil
 }

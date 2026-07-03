@@ -40,13 +40,14 @@ type LoopRunner struct {
 	// are "retry:<loop>" / "save:<loop>" / "skip:<loop>:<reason>" — disjoint from the scheduler's keyspace.
 	lim *logging.Limiter
 
-	mu        sync.Mutex
-	busy      bool            // a batch is collected-but-not-yet-saved
-	frontier  model.Watermark // last SAVED frontier (in-memory source of truth)
-	hasFront  bool
-	saveFails int  // consecutive checkpoint-save failures
-	degraded  bool // terminal/degraded → scheduler backs off + alerts
-	firstOK   bool // a first successful watermark commit has been logged this leadership (info, once)
+	mu            sync.Mutex
+	busy          bool            // a batch is collected-but-not-yet-saved
+	frontier      model.Watermark // last SAVED frontier (in-memory source of truth)
+	hasFront      bool
+	saveFails     int    // consecutive checkpoint-save failures
+	degraded      bool   // terminal/degraded → scheduler backs off + alerts
+	degradeReason string // [#120] reason of the current degrade, so the gauge is zeroed on the SAME {loop,reason} series
+	firstOK       bool   // a first successful watermark commit has been logged this leadership (info, once)
 	// [#94] backfill_unstorable de-duplication state: the frontier the abandoned-as-unstorable span was
 	// last counted against, and the floor up to which whole minutes were already counted for it — so a
 	// stuck loop (collect/emit failing, frontier pinned) counts the initial gap ONCE, then only the
@@ -124,6 +125,10 @@ func (r *LoopRunner) Reset() {
 		}
 	}
 	r.mu.Lock()
+	if r.degraded { // [#120] zero the degraded gauge on (re-)election so a new leadership starts clean
+		r.m.LoopDegraded(r.name, r.degradeReason, false)
+		r.degradeReason = ""
+	}
 	r.busy, r.hasFront, r.frontier = false, false, model.Watermark{}
 	r.saveFails, r.degraded = 0, false
 	r.firstOK = false                                                      // a new leadership re-announces its first successful commit (liveness signal)
@@ -334,7 +339,8 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 			r.saveFails++
 			r.m.EmitError(r.name, "checkpoint_save")
 			if r.saveFails >= checkpointFailThreshold && !r.degraded {
-				r.degraded = true
+				r.degraded, r.degradeReason = true, "checkpoint-save failures"
+				r.m.LoopDegraded(r.name, r.degradeReason, true) // [#120] this path sets degraded directly, so route the gauge too
 				slog.Error("loop degraded: repeated checkpoint-save failures", "loop", r.name, "fails", r.saveFails)
 			} else if r.lim.Allow("save:" + r.name) {
 				slog.Warn("checkpoint save failed", "loop", r.name, "fails", r.saveFails)
@@ -358,6 +364,10 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 		return
 	}
 	r.saveFails = 0
+	if r.degraded { // [#120] zero the gauge on the SAME {loop,reason} series before clearing (no stuck-at-1)
+		r.m.LoopDegraded(r.name, r.degradeReason, false)
+		r.degradeReason = ""
+	}
 	r.degraded = false // a successful save clears a transient (e.g. ConfigMap-outage) degrade
 	if !r.firstOK {
 		// First durable advance this leadership — a positive "leader is alive and emitting" signal on
@@ -386,7 +396,8 @@ func (r *LoopRunner) enterDegraded(reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.degraded {
-		r.degraded = true
+		r.degraded, r.degradeReason = true, reason
+		r.m.LoopDegraded(r.name, reason, true) // [#120] queryable non-flapping state gauge
 		slog.Error("loop degraded (loud halt, scheduler will back off)", "loop", r.name, "reason", reason)
 	}
 }

@@ -26,11 +26,14 @@ func TestEgressGuard(t *testing.T) {
 		{"10.0.0.5:443", false, true},       // RFC-1918 blocked by default
 		{"10.0.0.5:443", true, false},       // ...permitted when allowPrivate
 		{"192.168.1.1:443", false, true},
-		{"100.100.100.200:80", false, true}, // [round3 MEDIUM-2] Alibaba metadata (CGNAT, not RFC-1918)
-		{"100.64.1.1:443", false, true},     // [round3 MEDIUM-2] CGNAT blocked by default
-		{"100.64.1.1:443", true, true},      // ...and ALWAYS, even with allowPrivate
-		{"[fd00:ec2::254]:80", true, true},  // [round3 MEDIUM-2] AWS IPv6 IMDS (ULA) blocked even with allowPrivate
-		{"93.184.216.34:443", false, false}, // public ok
+		{"100.100.100.200:80", false, true},    // [round3 MEDIUM-2] Alibaba metadata (CGNAT, not RFC-1918)
+		{"100.64.1.1:443", false, true},        // [round3 MEDIUM-2] CGNAT blocked by default
+		{"100.64.1.1:443", true, true},         // ...and ALWAYS, even with allowPrivate
+		{"[fd00:ec2::254]:80", true, true},     // [round3 MEDIUM-2] AWS IPv6 IMDS (ULA) blocked even with allowPrivate
+		{"0.0.0.0:6060", false, true},          // [#96] unspecified v4 dials to loopback → blocked (mirrors loopback)
+		{"[::]:6060", false, true},             // [#96] unspecified v6 → blocked
+		{"[::ffff:0.0.0.0]:6060", false, true}, // [#96] IPv4-mapped unspecified normalizes to 0.0.0.0 → blocked
+		{"93.184.216.34:443", false, false},    // public ok
 	}
 	for _, c := range cases {
 		err := guardControl(c.allowPrivate)("tcp", c.addr, nil)

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Publish the container image + Helm chart to an OCI registry.
 #
-# Single source of truth for CI and local publishing. Tagging is driven entirely by
-# RELEASE_TAG:
+# NOT USED BY CI (as of commit 5e59ce5): the release pipeline is publish.yml → rknightion/.github's
+# shared container-publish.yml reusable (cosign signing + provenance attestation + syft SBOM on the
+# image). This script is a LOCAL/MANUAL-publish fallback only; its behaviour (v-prefixed image tags,
+# --provenance=false --sbom=false) deliberately differs from the CI pipeline. Editing it does NOT change
+# what CI publishes. Tagging is driven entirely by RELEASE_TAG:
 #
 #   RELEASE_TAG=v1.2.3   -> image :v1.2.3 + :latest, chart version 1.2.3
 #   (unset/empty)        -> image :main  + :<shortsha>, chart 0.0.0-main.t<unixts>.<shortsha>

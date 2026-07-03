@@ -234,8 +234,11 @@ func blockedIP(ip net.IP, allowPrivate bool) error {
 	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return fmt.Errorf("egress: blocked link-local/metadata %s", ip)
 	}
-	if !allowPrivate && (ip.IsLoopback() || ip.IsPrivate()) {
-		return fmt.Errorf("egress: blocked loopback/RFC-1918 %s (set allow_private to permit)", ip)
+	if !allowPrivate && (ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified()) {
+		// [#96] The unspecified address (0.0.0.0 / :: / the IPv4-mapped ::ffff:0.0.0.0) reports
+		// loopback=false/private=false, yet dialing 0.0.0.0:PORT connects to a service bound to
+		// 127.0.0.1:PORT — so it is a loopback reach and must be blocked in the vendor-only posture.
+		return fmt.Errorf("egress: blocked loopback/RFC-1918/unspecified %s (set allow_private to permit)", ip)
 	}
 	return nil
 }

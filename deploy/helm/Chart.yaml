@@ -5,7 +5,8 @@ type: application
 # PodDisruptionBudget policy/v1 is the floor (stable since 1.21). Validated with Helm 4.x.
 kubeVersion: ">=1.21.0-0"
 # version (chart) and appVersion both track the release version. release-please bumps the two annotated
-# lines below on each release (see release-please-config.json extra-files); scripts/publish.sh also derives
-# both from the git tag at publish time, so the registry and the source never drift.
+# lines below on each release (see release-please-config.json extra-files); publish.yml's shared
+# container-publish.yml reusable derives the published image tags from the same git tag, so the registry
+# and the source never drift.
 version: 3.0.1 # x-release-please-version
 appVersion: "3.0.1" # x-release-please-version

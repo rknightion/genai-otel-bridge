@@ -67,10 +67,12 @@ cannot drift from what the binary actually emits.
 | `genai_otel_bridge_bucket_revised_after_settle_age_seconds` | histogram | s | loop | — | age (now − bucketEnd) of a settled bucket observed to change after bucket_settle |
 | `genai_otel_bridge_bucket_revised_after_settle_total` | counter | 1 | loop | — | settled buckets observed to change value after settle (late arrival beyond bucket_settle) |
 | `genai_otel_bridge_emit_errors_total` | counter | 1 | loop, kind | — | emit errors by kind |
+| `genai_otel_bridge_emit_request_duration_seconds` | histogram | s | plane, status_class | — | outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs) |
 | `genai_otel_bridge_emitted_logs_total` | counter | 1 | loop | — | log records emitted (logs-export loop) |
 | `genai_otel_bridge_emitted_total` | counter | 1 | loop | — | samples emitted |
 | `genai_otel_bridge_guard_dropped_total` | counter | 1 | loop | — | data points or log records dropped by the governance guard |
 | `genai_otel_bridge_last_success_timestamp_seconds` | gauge | s | loop | — | unix time of last successful emit |
+| `genai_otel_bridge_loop_degraded` | gauge | 1 | loop, reason | — | 1 while a loop is degraded (reason attribute), 0 after the clearing commit |
 | `genai_otel_bridge_new_label_values_total` | counter | 1 | series | — | new label-value combinations seen per series |
 | `genai_otel_bridge_queue_depth` | gauge | 1 | loop | — | per-loop queue depth |
 | `genai_otel_bridge_samples_capped_total` | counter | 1 | loop, reason | — | samples suppressed by the DPM cap (coalesced last-write-wins per series-minute) |

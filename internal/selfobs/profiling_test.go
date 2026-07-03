@@ -4,6 +4,7 @@ package selfobs
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -51,6 +52,46 @@ func TestStartProfilingPullServesPprof(t *testing.T) {
 	b, _ := io.ReadAll(resp.Body)
 	if len(b) == 0 {
 		t.Fatal("expected non-empty goroutine profile")
+	}
+}
+
+// [#129] shutdownServer must stay bounded even with a request in flight: a pull-mode
+// /debug/pprof/profile?seconds=N holds its connection open for N seconds, so an unbounded drain would
+// block process exit (and the final self-metrics flush) until SIGKILL. The drain is bounded by ctx and
+// force-closes on deadline, so it returns promptly instead of waiting for the request to finish.
+func TestShutdownServerForceClosesHungRequest(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/block", func(http.ResponseWriter, *http.Request) {
+		close(entered)
+		<-release // simulate a long-running /debug/pprof/profile pull
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ln) }()
+	go func() { _, _ = http.Get("http://" + ln.Addr().String() + "/block") }()
+
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("request never reached the handler")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = shutdownServer(ctx, srv)
+	elapsed := time.Since(start)
+	if elapsed > 2*time.Second {
+		t.Fatalf("shutdown blocked on the in-flight request for %v — not bounded", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded from the bounded drain, got %v", err)
 	}
 }
 

@@ -31,7 +31,9 @@ func Signals() []signal.Signal {
 		selfMetric("last_success_timestamp_seconds", "gauge", "s", "unix time of last successful emit", "loop"),
 		selfMetric("window_lag_seconds", "gauge", "s", "now minus the watermark frontier", "loop"),
 		selfMetric("queue_depth", "gauge", "1", "per-loop queue depth", "loop"),
+		selfMetric("loop_degraded", "gauge", "1", "1 while a loop is degraded (reason attribute), 0 after the clearing commit", "loop", "reason"),
 		selfMetric("upstream_request_duration_seconds", "histogram", "s", "outbound request latency to upstream source APIs (time to response headers)", "target", "method", "status_class"),
+		selfMetric("emit_request_duration_seconds", "histogram", "s", "outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs)", "plane", "status_class"),
 		selfMetric("bucket_revised_after_settle_age_seconds", "histogram", "s", "age (now − bucketEnd) of a settled bucket observed to change after bucket_settle", "loop"),
 		{
 			Plane: signal.PlaneSelf, Type: signal.KindTrace, Source: "selfobs",

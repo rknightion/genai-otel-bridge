@@ -3,12 +3,46 @@
 package main
 
 import (
+	"context"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 )
+
+// TestGracefulShutdownOrderAndBounding pins the [#129] fixes: signal reset runs FIRST, the self-metrics
+// flush runs BEFORE the pprof drain, and a hung step does not block overall shutdown past its deadline.
+func TestGracefulShutdownOrderAndBounding(t *testing.T) {
+	orig := shutdownStepTimeout
+	shutdownStepTimeout = 50 * time.Millisecond
+	defer func() { shutdownStepTimeout = orig }()
+
+	var mu sync.Mutex
+	var order []string
+	rec := func(s string) { mu.Lock(); order = append(order, s); mu.Unlock() }
+
+	stop := func() { rec("stop") }
+	mp := func(context.Context) error { rec("metrics"); return nil }
+	tp := func(context.Context) error { rec("tracing"); return nil }
+	// profStop hangs until its ctx deadline — proves the step is bounded AND that it runs after metrics.
+	prof := func(ctx context.Context) error { rec("profiling"); <-ctx.Done(); return ctx.Err() }
+
+	start := time.Now()
+	gracefulShutdown(stop, mp, tp, prof)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("gracefulShutdown blocked on a hung step for %v — not bounded", elapsed)
+	}
+
+	if len(order) == 0 || order[0] != "stop" {
+		t.Fatalf("signal reset must run first, got %v", order)
+	}
+	if slices.Index(order, "metrics") > slices.Index(order, "profiling") {
+		t.Fatalf("self-metrics flush must precede the pprof drain, got %v", order)
+	}
+}
 
 // TestLivenessThreshold pins the /healthz staleness derivation [CP-C5] and, critically, that only
 // ENABLED sources/loops contribute [#88]: a disabled/parked slow loop must NOT inflate the threshold

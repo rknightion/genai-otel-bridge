@@ -198,7 +198,6 @@ func main() {
 	if err != nil {
 		fatal("selfobs", err)
 	}
-	defer func() { _ = mpShutdown(context.Background()) }()
 	metrics, err := selfobs.NewMetrics(mp)
 	if err != nil {
 		fatal("selfobs metrics", err)
@@ -221,15 +220,15 @@ func main() {
 	if err != nil {
 		fatal("selfobs profiling", err)
 	}
-	defer func() { _ = profStop(context.Background()) }()
 
 	// Opt-in self-APM tracing (default-off). Like profiling it observes our OWN pipeline, not the data
 	// plane; built before the coordinator so spans cover leader work. Traces ride the SAME self endpoint
 	// (selfEP) as self-metrics → the same gateway into Tempo (no separate channel). Installed as the OTel
 	// GLOBAL provider so schedule's spans light up; disabled ⇒ the global stays the no-op tracer. Start
 	// failure is fatal (operationally honest: an operator who enabled tracing must not run silently un-traced).
+	tpShutdown := func(context.Context) error { return nil } // no-op unless tracing is enabled
 	if cfg.Selfobs.Tracing.Enabled {
-		tp, tpShutdown, err := selfobs.NewTracerProvider(ctx, selfobs.TracingConfig{
+		tp, shutdown, err := selfobs.NewTracerProvider(ctx, selfobs.TracingConfig{
 			Endpoint: selfEP.Endpoint, InstanceID: selfEP.InstanceID, Token: selfEP.Token,
 			ServiceNamespace: cfg.Identity.ServiceNamespace + "-meta", Environment: cfg.Identity.DeploymentEnvironment,
 			Instance: *identity,        // POD_NAME — per-replica
@@ -239,7 +238,7 @@ func main() {
 			fatal("selfobs tracing", err)
 		}
 		otel.SetTracerProvider(tp)
-		defer func() { _ = tpShutdown(context.Background()) }()
+		tpShutdown = shutdown
 	}
 
 	em := otlp.New(otlp.Config{
@@ -268,7 +267,37 @@ func main() {
 	if err := a.Run(ctx, health.Handler(), *healthAddr, health.MarkReady, health.Beat, health.SetLeader); err != nil && ctx.Err() == nil {
 		fatal("run", err)
 	}
+	gracefulShutdown(stop, mpShutdown, tpShutdown, profStop)
 	slog.Info("genai-otel-bridge stopped")
+}
+
+// shutdownStepTimeout bounds each deferred-shutdown step. [#129] Budgeted well under the orchestrator
+// grace period (terminationGracePeriodSeconds, ~300s) so all steps run even if one hangs. A package var
+// so tests can shrink it.
+var shutdownStepTimeout = 5 * time.Second
+
+// gracefulShutdown runs the process's shutdown funcs in flush-FIRST order, each under its own deadline.
+// [#129] Three fixes to the old LIFO `defer …(context.Background())` scheme:
+//  1. Signal disposition is reset FIRST (stop()), so a SECOND SIGTERM/SIGINT arriving during a hung
+//     shutdown takes the default kill action instead of being delivered to a channel nobody reads —
+//     previously the reset was the last-registered defer, so it ran only after everything else.
+//  2. The self-metrics flush (mpShutdown) runs BEFORE the pprof drain (profStop), so a hung pprof
+//     server drain (an in-flight /debug/pprof/profile?seconds=N pull) can't block the final flush —
+//     previously profStop, registered later, ran first under LIFO.
+//  3. Every step is deadline-bounded, so no single stop can block process exit until SIGKILL.
+func gracefulShutdown(stop func(), mpShutdown, tpShutdown, profStop func(context.Context) error) {
+	stop()
+	shutdownStep("selfobs metrics flush", mpShutdown)
+	shutdownStep("selfobs tracing", tpShutdown)
+	shutdownStep("selfobs profiling", profStop)
+}
+
+func shutdownStep(what string, fn func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownStepTimeout)
+	defer cancel()
+	if err := fn(ctx); err != nil {
+		slog.Warn("shutdown step did not complete cleanly", "step", what, "err", err)
+	}
 }
 
 // buildHA constructs the checkpoint store + coordinator from cfg.HA. This is the ONLY place that knows

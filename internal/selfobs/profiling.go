@@ -4,6 +4,7 @@ package selfobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -81,7 +82,22 @@ func servePprof(ln net.Listener) func(context.Context) error {
 	// deadline would truncate.
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
-	return srv.Shutdown
+	return func(ctx context.Context) error { return shutdownServer(ctx, srv) }
+}
+
+// shutdownServer drains srv gracefully within ctx's deadline, then FORCE-closes if the drain does not
+// finish in time. [#129] A pull-mode pprof request can hold a connection for its whole duration
+// (/debug/pprof/profile?seconds=N streams for N seconds), so a plain srv.Shutdown under an unbounded
+// context blocks process exit behind that request until the orchestrator's SIGKILL — which drops the
+// final self-metrics flush. Bounding the drain and falling back to srv.Close() keeps shutdown (and thus
+// process exit) bounded regardless of an in-flight long profile pull. A clean drain (no active request,
+// e.g. the ephemeral-listener test) returns nil before the deadline and never force-closes.
+func shutdownServer(ctx context.Context, srv *http.Server) error {
+	err := srv.Shutdown(ctx)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		_ = srv.Close() // force-close hung connections so the caller's shutdown budget is respected
+	}
+	return err
 }
 
 // buildPyroscopeConfig maps our resolved config into a pyroscope.Config. Pure (no I/O) so it is

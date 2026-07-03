@@ -118,6 +118,39 @@ func TestConfigMapRMWAttemptCountOnExhaustion(t *testing.T) {
 	}
 }
 
+// TestConfigMapCorruptValueRefused [CP-C10 / #117]: a ConfigMap data key holding a non-JSON value must
+// make Load ERROR (present-but-unreadable ⇒ refuse, never bootstrap a zero watermark over a real
+// frontier) and Save REFUSE to overwrite it while writing NOTHING to the API (never clobber). Mirrors
+// dynamodb's TestSaveRefusesCorruptStored; the package CLAUDE.md claimed corruption was covered but the
+// configmap backend had no test for either path.
+func TestConfigMapCorruptValueRefused(t *testing.T) {
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	seed := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "genai-otel-bridge-checkpoints", Namespace: "genai-otel-bridge"},
+		Data:       map[string]string{dataKey(key): "{not-json"}, // corrupt value at the REAL data key
+	}
+	cs := fake.NewSimpleClientset(seed)
+	var writes int
+	countWrite := func(k8stesting.Action) (bool, runtime.Object, error) { writes++; return false, nil, nil }
+	cs.PrependReactor("update", "configmaps", countWrite)
+	cs.PrependReactor("create", "configmaps", countWrite)
+	s := New(cs, "genai-otel-bridge", "genai-otel-bridge-checkpoints")
+	ctx := context.Background()
+
+	// Load must refuse a present-but-unreadable value (not silently bootstrap a zero watermark, CP-C1).
+	if _, err := s.Load(ctx, key); err == nil || !strings.Contains(err.Error(), "corrupt") {
+		t.Fatalf("Load of a corrupt data-key value must error; got %v", err)
+	}
+	// Save must refuse to overwrite it AND make zero API writes (CP-C10, never clobber).
+	err := s.Save(ctx, key, model.Watermark{Time: time.Unix(100, 0).UTC(), Epoch: 1})
+	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite corrupt") {
+		t.Fatalf("Save over a corrupt data-key value must refuse with a CP-C10 error; got %v", err)
+	}
+	if writes != 0 {
+		t.Fatalf("Save refused the corrupt overwrite but made %d API writes (must be zero)", writes)
+	}
+}
+
 func TestConfigMapConflictRetry(t *testing.T) {
 	cs := fake.NewSimpleClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "genai-otel-bridge-checkpoints", Namespace: "genai-otel-bridge"}, Data: map[string]string{}})
 	// Inject one Conflict on the first update, then let it succeed.

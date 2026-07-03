@@ -193,6 +193,130 @@ func TestDeriveGranularityGuard(t *testing.T) {
 	}
 }
 
+// TestAnalyticsDecodesRawJSONWireTags pins the ON-THE-WIRE Portkey field names by decoding RAW JSON
+// bodies (NOT struct-encoded graphResponse literals) through the production json tags, then deriving.
+// Guards #64: every other analytics test builds its fixture from the SAME dataPoint struct the decoder
+// uses, so a wire-tag regression (total_request_units→request_units, a p90 typo, is_quota_exceeded
+// renamed) would pass all of them while silently zeroing the tokens/latency gauges or emitting
+// quota-truncated data as if real. Mirrors the langsmith raw-fixture approach (testdata/*.json). A
+// deliberate tag typo on dataPoint / graphResponse makes an assertion here fail.
+func TestAnalyticsDecodesRawJSONWireTags(t *testing.T) {
+	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	now := base.Add(10 * time.Minute)
+
+	// --- tokens graph: {total, total_request_units, total_response_units} ---
+	const tokensRaw = `{
+	  "object": "analytics-graph",
+	  "data_points": [
+	    {"timestamp": "2026-06-18T12:01:00Z", "total": 1500, "total_request_units": 1000, "total_response_units": 500}
+	  ]
+	}`
+	var tokensResp graphResponse
+	if err := json.Unmarshal([]byte(tokensRaw), &tokensResp); err != nil {
+		t.Fatalf("tokens raw decode: %v", err)
+	}
+	// Pin the wire tags at the struct level: a renamed tag decodes to the zero value here.
+	if got := tokensResp.DataPoints[0]; got.Total != 1500 || got.TotalRequestUnits != 1000 || got.TotalResponseUnits != 500 {
+		t.Fatalf("tokens wire tags decoded wrong: %+v (a dataPoint json tag regressed)", got)
+	}
+	tokSamples, err := derive(map[string]graphResponse{"tokens": tokensResp}, "portkey_api", base, now, 3*time.Minute, time.Minute, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byType := map[string]float64{}
+	for _, s := range tokSamples {
+		byType[s.Labels["token_type"]] = s.Value
+	}
+	if byType["total"] != 1500 || byType["input"] != 1000 || byType["output"] != 500 {
+		t.Fatalf("tokens split from raw JSON wrong: %v (input/output come from total_request_units/total_response_units)", byType)
+	}
+
+	// --- latency graph: {avg, p50, p90, p99} — values in ms → seconds ---
+	const latencyRaw = `{
+	  "data_points": [
+	    {"timestamp": "2026-06-18T12:01:00Z", "avg": 250, "p50": 100, "p90": 400, "p99": 1200}
+	  ]
+	}`
+	var latResp graphResponse
+	if err := json.Unmarshal([]byte(latencyRaw), &latResp); err != nil {
+		t.Fatalf("latency raw decode: %v", err)
+	}
+	if got := latResp.DataPoints[0]; got.Avg != 250 || got.P50 != 100 || got.P90 != 400 || got.P99 != 1200 {
+		t.Fatalf("latency wire tags decoded wrong: %+v (a percentile json tag regressed)", got)
+	}
+	latSamples, err := derive(map[string]graphResponse{"latency": latResp}, "portkey_api", base, now, 3*time.Minute, time.Minute, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byQ := map[string]float64{}
+	for _, s := range latSamples {
+		byQ[s.Labels["quantile"]] = s.Value
+	}
+	if byQ["avg"] != 0.25 || byQ["p50"] != 0.1 || byQ["p90"] != 0.4 || byQ["p99"] != 1.2 {
+		t.Fatalf("latency stats from raw JSON wrong (ms→s): %v", byQ)
+	}
+
+	// --- is_quota_exceeded:true must decode from the wire tag (else quota-truncated batches emit as real) ---
+	const quotaRaw = `{"is_quota_exceeded": true, "data_points": [{"timestamp": "2026-06-18T12:01:00Z", "total": 99}]}`
+	var quotaResp graphResponse
+	if err := json.Unmarshal([]byte(quotaRaw), &quotaResp); err != nil {
+		t.Fatalf("quota raw decode: %v", err)
+	}
+	if !quotaResp.IsQuotaExceeded {
+		t.Fatal("is_quota_exceeded wire tag did not decode true (tag regressed → quota-truncated batches would emit as real data)")
+	}
+}
+
+// TestCollectDecodesRawJSONThroughHTTP drives the FULL client HTTP decode path (not just json.Unmarshal)
+// on raw JSON bodies for the tokens + latency graphs, asserting the wire field names survive fetch →
+// decode → derive end-to-end. Complements TestAnalyticsDecodesRawJSONWireTags (#64) by exercising the
+// real transport, mirroring the langsmith runs raw-body server tests.
+func TestCollectDecodesRawJSONThroughHTTP(t *testing.T) {
+	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	now := base.Add(10 * time.Minute)
+	// Buckets base+1m..base+6m are settled+forward under now=base+10m, settle=3m, startSemantics=true.
+	rawBody := func(field, extra string) string {
+		var pts []string
+		for i := 1; i <= 6; i++ {
+			pts = append(pts, `{"timestamp": "`+tAt(base, i)+`", `+field+`}`)
+		}
+		return `{"data_points": [` + strings.Join(pts, ",") + `]` + extra + `}`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		graph := r.URL.Path[len("/analytics/graphs/"):]
+		switch graph {
+		case "tokens":
+			_, _ = w.Write([]byte(rawBody(`"total": 1500, "total_request_units": 1000, "total_response_units": 500`, "")))
+		case "latency":
+			_, _ = w.Write([]byte(rawBody(`"avg": 250, "p50": 100, "p90": 400, "p99": 1200`, "")))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	lp := mkSource(t, srv, now)
+	lp.graphs = []string{"tokens", "latency"}
+	b, err := lp.Collect(context.Background(), model.Watermark{Time: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Assert the token split + latency quantiles decoded from the raw wire tags survived to the samples.
+	sawInput, sawOutput, sawP90 := false, false, false
+	for _, s := range b.Samples {
+		switch {
+		case s.Name == "portkey_api_tokens" && s.Labels["token_type"] == "input" && s.Value == 1000:
+			sawInput = true
+		case s.Name == "portkey_api_tokens" && s.Labels["token_type"] == "output" && s.Value == 500:
+			sawOutput = true
+		case s.Name == "portkey_api_latency_seconds" && s.Labels["quantile"] == "p90" && s.Value == 0.4:
+			sawP90 = true
+		}
+	}
+	if !sawInput || !sawOutput || !sawP90 {
+		t.Fatalf("raw-JSON HTTP decode lost wire tags: input=%v output=%v p90=%v (samples=%d)", sawInput, sawOutput, sawP90, len(b.Samples))
+	}
+}
+
 func fakePortkey(t *testing.T, bodies map[string]graphResponse, status map[string]int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

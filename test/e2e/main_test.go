@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,6 +144,36 @@ func freezeLeader(t *testing.T, name string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("kubectl debug freeze failed: %v\n%s", err, out)
 	}
+}
+
+// resumeLeader SIGCONTs the previously-frozen integrator in pod `name` via a SECOND `kubectl debug`
+// ephemeral container, waking the stale ex-leader so it wakes with its in-flight batch and attempts a
+// forward commit against the newer epoch — exercising the real-cluster stale-writer fence path (#138).
+// Same shared-PID-namespace mechanism as freezeLeader (the debug container is root, the integrator is
+// UID-65532 and not PID 1). Must be called PROMPTLY after takeover: after the ~60s liveness restart the
+// process comes back fresh as a standby and never fences.
+func resumeLeader(t *testing.T, name string) {
+	t.Helper()
+	cmd := exec.Command(kubectlBin(), "debug", "-n", ns(), "pod/"+name,
+		"--image=busybox:1.36", "--attach=false", "--",
+		"sh", "-c", "kill -CONT $(pidof genai-otel-bridge)")
+	cmd.Env = os.Environ()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("kubectl debug resume failed: %v\n%s", err, out)
+	}
+}
+
+// podLogsContains reports whether pod `name`'s current logs contain substr. Used to detect the fence
+// evidence — the `checkpoint forward-write fenced` slog.Warn a resumed stale leader emits when its
+// stale-epoch forward Save is rejected (internal/schedule/runner.go). A transient log-fetch error is
+// treated as "not yet present" so the caller can keep polling.
+func podLogsContains(t *testing.T, cs *kubernetes.Clientset, name, substr string) bool {
+	t.Helper()
+	raw, err := cs.CoreV1().Pods(ns()).GetLogs(name, &corev1.PodLogOptions{}).DoRaw(context.Background())
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(raw), substr)
 }
 
 func eventually(t *testing.T, budget time.Duration, cond func() bool, msg string) {

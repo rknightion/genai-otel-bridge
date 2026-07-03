@@ -95,24 +95,42 @@ func TestInvariant3_ZombieFrozenStandbyTakesOver(t *testing.T) {
 		return holder(l) != zombie && holder(l) != "" && transitions(l) > oldTrans
 	}, "standby never took over from the frozen zombie leader")
 
-	// The frontier stays monotonic (the new leader advances it; the zombie never rewinds/corrupts it).
+	// [#138] Resume (SIGCONT) the frozen ex-leader while the new leader is active, so the stale zombie
+	// wakes with its pre-freeze in-flight batch and attempts a FORWARD commit against the newer epoch —
+	// the real-cluster stale-writer path that a SIGSTOP-for-life zombie never exercises (a frozen process
+	// cannot attempt any write, so "neither advances nor rewinds" was trivially true). Resume promptly:
+	// the zombie must be signalled before its ~60s liveness restart (a restarted pod returns fresh as a
+	// standby and never fences).
+	resumeLeader(t, zombie)
+
+	// Over ~2 lease durations after the resume, TWO things must hold: (1) the shared frontier stays
+	// MONOTONIC — the woken zombie neither rewinds nor double-advances it (the new leader keeps advancing
+	// it forward); and (2) the fence VISIBLY fires — the zombie's stale-epoch forward write is rejected
+	// (`checkpoint_fenced` / the `checkpoint forward-write fenced` warn), not silently accepted. Asserting
+	// positive fence evidence (not merely "nothing bad happened") is the point of #138.
 	prev, _ := latestWatermark(t, cs)
-	advanced := false
-	deadline := time.Now().Add(25 * time.Second)
+	advanced, fenced := false, false
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		wm, ok := latestWatermark(t, cs)
 		if ok {
 			if wm.Before(prev) {
-				t.Fatalf("checkpoint rewound under a frozen zombie: %s < %s", wm, prev)
+				t.Fatalf("checkpoint rewound after resuming the stale zombie: %s < %s", wm, prev)
 			}
 			if wm.After(prev) {
 				advanced = true
 			}
 			prev = wm
 		}
+		if !fenced && podLogsContains(t, cs, zombie, "checkpoint forward-write fenced") {
+			fenced = true
+		}
 		time.Sleep(2 * time.Second)
 	}
 	if !advanced {
 		t.Fatalf("checkpoint did not advance after the standby took over (new leader not progressing)")
+	}
+	if !fenced {
+		t.Fatalf("resumed zombie's stale-epoch forward write was not observably fenced: no 'checkpoint forward-write fenced' evidence in pod %s logs", zombie)
 	}
 }

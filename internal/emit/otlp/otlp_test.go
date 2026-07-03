@@ -3,11 +3,16 @@
 package otlp
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -180,6 +185,117 @@ func TestEmitDoesNotFollowRedirects(t *testing.T) {
 			}
 		})
 	}
+}
+
+// emitterWithMaxBytes builds a test emitter with an explicit MaxBytes (testEmitter hard-codes 1<<20,
+// which never triggers a proactive split for small batches).
+func emitterWithMaxBytes(url string, maxBytes int) *Emitter {
+	return New(Config{
+		Endpoint: url, InstanceID: "123", Token: "secret-token",
+		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: maxBytes,
+		Retry: RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 1.5, MaxElapsed: 30 * time.Millisecond, Jitter: 0},
+	})
+}
+
+// uniqueSamples builds n samples with distinct, fixed-width metric names (m_0000, m_0001, …) so each
+// name is an unambiguous marker in the encoded protobuf — no name is a substring of another — letting a
+// server count exactly-once delivery by substring match after gunzip.
+func uniqueSamples(n int) []model.Sample {
+	out := make([]model.Sample, n)
+	for i := range out {
+		out[i] = model.Sample{
+			Name:      fmt.Sprintf("portkey_api_m_%04d", i),
+			Kind:      model.Gauge,
+			Value:     float64(i),
+			Timestamp: time.Unix(1_700_000_000+int64(i), 0).UTC(),
+		}
+	}
+	return out
+}
+
+func sampleNames(s []model.Sample) []string {
+	out := make([]string, len(s))
+	for i := range s {
+		out[i] = s[i].Name
+	}
+	return out
+}
+
+// assertEachDeliveredOnce fails unless every name appears EXACTLY once across the accumulated
+// (gunzipped) request bodies — i.e. the split delivered the full sample set with no drops or dupes.
+func assertEachDeliveredOnce(t *testing.T, body []byte, names []string) {
+	t.Helper()
+	for _, n := range names {
+		if c := bytes.Count(body, []byte(n)); c != 1 {
+			t.Fatalf("sample %q delivered %d times across all requests, want exactly 1", n, c)
+		}
+	}
+}
+
+// TestSamples413TriggersReactiveSplit [CP-C11 / #137] mirrors TestLogs413TriggersReactiveSplit for the
+// METRICS plane: emitSamples' reactive 413 midpoint recursion had no test (TestEmitClassifies400's 413
+// case uses a single sample, short-circuiting the len(samples)>1 split). A multi-sample batch whose first
+// whole POST 413s must recursively split and re-deliver every sample EXACTLY once across the accepted
+// (2xx) requests — never dropping a bucket and never double-emitting one.
+func TestSamples413TriggersReactiveSplit(t *testing.T) {
+	var reqCount int32
+	var mu sync.Mutex
+	var acc []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&reqCount, 1) == 1 {
+			w.WriteHeader(413) // reject the whole batch once → force the reactive midpoint split
+			return
+		}
+		// Record only ACCEPTED requests, so the rejected (re-split) batch is not double-counted.
+		if zr, err := gzip.NewReader(r.Body); err == nil {
+			if b, err := io.ReadAll(zr); err == nil {
+				mu.Lock()
+				acc = append(acc, b...)
+				mu.Unlock()
+			}
+		}
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	samples := uniqueSamples(4)
+	if err := testEmitter(t, srv.URL).Emit(context.Background(), model.Batch{Samples: samples}); err != nil {
+		t.Fatalf("expected success after 413-triggered split, got %v", err)
+	}
+	if got := atomic.LoadInt32(&reqCount); got < 3 {
+		t.Fatalf("reactive split should produce the rejected request + ≥2 smaller ones, got %d", got)
+	}
+	assertEachDeliveredOnce(t, acc, sampleNames(samples))
+}
+
+// TestSamplesProactiveMaxBytesSplit [CP-C11 / #137] covers the proactive branch for the METRICS plane:
+// with a tiny MaxBytes every multi-sample gzipped payload exceeds the cap, so emitSamples must split
+// BEFORE transmit (no 413 needed), recursing to singletons, and still deliver every sample exactly once.
+func TestSamplesProactiveMaxBytesSplit(t *testing.T) {
+	var reqCount int32
+	var mu sync.Mutex
+	var acc []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&reqCount, 1)
+		if zr, err := gzip.NewReader(r.Body); err == nil {
+			if b, err := io.ReadAll(zr); err == nil {
+				mu.Lock()
+				acc = append(acc, b...)
+				mu.Unlock()
+			}
+		}
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	samples := uniqueSamples(4)
+	if err := emitterWithMaxBytes(srv.URL, 1).Emit(context.Background(), model.Batch{Samples: samples}); err != nil {
+		t.Fatalf("proactive MaxBytes split should succeed, got %v", err)
+	}
+	if got := atomic.LoadInt32(&reqCount); got < 2 {
+		t.Fatalf("proactive MaxBytes split should produce >1 requests, got %d", got)
+	}
+	assertEachDeliveredOnce(t, acc, sampleNames(samples))
 }
 
 func TestEmitNeverLeaksToken(t *testing.T) {

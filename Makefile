@@ -17,7 +17,7 @@ K3D_VERSION           ?= v5.9.0
 K3S_IMAGE             ?= rancher/k3s:v1.36.2-k3s1
 IMAGE                 ?= genai-otel-bridge:dev
 E2E_HELPER_IMAGE      ?= genai-otel-bridge-e2e-helper:dev
-GO_LICENSES_VERSION   ?= v1.6.0
+GO_LICENSES_VERSION   ?= v2.0.1
 SYFT_VERSION          ?= v1.46.0
 
 TOOLS_DIR := $(CURDIR)/.tools

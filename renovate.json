@@ -7,8 +7,6 @@
     "helpers:pinGitHubActionDigests"
   ],
   "timezone": "Europe/London",
-  "prConcurrentLimit": 5,
-  "prHourlyLimit": 0,
   "semanticCommits": "enabled",
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
@@ -23,7 +21,6 @@
     "gomodUpdateImportPaths",
     "gomodVendor"
   ],
-  "minimumReleaseAge": "2 days",
   "internalChecksFilter": "strict",
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {

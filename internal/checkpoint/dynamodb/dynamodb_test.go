@@ -4,12 +4,14 @@ package dynamodb
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	awsddb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
 
@@ -54,6 +56,30 @@ func TestDecodeRejectsNonNumericVersion(t *testing.T) {
 	}
 	if _, _, err := decode(item); err == nil {
 		t.Fatal("expected a corruption error for a present-but-non-numeric version, got nil")
+	}
+}
+
+// TestSaveRejectsUnencodableTime [#81]: encode() would RFC3339Nano-format a >9999 year to a string
+// (e.g. "10001-01-01T00:00:00Z") that decode()'s time.Parse cannot read back, durably poisoning the
+// item. Save must reject such a Time BEFORE any PutItem, so nothing is written.
+func TestSaveRejectsUnencodableTime(t *testing.T) {
+	f := &fakeAPI{getOut: &awsddb.GetItemOutput{}} // absent item
+	s := New(f, "t", "ckpt#")
+	bad := model.Watermark{Time: time.Date(10001, 1, 1, 0, 0, 0, 0, time.UTC), Epoch: 1}
+	err := s.Save(context.Background(), model.CheckpointKey{SourceInstance: "i", Loop: "l", OutputFingerprint: "fp"}, bad)
+	if !errors.Is(err, checkpoint.ErrUnencodable) || f.puts != 0 {
+		t.Fatalf("year-10001 Save must be ErrUnencodable with zero puts, got err=%v puts=%d", err, f.puts)
+	}
+}
+
+// TestEncodeDecodeRoundTripAtYearBound proves the guard threshold matches the backend's real
+// capability: a year-9999 watermark (the max the guard allows) encodes and decodes back intact.
+func TestEncodeDecodeRoundTripAtYearBound(t *testing.T) {
+	w := model.Watermark{Time: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC), Cursor: "c", Epoch: 4}
+	item := encode("ckpt#x", w, 1)
+	got, ver, err := decode(item)
+	if err != nil || ver != 1 || !got.Time.Equal(w.Time) || got.Cursor != "c" || got.Epoch != 4 {
+		t.Fatalf("year-9999 must round-trip; got wm=%+v ver=%d err=%v", got, ver, err)
 	}
 }
 

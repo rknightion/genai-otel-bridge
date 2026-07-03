@@ -129,6 +129,12 @@ func (s *Store) Load(ctx context.Context, key model.CheckpointKey) (model.Waterm
 }
 
 func (s *Store) Save(ctx context.Context, key model.CheckpointKey, w model.Watermark) error {
+	// Reject a Time that encode()'s RFC3339Nano formats but decode()'s time.Parse cannot read back
+	// (a 5-digit year), BEFORE the PutItem — else the item stores an unparseable "time" string and
+	// every later Load/Save decode refuses it forever. [#81]
+	if err := checkpoint.CheckEncodable(w); err != nil {
+		return err
+	}
 	for attempt := 0; attempt < s.retries; attempt++ {
 		out, err := s.db.GetItem(ctx, &awsddb.GetItemInput{
 			TableName:      aws.String(s.table),

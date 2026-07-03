@@ -78,6 +78,51 @@ func TestFileCursorFence(t *testing.T) {
 	}
 }
 
+// TestFileSaveFlushFailureNotMaskedOnRetry [#82]: a Save whose durable flush fails must NOT leave the
+// advanced watermark in the in-memory map — otherwise a retry of the same watermark trips CheckMonotonic
+// and returns the BENIGN ErrStaleWrite, masking the lost write as "already committed". After the fault
+// clears, retrying the identical watermark must genuinely re-attempt and durably persist it.
+func TestFileSaveFlushFailureNotMaskedOnRetry(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "sub", "wm.yaml") // parent "sub" does not exist yet
+	s, err := New(p, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	ctx := context.Background()
+	w := model.Watermark{Time: time.Unix(100, 0).UTC(), Epoch: 1}
+
+	// Force flushLocked to fail: place a regular FILE where the parent dir needs to be, so MkdirAll
+	// errors ("not a directory").
+	if err := os.WriteFile(filepath.Join(dir, "sub"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(ctx, key, w); err == nil {
+		t.Fatal("Save should fail when the durable flush cannot write")
+	}
+	// The failed write must NOT be visible in memory (Load returns the last durable state = none = zero).
+	if got, _ := s.Load(ctx, key); !got.Time.IsZero() {
+		t.Fatalf("failed Save must be rolled back in memory, got %+v", got)
+	}
+
+	// Clear the fault; retry the SAME watermark. It must re-attempt (no ErrStaleWrite) and persist.
+	if err := os.Remove(filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(ctx, key, w); err != nil {
+		t.Fatalf("retry of the same watermark after the fault cleared must succeed, got %v", err)
+	}
+	if got, _ := s.Load(ctx, key); !got.Time.Equal(w.Time) {
+		t.Fatalf("retry did not persist in memory: %+v", got)
+	}
+	// Durable on disk: a fresh reopen sees it.
+	s2, _ := New(p, false)
+	if got, _ := s2.Load(ctx, key); !got.Time.Equal(w.Time) {
+		t.Fatalf("watermark not durable after successful retry: %+v", got)
+	}
+}
+
 func TestFileUnreadableRefusesByDefault(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "wm.yaml")
 	os.WriteFile(p, []byte("{ not: valid: yaml :"), 0o600)

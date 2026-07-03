@@ -66,12 +66,26 @@ func (s *Store) Load(_ context.Context, key model.CheckpointKey) (model.Watermar
 func (s *Store) Save(_ context.Context, key model.CheckpointKey, w model.Watermark) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	stored := s.data[key.String()]
-	if err := checkpoint.CheckMonotonic(model.Watermark{Time: stored.Time, Cursor: stored.Cursor, Epoch: stored.Epoch}, w); err != nil {
+	k := key.String()
+	prev, had := s.data[k]
+	if err := checkpoint.CheckMonotonic(model.Watermark{Time: prev.Time, Cursor: prev.Cursor, Epoch: prev.Epoch}, w); err != nil {
 		return err
 	}
-	s.data[key.String()] = record{Time: w.Time.UTC(), Cursor: w.Cursor, Epoch: w.Epoch}
-	return s.flushLocked()
+	// Mutate, flush, and ROLL BACK the in-memory entry if the durable write fails. Otherwise a failed
+	// flush (disk full, unwritable dir) would leave the map advanced while the file stays stale: the
+	// retry of the same watermark would then trip CheckMonotonic and return the BENIGN ErrStaleWrite,
+	// masking the lost durable write as "already committed". Rolling back restores the seam contract
+	// "Save error ⇒ not saved", so the retry genuinely re-attempts the write. [#82]
+	s.data[k] = record{Time: w.Time.UTC(), Cursor: w.Cursor, Epoch: w.Epoch}
+	if err := s.flushLocked(); err != nil {
+		if had {
+			s.data[k] = prev
+		} else {
+			delete(s.data, k)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) flushLocked() error {

@@ -69,6 +69,11 @@ func (s *Store) Load(ctx context.Context, key model.CheckpointKey) (model.Waterm
 }
 
 func (s *Store) Save(ctx context.Context, key model.CheckpointKey, w model.Watermark) error {
+	// Reject a Time that cannot round-trip BEFORE touching the store, so a bad input is a loud
+	// per-write error rather than a durable poison value (an empty/unparseable key). [#81]
+	if err := checkpoint.CheckEncodable(w); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for attempt := 0; attempt <= s.retries; attempt++ {
@@ -94,7 +99,13 @@ func (s *Store) Save(ctx context.Context, key model.CheckpointKey, w model.Water
 		if err := checkpoint.CheckMonotonic(model.Watermark{Time: stored.Time, Cursor: stored.Cursor, Epoch: stored.Epoch}, w); err != nil {
 			return err // ErrStaleWrite — benign to caller
 		}
-		enc, _ := json.Marshal(record{Time: w.Time.UTC(), Cursor: w.Cursor, Epoch: w.Epoch})
+		enc, err := json.Marshal(record{Time: w.Time.UTC(), Cursor: w.Cursor, Epoch: w.Epoch})
+		if err != nil {
+			// Never write the empty string on a marshal failure (that would poison the key: every later
+			// Load errors and every Save refuses to clobber it). CheckEncodable above already guards the
+			// known cause (out-of-range year); this is the defense-in-depth for any future field. [#81]
+			return fmt.Errorf("checkpoint/configmap: encode watermark for %s: %w", key, err)
+		}
 		cm.Data[dataKey(key)] = string(enc)
 		if size := dataBytes(cm.Data); size > maxConfigMapBytes {
 			return fmt.Errorf("checkpoint/configmap: %d bytes exceeds cap %d (too many keys — use an external store)", size, maxConfigMapBytes)

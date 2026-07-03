@@ -65,6 +65,33 @@ func TestConfigMapCursorFence(t *testing.T) {
 	}
 }
 
+// TestConfigMapRejectsUnencodableTime [#81]: a watermark whose Time has an out-of-range year
+// (>9999) would json.Marshal to "" and durably poison the key (every later Load errors, every Save
+// refuses to clobber). Save must reject it loudly, write NOTHING, and leave the prior key readable.
+func TestConfigMapRejectsUnencodableTime(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	s := New(cs, "genai-otel-bridge", "genai-otel-bridge-checkpoints")
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	ctx := context.Background()
+
+	good := model.Watermark{Time: time.Unix(100, 0).UTC(), Epoch: 1}
+	if err := s.Save(ctx, key, good); err != nil {
+		t.Fatalf("seed good watermark: %v", err)
+	}
+	bad := model.Watermark{Time: time.Date(10001, 1, 1, 0, 0, 0, 0, time.UTC), Epoch: 2}
+	if err := s.Save(ctx, key, bad); !errors.Is(err, checkpoint.ErrUnencodable) {
+		t.Fatalf("year-10001 Save must be ErrUnencodable, got %v", err)
+	}
+	// The stored key stays READABLE and unchanged (not poisoned with "").
+	got, err := s.Load(ctx, key)
+	if err != nil {
+		t.Fatalf("stored key must stay readable after a rejected Save, got %v", err)
+	}
+	if !got.Time.Equal(good.Time) {
+		t.Fatalf("stored value was clobbered: %+v", got)
+	}
+}
+
 func TestConfigMapConflictRetry(t *testing.T) {
 	cs := fake.NewSimpleClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "genai-otel-bridge-checkpoints", Namespace: "genai-otel-bridge"}, Data: map[string]string{}})
 	// Inject one Conflict on the first update, then let it succeed.

@@ -28,6 +28,24 @@ func New(cs kubernetes.Interface, ns, name, identity string, leaseDur, renew, re
 	return &Coordinator{cs: cs, ns: ns, name: name, identity: identity, leaseDur: leaseDur, renew: renew, retry: retry}
 }
 
+// leadershipStoppedEvent classifies why leader-election stopped, for logging [#74]. client-go fires
+// OnStoppedLeading on every Run() exit, so a bare "leadership lost" would mislead on clean shutdowns
+// and never-elected standbys. Extracted as a pure function so the three cases are unit-testable without
+// racing client-go's renewal machinery:
+//   - never led (a standby exiting on ctx cancel)        → Debug, quiet: nothing was lost.
+//   - led and the root ctx is cancelled (SIGTERM/rollout) → Info shutdown message, NOT "leadership lost".
+//   - led and the ctx is still live (genuine renewal lapse) → Warn "leadership lost", loud (alertable).
+func leadershipStoppedEvent(everLed bool, ctxErr error) (slog.Level, string) {
+	switch {
+	case !everLed:
+		return slog.LevelDebug, "leader-election stopped without ever leading (standby)"
+	case ctxErr != nil:
+		return slog.LevelInfo, "leadership released on shutdown; loops stopped"
+	default:
+		return slog.LevelWarn, "leadership lost (renewal lapse); loops stopped"
+	}
+}
+
 func (c *Coordinator) Run(ctx context.Context, onElected func(context.Context)) error {
 	var elected atomic.Bool         // [round3 HIGH-1] set iff we started leading
 	leadDone := make(chan struct{}) // closed when onElected (the scheduler drain) returns
@@ -51,9 +69,16 @@ func (c *Coordinator) Run(ctx context.Context, onElected func(context.Context)) 
 				defer close(leadDone)
 				onElected(coordinate.WithEpoch(leaderCtx, c.epoch(leaderCtx)))
 			},
-			// Fires only on actual leadership loss (renewal lapse), NOT on a clean ctx-cancel shutdown —
-			// an unambiguous "we lost the lease" signal, distinct from a normal SIGTERM exit.
-			OnStoppedLeading: func() { slog.Info("leadership lost; loops stopped", "identity", c.identity) },
+			// [#74] client-go v0.36.2 defers OnStoppedLeading UNCONDITIONALLY at the top of Run (before the
+			// acquire check), so it fires on EVERY Run() exit: a never-elected standby exiting on ctx cancel,
+			// a cleanly SIGTERM'd leader, and a genuine renewal lapse alike. Classify the three so a rolling
+			// restart of a healthy deployment doesn't emit a spurious "leadership lost" from every replica
+			// (which would false-positive any alert built on that line and mask a real lapse). elected is set
+			// inside OnStartedLeading; ctx is the root election ctx (cancelled ⇒ clean shutdown, not a lapse).
+			OnStoppedLeading: func() {
+				lvl, msg := leadershipStoppedEvent(elected.Load(), ctx.Err())
+				slog.Log(context.Background(), lvl, msg, "identity", c.identity)
+			},
 		},
 	})
 	if err != nil {

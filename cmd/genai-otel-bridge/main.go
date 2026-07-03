@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	awsddb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"go.opentelemetry.io/otel"
@@ -301,7 +302,18 @@ func buildHA(ctx context.Context, cfg *config.Config, ns, identity, cpFile strin
 		if err != nil {
 			fatal("aws config", err)
 		}
+		// [#30] Bound every DynamoDB request with an overall HTTP client timeout. aws-sdk-go-v2's default
+		// BuildableClient has clientTimeout=0 (no per-request deadline), so a silent/blackholed connection
+		// hangs indefinitely — which is exactly what leaves the coordinator's renew stalled past its
+		// renew_deadline. The coordinator's out-of-band watchdog (dynamodb.go lead) is the primary defence;
+		// this is defence-in-depth that also bounds acquire and the checkpoint Get/Put path. Sized to the
+		// renew deadline (default 10s) so a single stalled request fails within one renew cycle.
+		clientTimeout := time.Duration(cfg.HA.DynamoDB.RenewDeadline)
+		if clientTimeout <= 0 {
+			clientTimeout = 10 * time.Second
+		}
 		ddb = awsddb.NewFromConfig(acfg, func(o *awsddb.Options) {
+			o.HTTPClient = awshttp.NewBuildableClient().WithTimeout(clientTimeout)
 			if ep := cfg.HA.DynamoDB.Endpoint; ep != "" {
 				o.BaseEndpoint = aws.String(ep)
 			}
@@ -322,6 +334,13 @@ func buildHA(ctx context.Context, cfg *config.Config, ns, identity, cpFile strin
 		cp = f
 	}
 
+	// [#87] Fail fast when leader election is enabled but the replica identity is empty. An empty
+	// identity is silently unsafe (client-go refuses an empty Lock identity → crash-loop; the DynamoDB
+	// path collides self-telemetry across replicas). Better a loud startup exit than a blind run.
+	if err := coordinate.RequireIdentity(cfg.HA.Coordinator, identity); err != nil {
+		fatal("ha identity", err)
+	}
+
 	var coord coordinate.Coordinator = coordinate.Noop{}
 	switch cfg.HA.Coordinator {
 	case "lease":
@@ -330,6 +349,16 @@ func buildHA(ctx context.Context, cfg *config.Config, ns, identity, cpFile strin
 		d := cfg.HA.DynamoDB
 		coord = ddbcoord.New(ddb, d.Table, d.KeyPrefix+"lock#"+d.LockName, identity,
 			time.Duration(d.LeaseDuration), time.Duration(d.RenewDeadline), time.Duration(d.RetryPeriod))
+	default: // "none" (or, pre-validation, any other value) → single-replica Noop
+		// [#45] A durable, shared checkpoint that a prior HA (lease/dynamodb) deployment advanced to
+		// epoch ≥ 2 permanently fences Noop's writes (Noop stamps epoch 1), spinning the loop re-emitting
+		// the same window forever until the checkpoint objects are manually deleted. We cannot read the
+		// stored epoch here (checkpoint keys aren't known until the source graph is built), so warn loudly
+		// rather than fail: a fresh single-replica deployment on this backend is legitimate (epoch ≤ 1).
+		if cfg.HA.Checkpoint == "configmap" || cfg.HA.Checkpoint == "dynamodb" {
+			slog.Warn("ha.coordinator=none over a durable checkpoint: if this store was previously advanced by an HA (lease/dynamodb) deployment (epoch ≥ 2), watermark writes will be permanently fenced (checkpoint_fenced) and the loops will re-emit the same window at full cadence. Recovery is manual: delete the checkpoint objects. See internal/coordinate migration note (#45).",
+				"checkpoint", cfg.HA.Checkpoint)
+		}
 	}
 	return cp, coord
 }

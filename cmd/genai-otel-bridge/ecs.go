@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -14,6 +15,10 @@ import (
 // resolveECSIdentity returns the ECS Task ARN from the task-metadata endpoint, or "" if metadataURI
 // is empty/unreachable. metadataURI is the value of ECS_CONTAINER_METADATA_URI_V4 (a trusted, ECS-
 // injected link-local URL) — NOT routed through httpx's SSRF egress guard, which would block 169.254/16.
+// [#87] Every failure path where metadataURI IS set but resolution fails logs a WARN, so an empty
+// identity is diagnosable (the empty result then trips the RequireIdentity fail-fast in buildHA rather
+// than silently electing an empty-identity replica). The empty-metadataURI case is the normal non-ECS
+// path and is intentionally silent.
 func resolveECSIdentity(metadataURI string) string {
 	if metadataURI == "" {
 		return ""
@@ -21,18 +26,24 @@ func resolveECSIdentity(metadataURI string) string {
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(strings.TrimRight(metadataURI, "/") + "/task")
 	if err != nil {
+		slog.Warn("ECS task-metadata request failed; leader-election identity unresolved", "err", err)
 		return ""
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if err != nil {
+		slog.Warn("ECS task-metadata body read failed; leader-election identity unresolved", "err", err)
 		return ""
 	}
 	var meta struct {
 		TaskARN string `json:"TaskARN"`
 	}
-	if json.Unmarshal(body, &meta) != nil {
+	if err := json.Unmarshal(body, &meta); err != nil {
+		slog.Warn("ECS task-metadata JSON parse failed; leader-election identity unresolved", "err", err)
 		return ""
+	}
+	if meta.TaskARN == "" {
+		slog.Warn("ECS task-metadata carried an empty TaskARN; leader-election identity unresolved")
 	}
 	return meta.TaskARN
 }

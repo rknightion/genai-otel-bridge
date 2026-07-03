@@ -100,13 +100,23 @@ func (c *Coordinator) setNow(f Clock) { c.now = f }
 // pk without expiresAtMs — and `expiresAtMs < :now` is FALSE for a missing attribute, which would
 // otherwise wedge leadership forever. Treating a missing expiresAtMs as acquirable lets the coordinator
 // recover; it can't cause double-acquire because no live leader writes pk without expiresAtMs.
+//
+// The `holder = :me` clause [#84] handles a committed-but-error-reported acquire: acquire's UpdateItem
+// is non-idempotent (ADD fence, SET expiresAtMs), so if attempt 1 commits but its response is lost
+// (transient network fault), the SDK's transport retry hits an item that is now fresh+unexpired and NOT
+// ours-by-holder — without this clause that ConditionalCheckFailed maps to "held by a live leader" and
+// the process is locked out of ITS OWN lock until the self-inflicted lease expires (up to lease_duration
+// with no leader). Re-acquiring our own item is safe: single-active-replica holds (lead() only returns
+// after the drain barrier, so a same-process re-acquire never overlaps a live scheduler) and the extra
+// `ADD fence :one` keeps the epoch strictly monotonic. If a DIFFERENT replica has taken the lock, holder
+// is theirs (not :me), so this clause does not match and expiry still gates the takeover.
 func (c *Coordinator) acquire(ctx context.Context) (fence int64, acquired bool, err error) {
 	now := c.now()
 	exp := now.Add(c.lease).UnixMilli()
 	out, err := c.db.UpdateItem(ctx, &awsddb.UpdateItemInput{
 		TableName:           aws.String(c.table),
 		Key:                 map[string]ddbtypes.AttributeValue{"pk": sstr(c.pk)},
-		ConditionExpression: aws.String("attribute_not_exists(pk) OR attribute_not_exists(expiresAtMs) OR expiresAtMs < :now"),
+		ConditionExpression: aws.String("attribute_not_exists(pk) OR attribute_not_exists(expiresAtMs) OR expiresAtMs < :now OR holder = :me"),
 		UpdateExpression:    aws.String("SET holder = :me, expiresAtMs = :exp ADD fence :one"),
 		ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
 			":now": nstr(now.UnixMilli()), ":me": sstr(c.identity),
@@ -158,35 +168,87 @@ func (c *Coordinator) lead(ctx context.Context, fence int64, onElected func(cont
 	done := make(chan struct{})
 	go func() { defer close(done); onElected(coordinate.WithEpoch(leaderCtx, fence)) }()
 
+	// [#30] Watchdog: step down (cancel leaderCtx) if renewDeadline elapses with no successful renew,
+	// INDEPENDENTLY of whether a renew UpdateItem is currently blocked. Enforcing the deadline only in the
+	// ticker branch below is unreachable while renew() blocks — a silent-connection / blackholed-endpoint
+	// UpdateItem never returns to the loop (aws-sdk-go-v2's default client sets no request timeout), so the
+	// in-flight single-emit fence (leaderCtx cancellation, DESIGN F11) would never fire → an unbounded
+	// dual-leader window after a standby has already acquired with fence+1. The watchdog runs in its own
+	// goroutine so the deadline is honoured regardless; cancelling leaderCtx also aborts the in-flight
+	// UpdateItem (net/http honours request-ctx cancellation), so a hung renew unblocks. client-go parity:
+	// leaderelection wraps every renew in context.WithTimeout(RenewDeadline). Fence/CAS semantics are
+	// untouched — this only adds an out-of-band deadline (see #30 acceptance).
+	renewOK := make(chan struct{}, 1)
+	watchdogDone := make(chan struct{})
+	go c.renewWatchdog(leaderCtx, cancel, renewOK, watchdogDone)
+
 	ticker := time.NewTicker(c.retry)
 	defer ticker.Stop()
-	lastRenew := c.now()
 	for {
 		select {
 		case <-ctx.Done():
 			cancel()
+			<-watchdogDone
 			<-done // [round3 HIGH-1 parity] barrier on onElected drain before returning
 			return
 		case <-done:
+			cancel()
+			<-watchdogDone
 			return // scheduler exited on its own
+		case <-leaderCtx.Done():
+			// The watchdog stepped us down (renew deadline exceeded). Drain onElected before returning so
+			// app.Run cannot re-enter a new acquire while a prior term's emit worker is still running.
+			<-watchdogDone
+			<-done
+			return
 		case <-ticker.C:
 			ok, err := c.renew(leaderCtx, fence)
 			switch {
 			case err == nil && ok:
-				lastRenew = c.now()
+				// Signal a successful renew to the watchdog (non-blocking; the buffer of 1 coalesces).
+				select {
+				case renewOK <- struct{}{}:
+				default:
+				}
 			case err == nil && !ok:
 				slog.Info("dynamodb coordinator: leadership lost (lock taken)", "identity", c.identity)
 				cancel()
+				<-watchdogDone
 				<-done
 				return
-			default: // transient error
-				if c.now().Sub(lastRenew) >= c.renewDeadline {
-					slog.Warn("dynamodb coordinator: renew deadline exceeded; stepping down", "err", err)
-					cancel()
-					<-done
-					return
+			default: // transient error — the watchdog enforces the renew deadline out-of-band
+				slog.Warn("dynamodb coordinator: renew failed (transient); watchdog enforces renew deadline", "err", err)
+			}
+		}
+	}
+}
+
+// renewWatchdog cancels leaderCtx if c.renewDeadline elapses with no successful renew signalled on
+// renewOK. It runs in its own goroutine (the fix for #30) so the deadline is enforced even while a
+// renew UpdateItem is blocked. It exits when leaderCtx is cancelled — by itself here, by the parent
+// ctx, or by the lead loop on a lost/relinquished lease. The timer uses real (wall) time like the
+// renew ticker; see setNow.
+func (c *Coordinator) renewWatchdog(leaderCtx context.Context, cancel context.CancelFunc, renewOK <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	timer := time.NewTimer(c.renewDeadline)
+	defer timer.Stop()
+	for {
+		select {
+		case <-leaderCtx.Done():
+			return
+		case <-renewOK:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
 				}
 			}
+			timer.Reset(c.renewDeadline)
+		case <-timer.C:
+			slog.Warn("dynamodb coordinator: renew deadline exceeded; stepping down (watchdog)",
+				"identity", c.identity, "renew_deadline", c.renewDeadline)
+			cancel()
+			return
 		}
 	}
 }

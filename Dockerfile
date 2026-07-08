@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     go install github.com/google/go-licenses@${GO_LICENSES_VERSION} && \
     GO_LICENSES=go-licenses OUT=/build/THIRD_PARTY_NOTICES.md bash scripts/notices.sh
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:b7bb25d9f7c31d2bdd1982feb4dafcaf137703c7075dbe2febb41c24212b946f
 COPY --from=builder /genai-otel-bridge /genai-otel-bridge
 # License compliance travels with the image (OCI /licenses convention): AGPL text + third-party notices.
 COPY --from=builder /build/LICENSE /licenses/LICENSE

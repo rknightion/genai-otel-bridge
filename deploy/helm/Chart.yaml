@@ -8,5 +8,5 @@ kubeVersion: ">=1.21.0-0"
 # lines below on each release (see release-please-config.json extra-files); publish.yml's shared
 # container-publish.yml reusable derives the published image tags from the same git tag, so the registry
 # and the source never drift.
-version: 3.0.1 # x-release-please-version
-appVersion: "3.0.1" # x-release-please-version
+version: 3.1.0 # x-release-please-version
+appVersion: "3.1.0" # x-release-please-version

@@ -55,6 +55,7 @@ Operations = [
 [[site.nav]]
 "How It Works" = [
     { Architecture = "architecture.md" },
+    { "Why This Bridge" = "comparison.md" },
 ]
 
 [[site.nav]]

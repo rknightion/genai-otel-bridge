@@ -50,6 +50,7 @@ Operations = [
     { "Alerts & Runbooks" = "alerts.md" },
     { Troubleshooting = "troubleshooting.md" },
     { Security = "security.md" },
+    { FAQ = "faq.md" },
 ]
 
 [[site.nav]]

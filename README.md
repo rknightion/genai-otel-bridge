@@ -1,9 +1,10 @@
-# genai-otel-bridge (`genai-otel-bridge`)
+# genai-otel-bridge
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/rknightion/genai-otel-bridge/badge)](https://scorecard.dev/viewer/?uri=github.com/rknightion/genai-otel-bridge)
 
-A generic, vendor-neutral integrator that pulls **operational telemetry** from AI-platform
-APIs and emits it to Grafana Cloud (or any OTLP endpoint) as **metrics and logs**.
+**Turn Portkey and LangSmith LLM traffic into OpenTelemetry metrics and logs.** A generic,
+vendor-neutral integrator that pulls **operational telemetry** from AI-platform APIs and emits
+it to Grafana Cloud (or any OTLP endpoint) as **metrics and logs**.
 
 It targets two categories of source:
 

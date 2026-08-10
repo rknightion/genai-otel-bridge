@@ -104,7 +104,7 @@ All notable changes to genai-otel-bridge. Generated from Conventional Commits.
 - Analytics use-case stamp + api_key_ids filter e2e
 - Logs export api_key_ids filter body + record stamp
 - ValidateOwnership passes with api_key_use_cases (M7 regression guard)
-# Changelog
+## Earlier releases
 
 All notable changes to genai-otel-bridge. Subsequent releases are generated from Conventional Commits.
 

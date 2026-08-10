@@ -10,3 +10,37 @@ kubeVersion: ">=1.21.0-0"
 # and the source never drift.
 version: 3.0.1 # x-release-please-version
 appVersion: "3.0.1" # x-release-please-version
+home: https://m7kni.io/genai-otel-bridge/
+icon: https://m7kni.io/genai-otel-bridge/assets/project-icon-solid.svg
+sources:
+  - https://github.com/rknightion/genai-otel-bridge
+keywords:
+  - llm
+  - llmops
+  - llm-observability
+  - portkey
+  - langsmith
+  - opentelemetry
+  - otlp
+  - otel
+  - observability
+  - grafana-cloud
+maintainers:
+  - name: rknightion
+    url: https://github.com/rknightion
+annotations:
+  artifacthub.io/category: ai-machine-learning
+  artifacthub.io/license: AGPL-3.0
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://m7kni.io/genai-otel-bridge/
+    - name: Getting started
+      url: https://m7kni.io/genai-otel-bridge/getting-started/
+    - name: Configuration reference
+      url: https://m7kni.io/genai-otel-bridge/configuration/
+    - name: source
+      url: https://github.com/rknightion/genai-otel-bridge
+  artifacthub.io/maintainers: |
+    - name: rknightion
+      email: rob@rob-knight.com

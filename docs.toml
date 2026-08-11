@@ -5,7 +5,7 @@
 [site]
 name = "genai-otel-bridge"
 description = "Vendor-neutral Go service that polls AI-platform APIs (Portkey, LangSmith) and emits operational telemetry to Grafana Cloud as OTLP metrics + logs"
-author = "Rob Knighton"
+author = "Rob Knight"
 keywords = [
     "opentelemetry",
     "otlp",

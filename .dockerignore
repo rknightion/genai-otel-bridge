@@ -14,3 +14,8 @@ docs/superpowers
 /genai-otel-bridge
 coverage.out
 deploy/ecs/terraform/.terraform
+# Project-management surfaces — tracked, but nothing the build needs, and `archive/` is ~550 KB
+# of JSON that would invalidate the COPY layer cache for no reason.
+backlog
+archive
+.claude

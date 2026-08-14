@@ -5,6 +5,19 @@ these block it; each is a discrete piece of work. The **open code** follow-ups a
 streams immediately below; the detailed §-sections that follow are the reference (and also hold the many
 items already DONE/RESOLVED/BUILT).
 
+> **THIS FILE IS NO LONGER THE QUEUE — it is the reference behind the queue.** On **2026-08-14** every
+> open row below was migrated into the Backlog.md tracker as `GOB-0002` … `GOB-0013`. **What is left is
+> `backlog task list --plain`**, not this file. Two queues is how a deferred item gets worked twice or
+> never, so:
+>
+> - **Do not add new open work here.** New work is a task (`backlog task create`); if it needs a page of
+>   context, that context comes here and the task points at the section.
+> - **Do not mark work done here.** Close the task; its final summary carries the SHA.
+> - The §-sections keep their full value as the *reference* each task cites — the design analysis, the
+>   live-probe results, the boundary notes, and the DONE/RESOLVED history. That is why the file stays.
+>
+> The vX row is `GOB-0013`, **Parked**, and its task carries the exact re-probe that would unpark it.
+
 ---
 
 ## Open code follow-ups — prioritised work plan (v1 / v2 / v3 / vX)

@@ -4,6 +4,7 @@ title: Don't promote service.version to a per-series metric label
 status: To Do
 assignee: []
 created_date: '2026-08-14 16:10'
+updated_date: '2026-08-14 16:51'
 labels:
   - telemetry
   - cardinality
@@ -44,3 +45,15 @@ Cross-repo consistency pass — the detailed spec citations are in `rknightion/g
 - [ ] #1 make gate
 - [ ] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+GitHub issue **#165 was deleted on 2026-08-14** once this task took over the work — `gh issue view 165` now 404s. Do not go looking for it. The full original body (2,267 bytes, no comments) is in the archive:
+
+```sh
+jq ".[] | select(.number == 165)" archive/github-issues-2026-08-14.json
+```
+
+It is not in the closed-issues index doc either, because that table indexes the *closed* set and this one was open. The archive plus this task are the whole record.
+<!-- SECTION:NOTES:END -->

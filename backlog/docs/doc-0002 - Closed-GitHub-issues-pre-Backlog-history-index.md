@@ -3,7 +3,7 @@ id: doc-0002
 title: Closed GitHub issues (pre-Backlog history index)
 type: other
 created_date: '2026-08-14 16:07'
-updated_date: '2026-08-14 16:07'
+updated_date: '2026-08-14 16:50'
 ---
 > **Historical index of work tracked on GitHub Issues before this repo moved to Backlog.md on
 > 2026-08-14.** The closed issues were **deleted from GitHub** on that date, so `gh issue view <N>`
@@ -26,6 +26,12 @@ log and the `*_review_test.go` regression guards all reference this work as `#NN
 GitHub numbers as the *only* ID space is what keeps those references resolvable. A hundred-odd
 `Done` rows would also drown the board's one real signal — what is left. **Cite closed work as
 `#NNN`; cite new work as `gob-NNNN`.**
+
+**One deleted number is deliberately absent from this table: `#165`.** It was *open* at the
+migration, so it became task `GOB-0001` rather than an index row — but it was deleted from GitHub
+alongside the closed set, since the task now carries the work. Its body is in the archive like
+everything else. So: every number below 166 except `#2` 404s, and `#2` is Renovate's dependency
+dashboard, which stays.
 
 **All 117 closed on 2026-07-03**, in a single sweep at the end of the production-readiness campaign
 (`#142` was its master tracker). The date column is therefore uniform; it is kept per-row so the

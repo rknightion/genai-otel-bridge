@@ -3,9 +3,11 @@
 ## `github-issues-2026-08-14.json`
 
 **The complete record of this repo's GitHub Issues, captured on 2026-08-14 when the project moved
-to Backlog.md.** The closed issues were deleted from GitHub on that date, so `gh issue view <N>`
-404s for them — this file is the record, not a convenience copy. The Backlog doc *"Closed GitHub
-issues (pre-Backlog history index)"* is the index into it.
+to Backlog.md.** All 118 of this repo's own issues were deleted from GitHub on that date — the 117
+closed ones and the single open one — so `gh issue view <N>` 404s for every number except `#2`.
+This file is the record, not a convenience copy. The Backlog doc *"Closed GitHub issues (pre-Backlog
+history index)"* indexes the closed set; `#165` is not in that table because it was open work, and
+its record is this archive plus task `GOB-0001`.
 
 Read a single issue:
 
@@ -32,9 +34,14 @@ the dump's per-issue comment counts were summed and required to match the REST A
 **11 = 11 across 119 issues**. The two counts agreeing is the check; a merely non-empty `comments`
 array is not.
 
-The **open** issues are archived too, deliberately. `#165` survives as a Backlog task and `#2` is
-Renovate's dependency dashboard, which stays on GitHub — neither was deleted. Archiving everything
-is what lets the delete list be asserted as a subset of the archive rather than argued about.
+The **open** issues are archived too, and that turned out to matter. `#165` was open at capture,
+became task `GOB-0001`, and was then **deleted as well** — the archive is the only remaining copy of
+its body, which is exactly the case the subset assertion exists to protect. Archiving everything up
+front is what let the delete list be asserted as a subset of the archive rather than argued about,
+including for an issue that was not on the original delete list.
+
+**`#2` is the one survivor.** It is Renovate's dependency dashboard: bot-generated, recreated on the
+next Renovate run, and not work that any task tracks. Deleting it would churn rather than clean.
 
 ### Redaction: none was required, and that is a finding, not an omission
 

@@ -159,7 +159,7 @@ This repo moved off GitHub Issues on **2026-08-14**; work closed before that is 
   this project's own rules. `backlog doc list --plain` shows both.
 - **Never use `--notes` or `--plan` bare.** They *silently replace* the whole section — another
   session's writes vanish with no warning and exit 0. Use `--append-notes` / `--append-plan`. This is
-  an open upstream bug, not a misunderstanding, and `.claude/hooks/backlog-guard.py` denies the bare
+  an open upstream bug, not a misunderstanding, and a global `PreToolUse` hook in the agent config denies the bare
   form rather than trusting anyone to remember.
 - **Never hand-edit task, draft, doc, decision or milestone markdown.** Section boundaries are
   HTML-comment markers; break one and the section is *silently dropped* at exit 0 — still in the file,

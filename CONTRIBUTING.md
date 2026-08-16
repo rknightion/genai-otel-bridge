@@ -69,3 +69,19 @@ design change that requires an `ARCHITECTURE.md` update and discussion first —
 By contributing, you agree that your contributions are licensed under the
 [GNU Affero General Public License v3.0 only](./LICENSE) (`AGPL-3.0-only`), consistent with the rest
 of the project. See [LICENSING.md](./LICENSING.md).
+
+## Cloud agent environments
+
+Codex Cloud and Claude Code cloud tasks share a repository-owned setup script so their agent phases
+have the same tools as CI, including the Backlog.md task tracker. Configure this command as the
+**Manual setup** command in Codex Cloud or the **Setup script** in a Claude Code cloud environment:
+
+```bash
+bash scripts/cloud-environment-setup.sh
+```
+
+For Codex Cloud, set the environment's Go package version to the `go` version declared in `go.mod`.
+Do not run the script in a local development environment. It is idempotent for cached cloud
+containers, persists user-installed tool paths for the separate agent shell, prefetches Go modules and
+envtest assets, and installs the tools used by `make gate`. Setup scripts have network access; keeping downloads in setup also lets the agent phase run with its default
+restricted network access.

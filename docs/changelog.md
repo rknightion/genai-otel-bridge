@@ -1,6 +1,6 @@
 ---
 title: Changelog
-description: Release history for genai-otel-bridge.
+description: Review genai-otel-bridge releases, supported AI platforms, OpenTelemetry signal changes, fixes, and deployment updates.
 ---
 
 # Changelog

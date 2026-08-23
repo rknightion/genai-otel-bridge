@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Common failure modes in genai-otel-bridge and how to diagnose them.
+description: Diagnose genai-otel-bridge leadership, polling, authentication, configuration, and OpenTelemetry export failures.
 ---
 
 # Troubleshooting

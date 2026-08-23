@@ -12,7 +12,7 @@
 # the official `golang` image, served by Google, so kaniko's pull is not subject to Docker Hub's
 # anonymous per-IP pull-rate limit (which throttles shared CI runners). The runtime base below is
 # already Google-hosted (gcr.io/distroless), so both bases avoid docker.io.
-FROM mirror.gcr.io/library/golang:1.26-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS builder
+FROM mirror.gcr.io/library/golang:1.27.0-bookworm@sha256:484ef6066fa69acb059fdfeda7ba2b8f7391f2ef6abc6f9b8411e669ebd56466 AS builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download

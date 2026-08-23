@@ -11,7 +11,7 @@ description: Install genai-otel-bridge from source or deploy it to Kubernetes wi
 
 ## Prerequisites
 
-- Go 1.26 or later (for building from source).
+- Go 1.27 or later (for building from source).
 - A Grafana Cloud account (or any OTLP/HTTP endpoint).
 - For Kubernetes deployment: Helm 3.x and a cluster with `coordination.k8s.io/v1` available (standard since Kubernetes 1.18).
 - For HA / ConfigMap checkpointing: the chart creates the required RBAC automatically.

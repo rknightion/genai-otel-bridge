@@ -90,7 +90,7 @@ make test     # go test ./...
 make lint     # golangci-lint run
 ```
 
-Requires Go 1.26+. Acceptance gates: `go test -tags acceptance ./internal/app/`.
+Requires Go 1.27+. Acceptance gates: `go test -tags acceptance ./internal/app/`.
 
 ## Documentation
 

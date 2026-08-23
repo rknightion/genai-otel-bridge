@@ -17,7 +17,7 @@ changes.
 
 ## Development setup
 
-Requires **Go 1.26+**. The single green-bar command is:
+Requires **Go 1.27+**. The single green-bar command is:
 
 ```bash
 make gate     # vet + test + lint + spdx-check + build

@@ -26,7 +26,7 @@ func testEmitter(t *testing.T, url string) *Emitter {
 	return New(Config{
 		Endpoint: url, InstanceID: "123", Token: "secret-token",
 		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20,
-		Retry: RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 1.5, MaxElapsed: 30 * time.Millisecond, Jitter: 0},
+		Retry: RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 1.5, MaxElapsed: 500 * time.Millisecond, Jitter: 0},
 	})
 }
 

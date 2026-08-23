@@ -40,7 +40,7 @@ make lint     # golangci-lint run  (config is .golangci.yml, v2 schema)
 go test -tags acceptance ./internal/app/   # §9 acceptance gates (failover, outage, soak)
 ```
 
-Go 1.26. Module path: `github.com/rknightion/genai-otel-bridge`. GitHub (`rknightion/genai-otel-bridge`)
+Go 1.27. Module path: `github.com/rknightion/genai-otel-bridge`. GitHub (`rknightion/genai-otel-bridge`)
 is the canonical remote — commit to `main`; releases are cut by merging release-please's PR (see Release).
 The repo is public; a self-hosted Forgejo mirror is kept as a cold archive only. `main` is branch-
 protected to require the `ci-success` check (with `enforce_admins=false`, so admin direct-to-main

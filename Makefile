@@ -9,7 +9,7 @@ export GOFLAGS
 LDFLAGS := -X github.com/rknightion/genai-otel-bridge/internal/version.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # ── pinned tool versions (override via env; majors are load-bearing) ──────────
-GOLANGCI_LINT_VERSION ?= v2.13.1
+GOLANGCI_LINT_VERSION ?= v2.13.2
 SETUP_ENVTEST_VERSION ?= release-0.23
 ENVTEST_K8S_VERSION   ?= 1.35.0
 HELM_VERSION          ?= v4.2.4

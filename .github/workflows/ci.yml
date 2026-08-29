@@ -157,6 +157,21 @@ jobs:
           coverage-reports: coverage.out
           force-coverage-parser: go
 
+  # This chart published to GHCR with no schema validation against the real
+  # Kubernetes API schemas at all — the `hygiene` leg of `gate` above only runs
+  # `helm lint deploy/helm`, never a template + kubeconform check. Chart.yaml
+  # declares kubeVersion >=1.21.0-0, so this validates against that floor. No
+  # named `helm template` variant exists anywhere in this repo, so only the
+  # bare default render is validated.
+  helm-schema-validate:
+    name: helm schema validate (kubeconform)
+    permissions:
+      contents: read
+    uses: rknightion/.github/.github/workflows/helm-validate.yml@97f4a7ad0cd1ddd83562a30b9061ef8295242405 # v1.14.0
+    with:
+      chart-path: deploy/helm
+      kubernetes-versions: "1.21.0"
+
   # Single required status check. Branch protection on `main` requires ONLY this job, so the gate's
   # matrix legs (and e2e / secret-scan) can be added or renamed without re-touching protection.
   # It fails if any dependency failed or was cancelled; a legitimately skipped job (e.g. e2e on a
@@ -165,7 +180,7 @@ jobs:
     name: ci-success
     runs-on: ubuntu-latest
     if: always()
-    needs: [gate, e2e, secret-scan, dynamodb-backends]
+    needs: [gate, e2e, secret-scan, dynamodb-backends, helm-schema-validate]
     steps:
       - name: Fail if any required job did not pass
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}

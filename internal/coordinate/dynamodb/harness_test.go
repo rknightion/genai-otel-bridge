@@ -17,7 +17,7 @@ import (
 )
 
 // newTestClient returns a real *dynamodb.Client pointed at dynamodb-local, or skips the test if
-// DYNAMODB_ENDPOINT is unset (so `make test` without docker stays green; CI + OrbStack set it).
+// DYNAMODB_ENDPOINT is unset (so `just test` without docker stays green; CI + OrbStack set it).
 func newTestClient(t *testing.T) *awsddb.Client {
 	t.Helper()
 	ep := os.Getenv("DYNAMODB_ENDPOINT")

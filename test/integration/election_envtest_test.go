@@ -6,7 +6,7 @@
 // (no kubelet, no cluster). They exercise lease election + ConfigMap RMW under genuine
 // optimistic-concurrency semantics that the fake clientset does not enforce. The ONLY import of
 // sigs.k8s.io/controller-runtime in this repo lives behind this `envtest` build tag, so it never
-// links into the production binary. Run via `make ci-envtest`.
+// links into the production binary. Run via `just test-envtest`.
 package integration
 
 import (
@@ -30,7 +30,7 @@ func startEnv(t *testing.T) (*kubernetes.Clientset, string) {
 	env := &envtest.Environment{}
 	cfg, err := env.Start()
 	if err != nil {
-		t.Fatalf("envtest start (is KUBEBUILDER_ASSETS set? run via `make ci-envtest`): %v", err)
+		t.Fatalf("envtest start (is KUBEBUILDER_ASSETS set? run via `just test-envtest`): %v", err)
 	}
 	t.Cleanup(func() { _ = env.Stop() })
 	cs, err := kubernetes.NewForConfig(cfg)

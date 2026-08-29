@@ -30,15 +30,22 @@ to downstream slowness.
 > structured metadata, not queryable as `{label=…}`); GS2 = widen the backend accept window for long
 > outages. See `docs/DESIGN.md` §7/RP2, `followup.md`.
 
-## Build / test / lint gate
+## Task interface
 
-```bash
-make gate     # vet + test + lint + forbidden-words + spdx-check + tf-validate + helm-lint + build ./...  — the green bar before any commit
-make build    # -> bin/genai-otel-bridge, version stamped via git describe ldflags
-make test     # go test ./...
-make lint     # golangci-lint run  (config is .golangci.yml, v2 schema)
-go test -tags acceptance ./internal/app/   # §9 acceptance gates (failover, outage, soak)
-```
+This repo's task surface is a `justfile`. Discover it, don't guess it:
+
+    just --list                        # human-readable
+    just --dump --dump-format json     # machine-readable
+    just --show <recipe>               # what a recipe actually runs
+
+- `just check` is the full bare-toolchain gate and must pass before you commit.
+- `just ci` additionally runs the Docker/service-container legs (`e2e` and
+  `test-dynamodb`) that CI runs in separate jobs.
+- Prefer `just <recipe>` over the underlying tool. If you are typing `go test`, you want `just test`.
+- Run `just` with stdin from /dev/null. Recipes marked `[confirm]` are destructive — stop and ask
+  before running one; never pass `--yes` or `JUST_YES=1`.
+- If a task you need does not exist, add a recipe with a `#` doc comment and a `[group(...)]`
+  rather than running a bare command.
 
 Go 1.27. Module path: `github.com/rknightion/genai-otel-bridge`. GitHub (`rknightion/genai-otel-bridge`)
 is the canonical remote — commit to `main`; releases are cut by merging release-please's PR (see Release).
@@ -88,17 +95,17 @@ F1–F47 failure handling, review dispositions). Read these before changing a se
 ## Conventions
 
 - **Git workflow: direct to `main`.** Commit straight to `main` — no feature branches, no PRs.
-  `make gate` green before *every* commit (evidence, not assertion). Stage
+  `just check` green before *every* commit (evidence, not assertion). Stage
   explicit paths (`git add <path>`), never `-A`/`.` — concurrent agents may share the working tree;
   never stage, commit, or revert work that isn't yours. *Exception:* Renovate dependency bumps open
   PRs and self-automerge (including majors) once the full CI suite is green — see `renovate.json`.
-- **CI fans out** (`.github/workflows/ci.yml`): `make ci` is split into a parallel `gate` matrix
+- **CI fans out** (`.github/workflows/ci.yml`): `just check` is split into a parallel `gate` matrix
   (build-vet / lint / test / race / acceptance / envtest / hygiene) plus `e2e` and `secret-scan`;
   the `ci-success` aggregator job is the single check that gates Renovate automerge and `publish`.
 - **Conventional Commits** (`feat:`/`fix:`/`chore:`/`docs:`/`refactor:`/…) — subjects drive the
   release-please-generated `CHANGELOG.md`; only `feat`/`fix`/breaking bump the version, `chore`/`style`/
   `test` are hidden from the changelog. See the Release section below.
-- **Gate extras:** `make gate` runs `forbidden-words` (a content/decoupling guard — self-skips where its
+- **Gate extras:** `just check` runs `forbidden-words` (a content/decoupling guard — self-skips where its
   script isn't present), `spdx-check` (every `.go` carries the AGPL-3.0-only SPDX header), `tf-validate`
   (ECS Terraform fmt/validate/tflint/checkov — self-skips absent tools), and `helm-lint` (self-installs
   `helm` via `tools-e2e`) — matching every leg of ci.yml's hygiene job, so a local green gate implies a
@@ -119,7 +126,7 @@ Releases are automated by **release-please** (`.github/workflows/release-please.
 the next semver and updates `CHANGELOG.md` + `deploy/helm/Chart.yaml` (`version` + `appVersion`, the two
 `# x-release-please-version`-annotated lines). **Merging that release PR** tags `vX.Y.Z`, creates the
 GitHub Release (notes = that version's changelog section), and triggers `publish.yml` to push the
-multi-arch image + Helm chart to GHCR. There is no manual `make changelog` / `git tag` step.
+multi-arch image + Helm chart to GHCR. There is no manual changelog or tag step.
 
 - **Version is single-source:** chart `version` = `appVersion` = release version. release-please keeps
   the two annotated `Chart.yaml` lines in step (extra-files), and `publish.yml`'s shared
@@ -133,11 +140,11 @@ multi-arch image + Helm chart to GHCR. There is no manual `make changelog` / `gi
   `version`/`appVersion`. Use the unprefixed form (e.g. `:3.0.1`) in `--set image=...` / registry
   references — not the `vX.Y.Z` git-tag form.
 - **License notices + SBOMs are release artifacts (not committed/gated).** `publish.yml`'s notices job
-  runs `make notices` and attaches `THIRD_PARTY_NOTICES.md` (the image also bakes notices into
+  runs `just notices` and attaches `THIRD_PARTY_NOTICES.md` (the image also bakes notices into
   `/licenses/`); the SBOMs come from `syft` **inside** the `container-publish.yml` reusable, which scans
   the built image (not the local binary) and attaches SPDX + CycloneDX to the GitHub Release. Notices are
   generated from the real import graph (`go-licenses`) and churn on every dep bump, so they are
-  deliberately kept out of `make gate` to preserve Renovate automerge. See `LICENSING.md`.
+  deliberately kept out of `just check` to preserve Renovate automerge. See `LICENSING.md`.
 - **Merging the release PR:** the workflow passes a fine-grained PAT (`token:
   ${{ secrets.RELEASE_PLEASE_TOKEN }}`) to `googleapis/release-please-action`, so the release PR is
   PAT-authored, not `GITHUB_TOKEN`-authored — GitHub's recursion guard does not apply, and CI runs on

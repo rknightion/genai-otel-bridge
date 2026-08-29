@@ -48,7 +48,7 @@ func client(t *testing.T) *kubernetes.Clientset {
 	t.Helper()
 	cfg, err := clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
 	if err != nil {
-		t.Fatalf("kubeconfig (set KUBECONFIG; run via `make k3d-e2e`): %v", err)
+		t.Fatalf("kubeconfig (set KUBECONFIG; run via `just e2e`): %v", err)
 	}
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {

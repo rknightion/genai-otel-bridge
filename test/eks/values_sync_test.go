@@ -6,7 +6,7 @@
 // The EKS file is a real deployment fixture: its VALUES diverge from production on purpose (real
 // creds via ${ENV} refs, product/self telemetry split, two live sources, EKS network/image knobs).
 // What must NOT drift is the set of config KEYS and the layout — when a new config key is added to the
-// schema (and `make generate` refreshes deploy/helm/values.yaml), this gate fails until the key is also
+// schema (and `just gen` refreshes deploy/helm/values.yaml), this gate fails until the key is also
 // reflected in the EKS file, so the internal test deploy never silently runs an out-of-date config shape.
 //
 // Two complementary checks (per the 2026-06-21 decision to keep keys/layout — not values — in sync):

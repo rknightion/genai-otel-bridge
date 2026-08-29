@@ -36,7 +36,7 @@ func TestHelmGeneratedExamplesUpToDate(t *testing.T) {
 		t.Fatalf("extract example block: %v", err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("values.yaml source-examples block is stale — run `make generate`\n\n--- committed ---\n%s\n--- generated ---\n%s",
+		t.Errorf("values.yaml source-examples block is stale — run `just gen`\n\n--- committed ---\n%s\n--- generated ---\n%s",
 			got, want)
 	}
 }

@@ -17,22 +17,24 @@ changes.
 
 ## Development setup
 
-Requires **Go 1.27+**. The single green-bar command is:
+Requires **Go 1.27+** and **just 1.58.0**. Install just through a supported package manager (for
+example, `brew install just`) or the [official release instructions](https://github.com/casey/just).
+The single green-bar command is:
 
 ```bash
-make gate     # vet + test + lint + spdx-check + build
+just check    # fmt + build + vet + lint + gen + tests + hygiene
 ```
 
 Other useful targets:
 
 ```bash
-make build    # -> bin/genai-otel-bridge (version stamped via git describe)
-make test     # go test ./...
-make lint     # golangci-lint run
-go test -tags acceptance ./internal/app/   # acceptance gates (failover / outage / soak)
+just build    # -> bin/genai-otel-bridge (version stamped via git describe)
+just test     # go test ./...
+just lint     # golangci-lint run
+just test-acceptance   # acceptance gates (failover / outage / soak)
 ```
 
-`make gate` must pass before any change is merged. CI runs the same gate plus a k3d end-to-end test.
+`just check` must pass before any change is merged. CI additionally runs the k3d and DynamoDB service-container legs.
 
 ## Making a change
 
@@ -41,8 +43,8 @@ go test -tags acceptance ./internal/app/   # acceptance gates (failover / outage
    tests where they fit; `httptest.Server` fakes for HTTP; injectable clocks for determinism. Tests
    must not make live network calls.
 3. Every new `.go` file must carry the license header:
-   `// SPDX-License-Identifier: AGPL-3.0-only` (enforced by `scripts/spdx-check.sh`).
-4. Keep `make gate` green.
+   `// SPDX-License-Identifier: AGPL-3.0-only` (enforced by `just spdx-check`).
+4. Keep `just check` green.
 5. Open a pull request with a clear description of the change and its motivation.
 
 ## Commit messages
@@ -83,5 +85,5 @@ bash scripts/cloud-environment-setup.sh
 For Codex Cloud, set the environment's Go package version to the `go` version declared in `go.mod`.
 Do not run the script in a local development environment. It is idempotent for cached cloud
 containers, persists user-installed tool paths for the separate agent shell, prefetches Go modules and
-envtest assets, and installs the tools used by `make gate`. Setup scripts have network access; keeping downloads in setup also lets the agent phase run with its default
+envtest assets, and installs the tools used by `just check`. Setup scripts have network access; keeping downloads in setup also lets the agent phase run with its default
 restricted network access.

@@ -6,6 +6,7 @@
 set -euo pipefail
 
 BACKLOG_VERSION="1.50.1"
+JUST_VERSION="1.58.0"
 TOFU_VERSION="1.10.6"
 TFLINT_VERSION="0.59.1"
 CHECKOV_VERSION="3.2.495"
@@ -23,7 +24,7 @@ grep -Fqx "$path_line" "$HOME/.bashrc" || printf '\n%s\n' "$path_line" >> "$HOME
 export PATH="$user_bin:$PATH"
 
 need_packages=()
-for command in curl git make gcc npm python3 pipx unzip; do
+for command in curl git gcc npm python3 pipx unzip; do
   command -v "$command" >/dev/null 2>&1 || need_packages+=("$command")
 done
 if ((${#need_packages[@]})); then
@@ -33,7 +34,7 @@ if ((${#need_packages[@]})); then
   fi
   "${apt_prefix[@]}" apt-get update
   "${apt_prefix[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    ca-certificates curl git make gcc npm python3 pipx unzip
+    ca-certificates curl git gcc npm python3 pipx unzip
 fi
 
 required_go="$(sed -nE 's/^go ([0-9]+\.[0-9]+).*/\1/p' go.mod)"
@@ -66,8 +67,36 @@ install_github_zip() {
   trap - RETURN
 }
 
+install_github_tar() {
+  local name="$1" version="$2" base="$3" archive="$4" checksum_asset="$5" binary="$6"
+  if command -v "$name" >/dev/null 2>&1; then
+    local installed_version
+    installed_version="$("$name" --version 2>&1 || true)"
+    [[ "$installed_version" == *"$version"* ]] && return
+  fi
+
+  local work
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' RETURN
+  curl -sSfLo "$work/$archive" "$base/$version/$archive"
+  curl -sSfLo "$work/$checksum_asset" "$base/$version/$checksum_asset"
+  (cd "$work" && grep "  $archive\$" "$checksum_asset" | sha256sum -c -)
+  tar -xzf "$work/$archive" -C "$work"
+  install -m 0755 "$work/$binary" "$user_bin/$name"
+  rm -rf "$work"
+  trap - RETURN
+}
+
 os="$(go env GOOS)"
 arch="$(go env GOARCH)"
+case "$arch" in
+  amd64) just_arch=x86_64 ;;
+  arm64) just_arch=aarch64 ;;
+  *) printf 'error: unsupported architecture for just: %s\n' "$arch" >&2; exit 1 ;;
+esac
+install_github_tar just "$JUST_VERSION" \
+  "https://github.com/casey/just/releases/download" \
+  "just-${JUST_VERSION}-${just_arch}-unknown-linux-musl.tar.gz" SHA256SUMS just
 install_github_zip tofu "$TOFU_VERSION" \
   "https://github.com/opentofu/opentofu/releases/download" \
   "tofu_${TOFU_VERSION}_${os}_${arch}.zip" "tofu_${TOFU_VERSION}_SHA256SUMS" tofu
@@ -86,17 +115,15 @@ npm_bin="$(dirname "$(command -v backlog)")"
 npm_path_line="export PATH=\"$npm_bin:\$PATH\""
 grep -Fqx "$npm_path_line" "$HOME/.bashrc" || printf '%s\n' "$npm_path_line" >> "$HOME/.bashrc"
 
-# Fetch everything needed by offline-by-default agent phases. The Makefile owns the
+# Fetch everything needed by offline-by-default agent phases. The justfile owns the
 # versions and checksum verification for golangci-lint, envtest, Helm, k3d, and kubectl.
-go mod download
-make tools tools-e2e
-"$repo_root/.tools/setup-envtest" use "${ENVTEST_K8S_VERSION:-1.35.0}" \
-  --bin-dir "$repo_root/.tools/envtest" >/dev/null
+just setup </dev/null
 
 tofu -chdir=deploy/ecs/terraform init -backend=false -input=false >/dev/null
 
 backlog --version
+just --version
 tofu version | sed -n '1p'
 tflint --version | sed -n '1p'
 checkov --version
-printf 'Cloud agent environment setup complete. Run make gate to validate changes.\n'
+printf 'Cloud agent environment setup complete. Run just check to validate changes.\n'

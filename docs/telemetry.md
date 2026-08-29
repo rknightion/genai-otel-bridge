@@ -12,10 +12,10 @@ Product metric/log **names are config-derived** — the `{loops.*.metric_prefix}
 placeholders below resolve from your config. With the README's default config, `{loops.analytics.metric_prefix}`
 is `portkey_api`, so `{loops.analytics.metric_prefix}_requests` becomes `portkey_api_requests`.
 
-The catalogue below is **generated from the code** (`make generate`) and gate-checked in CI, so it
+The catalogue below is **generated from the code** (`just gen`) and gate-checked in CI, so it
 cannot drift from what the binary actually emits.
 
-<!-- >>> BEGIN generated telemetry catalogue — do not edit by hand; run `make generate` <<< -->
+<!-- >>> BEGIN generated telemetry catalogue — do not edit by hand; run `just gen` <<< -->
 
 ### Product telemetry
 

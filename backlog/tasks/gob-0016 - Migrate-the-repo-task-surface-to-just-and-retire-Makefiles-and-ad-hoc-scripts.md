@@ -1,10 +1,10 @@
 ---
 id: GOB-0016
 title: Migrate the repo task surface to just and retire Makefiles and ad-hoc scripts
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-28 19:15'
-updated_date: '2026-08-29 10:42'
+updated_date: '2026-08-29 12:50'
 labels:
   - 'wave:2-fleet'
 dependencies: []
@@ -845,6 +845,22 @@ Green at every step. Do not delete anything until step 7.
 - [ ] #1 make gate
 - [ ] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Snapshot the existing Makefile, workflow task calls, kept-script hashes, and allowed documentation references.
+2. Add the prescribed justfile, validate its syntax/format/task surface, and prove its bare-toolchain gate leg by leg.
+3. Update generator markers and regenerate their committed artifacts; migrate the allowed docs, bootstrap script, and Backlog definition of done.
+4. Switch only ci.yml and publish.yml task invocations while preserving reusable calls and ci-success; re-grep before the final deletions.
+5. Remove Makefile and absorbed scripts, run proportionate local gates and CodeRabbit, commit/push main, verify CI at the exact final SHA, then finalize atomically.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Campaign coordination authorizes this formerly Wave 2 lane under the current unified campaign; the historical wave-start gate is superseded while the task standards remain binding.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 

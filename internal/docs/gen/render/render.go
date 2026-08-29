@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	Begin = "<!-- >>> BEGIN generated telemetry catalogue — do not edit by hand; run `make generate` <<< -->"
+	Begin = "<!-- >>> BEGIN generated telemetry catalogue — do not edit by hand; run `just gen` <<< -->"
 	End   = "<!-- >>> END generated telemetry catalogue <<< -->"
 )
 

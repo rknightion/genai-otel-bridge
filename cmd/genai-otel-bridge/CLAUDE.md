@@ -70,7 +70,7 @@ must match the chart RBAC `resourceNames`. Names are fixed (single-instance char
   (durations from `ha.dynamodb.*`, default 15s/10s/2s); `none` → `coordinate.Noop`. Construction is lazy
   (no DynamoDB call here) so it's safe before `cfg.Validate` runs inside `app.Build`.
 
-Version is stamped into `internal/version.Version` via `make build` ldflags
+Version is stamped into `internal/version.Version` via `just build` ldflags
 (`git describe --tags --always --dirty`, default `dev`). [#91] `main.go` **imports** `internal/version`
 (the `-version` flag + the self-obs resource wiring), which is what makes the `-X .../version.Version=…`
 stamp actually LINK into the binary — without a real import the linker drops it and it stays `dev`. The

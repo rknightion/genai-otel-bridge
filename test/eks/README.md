@@ -12,10 +12,10 @@ telemetry directly to Grafana Cloud over the cluster's NAT egress. Adapt the val
 | `make-genai-otel-bridge-secret.sh` | Builds the `genai-otel-bridge-secrets` Secret from your environment (or a dotenv via `GENAI_OTEL_BRIDGE_SECRET_ENV`). |
 
 **Keeping config in step with the schema.** `values-eks.yaml` carries a verbatim `configOverride`, so
-`make generate` (which only regenerates the chart's `config:` block) does NOT touch it. Two gate tests in
+`just gen` (which only regenerates the chart's `config:` block) does NOT touch it. Two gate tests in
 `values_sync_test.go` guard it: a **key-parity** check (every global config key in the generated
 production block must exist here — catches a newly-added key) and a **Load** check (the override must
-still parse against the current schema — catches a renamed/removed/retyped key). When `make gate` fails
+still parse against the current schema — catches a renamed/removed/retyped key). When `just check` fails
 on a missing key, add it here (the VALUE can be deploy-specific; only the key/layout must match).
 
 ## Deploy

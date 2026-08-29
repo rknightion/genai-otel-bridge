@@ -71,7 +71,7 @@ Note: `emitted`/`emitted_logs`/`last_success_timestamp`/`window_lag` are recorde
 committed at least once — empty there is a real signal that emit is failing, not a broken panel.
 
 The manifest is generated from `self-obs/gen_dashboard.py` (a tracked Python generator) — edit the
-generator, then `make gen-dashboard` and commit the emitted YAML. gcx 0.3.x requires the **v2** schema
+generator, then `just gen-dashboard` and commit the emitted YAML. gcx 0.3.x requires the **v2** schema
 (it rejects `v1beta1`).
 
 ## Self-obs alerts

@@ -3,7 +3,7 @@
 // TestTelemetryDocUpToDate is the telemetry drift gate: it re-runs the catalogue render in-memory
 // (via AllSignals from main.go) and byte-compares it against the committed generated region in
 // docs/telemetry.md. A new/changed signal descriptor changes the bytes and fails this test until
-// `make generate` is re-run and committed — the forcing function that keeps docs in lockstep with code.
+// `just gen` is re-run and committed — the forcing function that keeps docs in lockstep with code.
 package main
 
 import (
@@ -25,6 +25,6 @@ func TestTelemetryDocUpToDate(t *testing.T) {
 	}
 	want := render.Catalogue(AllSignals())
 	if string(got) != string(want) {
-		t.Fatalf("docs/telemetry.md is stale — run `make generate` and commit.\n--- want ---\n%s\n--- got ---\n%s", want, got)
+		t.Fatalf("docs/telemetry.md is stale — run `just gen` and commit.\n--- want ---\n%s\n--- got ---\n%s", want, got)
 	}
 }

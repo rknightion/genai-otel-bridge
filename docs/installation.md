@@ -25,7 +25,7 @@ description: Install genai-otel-bridge from source or deploy it to Kubernetes wi
 ```bash
 git clone https://github.com/rknightion/genai-otel-bridge.git
 cd genai-otel-bridge
-make build
+just build
 # -> bin/genai-otel-bridge (version stamped via git describe)
 ```
 

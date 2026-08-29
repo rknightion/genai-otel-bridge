@@ -60,7 +60,7 @@ included everywhere (DRY). **`selectorLabels` is the immutable Deployment/PDB se
 ### Generated default config (do not hand-edit)
 
 The `config:` map in `values.yaml` (between the `# >>> BEGIN/END generated config <<<` markers) is
-**generated from the Go config schema** by `make generate` — **never hand-edit it.** The `helm:"..."` tag
+**generated from the Go config schema** by `just gen` — **never hand-edit it.** The `helm:"..."` tag
 semantics, the regen workflow, and the `TestHelmGeneratedConfigUpToDate` drift gate are documented in
 `internal/config/CLAUDE.md` (the generator's owner — don't duplicate that detail here). Chart-side
 specifics: `toYaml` strips comments and sorts keys (fine — the rendered configmap is just data; `${ENV}`
@@ -75,7 +75,7 @@ Alert/recording rules **and dashboards** live as **gcx-native resource manifests
 - `grafana/self-obs/` (the integrator's own o11y, `genai_otel_bridge_*`) — **deploy-by-default, push the whole dir:**
   - **Dashboard** `genai-otel-bridge-self-obs`: v2 `TabsLayout` + responsive `AutoGridLayout`, 7 tabs (Overview/SLO,
     Liveness, Emit pipeline, Upstream, Cardinality, Logs, Profiling), 3 datasource vars (Prometheus/Loki/
-    Pyroscope) + `$loop`. Generated from `gen_dashboard.py` (tracked Python; `make gen-dashboard` → commit YAML).
+    Pyroscope) + `$loop`. Generated from `gen_dashboard.py` (tracked Python; `just gen-dashboard` → commit YAML).
   - **12 alerts**: LeaderAbsent, PollerStale (**self-relative**: 2× the loop's own 6h-p90 staleness baseline,
     not a flat threshold — flat false-positived ~100×/day on the log-export loops), EmitFailing, AuthErrors,
     UpstreamErrorBudget, WindowTruncatedDroppingRecords, SourceGraphUnavailable (`export_failed`/

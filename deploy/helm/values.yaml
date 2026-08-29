@@ -146,10 +146,10 @@ configOverride: ""
 
 # ── generated default config ──────────────────────────────────────────────────
 # The `config:` map below is GENERATED from the Go config schema (internal/config/config.go) by
-# `make generate`. Field comments are the Go doc-comments; values/env-refs come from the helm:"..."
+# `just gen`. Field comments are the Go doc-comments; values/env-refs come from the helm:"..."
 # struct tags. Do not hand-edit between the markers — the gate test (internal/config) fails on drift.
 # ${ENV} refs are injected from the genai-otel-bridge-secrets Secret via envFrom at runtime.
-# >>> BEGIN generated config — do not edit by hand; run `make generate` <<<
+# >>> BEGIN generated config — do not edit by hand; run `just gen` <<<
 config:
   emit:
     telemetry:
@@ -284,7 +284,7 @@ config:
 # >>> END generated config <<<
 
 # ── source examples (generated; commented-out, not active) ─────────────────────
-# >>> BEGIN generated source examples — do not edit by hand; run `make generate` <<<
+# >>> BEGIN generated source examples — do not edit by hand; run `just gen` <<<
 # Example source(s) — NOT active. Copy under `config.sources`, set the secret(s), and
 # adjust per environment. Generated from each source package's ExampleSource().
 # sources:

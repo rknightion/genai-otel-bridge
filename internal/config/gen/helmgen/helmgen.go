@@ -40,13 +40,13 @@ import (
 // Region markers delimit the generated `config:` block inside values.yaml. The generator replaces
 // everything BETWEEN these lines; the gate test extracts the same region and byte-compares it.
 const (
-	BeginMarker = "# >>> BEGIN generated config — do not edit by hand; run `make generate` <<<"
+	BeginMarker = "# >>> BEGIN generated config — do not edit by hand; run `just gen` <<<"
 	EndMarker   = "# >>> END generated config <<<"
 
 	// The source-examples region: a SEPARATE, commented-out block of per-source-type example configs
 	// (rendered from each source package's example value). It documents non-default source shapes
 	// without touching the active generated `config:` block above.
-	ExampleBeginMarker = "# >>> BEGIN generated source examples — do not edit by hand; run `make generate` <<<"
+	ExampleBeginMarker = "# >>> BEGIN generated source examples — do not edit by hand; run `just gen` <<<"
 	ExampleEndMarker   = "# >>> END generated source examples <<<"
 )
 
@@ -81,10 +81,10 @@ func RenderConfigBlock(typ reflect.Type, srcPath string) ([]byte, error) {
 // without an unset-env fatal from a ref inside a comment (injectEnvPlaceholders scans raw text).
 const ECSConfigHeader = `# genai-otel-bridge — ECS (DynamoDB-backed HA) default config — GENERATED, do not edit by hand.
 #
-# Generated from the Go config schema (internal/config/config.go) by ` + "`make generate`" + ` — the SAME
+# Generated from the Go config schema (internal/config/config.go) by ` + "`just gen`" + ` — the SAME
 # source of truth as deploy/helm/values.yaml, so this example can never drift from the schema. The
 # drift gate TestECSConfigExampleUpToDate (internal/config) fails CI if it is stale; re-run
-# ` + "`make generate`" + ` and commit. Field comments below are the Go doc-comments.
+# ` + "`just gen`" + ` and commit. Field comments below are the Go doc-comments.
 #
 # The ECS Terraform module (deploy/ecs/terraform) injects this verbatim as the GENAI_OTEL_BRIDGE_CONFIG
 # container env var; the binary parses it in-memory via config.LoadBytes (no temp file — read-only

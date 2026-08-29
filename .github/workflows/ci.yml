@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The `make ci` gate, fanned out across parallel jobs so a slow leg (race, envtest) no longer
+  # The `just check` gate, fanned out across parallel jobs so a slow leg (race, envtest) no longer
   # serialises behind the others. Each leg is an independent required check; branch protection
   # requires only the `ci-success` aggregator below, so adding/renaming a leg never touches protection.
   gate:
@@ -28,19 +28,19 @@ jobs:
       matrix:
         include:
           - name: build-vet
-            run: make ci-build ci-vet
+            run: just build typecheck
           - name: lint
-            run: make ci-lint ci-lint-acceptance
+            run: just lint
           - name: test
-            run: make ci-test
+            run: just test
           - name: race
-            run: make ci-race
+            run: just test-race
           - name: acceptance
-            run: make ci-acceptance
+            run: just test-acceptance
           - name: envtest
-            run: make ci-envtest
+            run: just test-envtest
           - name: hygiene
-            run: make forbidden-words spdx-check helm-lint tf-validate
+            run: just forbidden-words spdx-check helm-lint tf-validate
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,6 +50,9 @@ jobs:
           go-version-file: go.mod
           # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
           cache: true
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: '1.58.0'
       # IaC toolchain for the `tf-validate` hygiene step: OpenTofu (tofu-native), tflint (correctness),
       # and checkov (AWS security posture). Only the hygiene leg needs them.
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
@@ -78,7 +81,10 @@ jobs:
           go-version-file: go.mod
           # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
           cache: true
-      - run: make ci-e2e
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: '1.58.0'
+      - run: just e2e
 
   # Comprehensive secret scan (complements the forbidden-words guard's curated denylist).
   secret-scan:
@@ -88,20 +94,14 @@ jobs:
         with:
           fetch-depth: 0          # full history so the scan sees every commit on the branch
           persist-credentials: false
-      - name: gitleaks
-        env:
-          GITLEAKS_VERSION: 8.30.1
-        # Download the tarball + the SAME release's own checksums.txt (never a mutable ref) and verify
-        # before extracting — a corrupted/tampered asset fails the build instead of running unverified.
-        run: |
-          set -euo pipefail
-          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
-          curl -sSfLo "$asset" "${base}/${asset}"
-          curl -sSfLo checksums.txt "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
-          grep " ${asset}\$" checksums.txt | sha256sum -c -
-          tar -xzf "$asset" gitleaks
-          ./gitleaks detect --source . --redact --no-banner
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: '1.58.0'
+      - run: just secret-scan
 
   # DynamoDB backend integration tests (coordinate + checkpoint packages + acceptance gate).
   # Runs against dynamodb-local so no live AWS is required. This is a dedicated job (not a matrix
@@ -124,8 +124,10 @@ jobs:
           go-version-file: go.mod
           # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
           cache: true
-      - run: go test ./internal/coordinate/dynamodb/... ./internal/checkpoint/dynamodb/...
-      - run: go test -tags acceptance ./internal/app/ -run TestDynamoDB
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: '1.58.0'
+      - run: just test-dynamodb
 
   # Test coverage -> Codacy. Deliberately NOT in ci-success's `needs`: coverage reporting is
   # informational, so a Codacy outage — or a fork PR with no secret — must never block merges or
@@ -148,7 +150,10 @@ jobs:
           go-version-file: go.mod
           # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
           cache: true
-      - run: make coverage
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: '1.58.0'
+      - run: just coverage
       - name: Upload coverage to Codacy
         if: ${{ env.CODACY_PROJECT_TOKEN != '' }}   # skip on fork PRs (secret unavailable)
         uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1.3.0

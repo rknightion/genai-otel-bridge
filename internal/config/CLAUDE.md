@@ -2,7 +2,7 @@
 
 `config.go` holds the config tree, `Load(path)`, and `Validate(known)`. Fixtures in `testdata/`.
 
-## Helm default-config generation (`helm:` tags + `make generate`)
+## Helm default-config generation (`helm:` tags + `just gen`)
 
 The chart's default `config:` block (`deploy/helm/values.yaml`) is **generated from the structs in
 `config.go`** — never hand-edit it. Each field carries a `helm:"..."` render tag alongside its
@@ -15,9 +15,9 @@ example element. **Every field must be covered** — an untagged scalar leaf is 
 
 Generator: `internal/config/gen` (binary) → `internal/config/gen/helmgen` (render lib; takes a
 `reflect.Type` + the source path, so it does NOT import `config` — no cycle with the in-package gate
-test). Run `make generate` (or `go generate ./internal/config/`) after any field/tag/default/
+test). Run `just gen` (or `go generate ./internal/config/`) after any field/tag/default/
 doc-comment change. `TestHelmGeneratedConfigUpToDate` re-renders in-memory and byte-compares the
-committed `values.yaml` region; it fails with "run `make generate`" on drift. This **superseded**
+committed `values.yaml` region; it fails with "run `just gen`" on drift. This **superseded**
 the old reflection-parity `helm_alignment_test.go` (a generated file can't drift from its generator).
 Note `LoopConfig.BucketSettle` default is **10m** (live-measured; 3m was insufficient).
 
@@ -32,7 +32,7 @@ this block for drift.
 
 ### ECS config example (`deploy/ecs/terraform/config.example.yaml` — same generator, ECS profile)
 
-`make generate` ALSO writes `deploy/ecs/terraform/config.example.yaml` from the SAME `config.Config`
+`just gen` ALSO writes `deploy/ecs/terraform/config.example.yaml` from the SAME `config.Config`
 schema, via `helmgen.RenderECSConfigFile` under a `helmgen.Profile` (`helmgen.ECSProfile()`). A `Profile`
 customises the type-driven render for a non-Helm target: `Include` force-renders specific `helm:"omit"`
 field paths (keyed `"StructName.FieldName"`) and `Defaults` overrides a tagged scalar default. The ECS

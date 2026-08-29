@@ -35,7 +35,7 @@ module "genai_otel_bridge" {
   subnet_ids = ["subnet-0aaa", "subnet-0bbb"] # >= 2 AZs for active/standby spread
 
   # config_yaml is OMITTED → the module injects its bundled config.example.yaml (generated from the Go
-  # schema by `make generate`, drift-gated in CI — see "Generated reference config" below), with
+  # schema by `just gen`, drift-gated in CI — see "Generated reference config" below), with
   # ha.dynamodb.table auto-rewritten to "<name>-ha". That default runs one Portkey source (analytics)
   # with DynamoDB-backed HA. deployment_environment resolves ${ENV}; aws_region lets the DynamoDB SDK
   # resolve the region (the default config omits ha.dynamodb.region).
@@ -75,7 +75,7 @@ To run a **different** config (extra sources/loops, the second vendor, custom go
 ### Generated reference config (`config.example.yaml`)
 
 `config.example.yaml` is **generated** from the Go config schema (`internal/config/config.go`) by
-`make generate` — the same source of truth and the same generator that produce the Helm chart's
+`just gen` — the same source of truth and the same generator that produce the Helm chart's
 `values.yaml` `config:` block, but rendered under the **ECS profile** (`ha.coordinator`/`ha.checkpoint` =
 `dynamodb` and the `ha.dynamodb` block included at its defaults, which the chart omits). A drift gate
 (`TestECSConfigExampleUpToDate`) fails CI if a schema change is not regenerated and committed, so this

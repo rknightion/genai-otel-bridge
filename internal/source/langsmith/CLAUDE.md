@@ -165,4 +165,4 @@ own bill (trace/span ingestion + retention tier).
 
 All `sessions` + `runs` + `usage` settings knobs are surfaced in the Helm chart example block via
 `langsmith.ExampleSource()` + `langsmith.ExampleSettingsComments()` (every key at its package default,
-with per-key head-comments). `make generate` regenerates `deploy/helm/values.yaml`.
+with per-key head-comments). `just gen` regenerates `deploy/helm/values.yaml`.

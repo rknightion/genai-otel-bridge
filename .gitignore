@@ -12,7 +12,7 @@
 # SBOMs land in /dist/sbom/, already covered by /dist/ above.
 /THIRD_PARTY_NOTICES.md
 
-# Pinned CI tooling (installed by `make tools` / `make tools-e2e`)
+# Pinned task tooling (installed by just recipes)
 /.tools/
 
 # Codacy scratch artifacts (the tuning skill's intermediates + run summary).

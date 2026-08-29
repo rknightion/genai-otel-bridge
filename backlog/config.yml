@@ -2,8 +2,8 @@ project_name: "genai-otel-bridge"
 default_status: "To Do"
 statuses: ["To Do", "In Progress", "Parked", "Done"]
 definition_of_done:
-  - "make gate"
-  - "go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)"
+  - "just check"
+  - "just test-acceptance (only if a §9 acceptance seam changed)"
 labels: []
 date_format: yyyy-mm-dd
 max_column_width: 20

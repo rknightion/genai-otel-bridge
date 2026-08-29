@@ -7,7 +7,7 @@
 // The Helm chart's default `config:` block (deploy/helm/values.yaml) is GENERATED from the structs
 // below — their helm:"..." render tags supply values/env-refs and their Go doc-comments become the
 // chart's inline comments. After changing any field, tag, default, or doc-comment, regenerate with
-// `make generate` (the go:generate runs from the module root so the relative paths resolve);
+// `just gen` (the go:generate runs from the module root so the relative paths resolve);
 // TestHelmGeneratedConfigUpToDate gates against drift.
 //
 //go:generate sh -c "cd ../.. && go run ./internal/config/gen"

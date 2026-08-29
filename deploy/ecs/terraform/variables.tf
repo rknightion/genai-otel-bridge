@@ -83,7 +83,7 @@ variable "config_yaml" {
     The rendered genai-otel-bridge YAML config injected as GENAI_OTEL_BRIDGE_CONFIG.
 
     Leave null (the default) to CONSUME the module's bundled, schema-generated config.example.yaml —
-    the same file `make generate` produces from internal/config/config.go (drift-gated in CI), with
+    the same file `just gen` produces from internal/config/config.go (drift-gated in CI), with
     ha.dynamodb.table auto-rewritten to "<var.name>-ha" to match the table this module creates. That
     default runs one Portkey source (analytics loop) with DynamoDB-backed HA; $${ENV} resolves from
     var.deployment_environment and the Grafana Cloud / Portkey secrets come from var.secret_arns.

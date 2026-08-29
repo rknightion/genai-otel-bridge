@@ -242,7 +242,7 @@ All `groups` + `logs_export` settings knobs are surfaced in the Helm chart examp
 `portkey.ExampleSource()` + `portkey.ExampleSettingsComments()` (every key at its package default,
 with per-key head-comments rendered as `# # comment` in the commented-out block). Groups defaults
 are derived from `defaultGroupsSettings()` (extracted from `newGroupsLoop`) so the example can't
-drift. `make generate` regenerates `deploy/helm/values.yaml`.
+drift. `just gen` regenerates `deploy/helm/values.yaml`.
 
 Tests: `fakePortkey`/`fakeGroups` `httptest.Server`s; in-package `lp.now` clock injection; table-driven
 `derive`/`deriveGroups`; `TestCollectNeverSelectsContentFields` + `TestGroupsCollectQueryParams` assert

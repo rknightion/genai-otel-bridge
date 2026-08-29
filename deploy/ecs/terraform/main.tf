@@ -214,7 +214,7 @@ module "cluster" {
 
 locals {
   # Effective config: the caller's config_yaml, or — when null — the module's bundled, schema-generated
-  # config.example.yaml (the SAME file `make generate` produces, drift-gated in CI). The generated file
+  # config.example.yaml (the SAME file `just gen` produces, drift-gated in CI). The generated file
   # carries the generic table name "genai-otel-bridge-ha" (it's name-agnostic); rewrite it to the table
   # THIS module actually creates ("<var.name>-ha"). The token is unique to the table line (lock_name is
   # "…-leader", service_namespace is "genai-otel-bridge" with no "-ha"), so the replace is unambiguous.

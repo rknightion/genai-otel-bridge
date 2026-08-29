@@ -56,7 +56,7 @@ sources:
 Build and run:
 
 ```bash
-make build
+just build
 GC_OTLP_ENDPOINT=... GC_INSTANCE_ID=... GC_OTLP_TOKEN=... ENV=dev PORTKEY_API_KEY=... \
   bin/genai-otel-bridge --config config.yaml
 ```
@@ -84,13 +84,13 @@ See [`followup.md`](./followup.md) for deferred/future work.
 ## Build & test
 
 ```bash
-make gate     # vet + test + lint + spdx-check + build  — the green bar before any commit
-make build    # -> bin/genai-otel-bridge (version stamped via git describe)
-make test     # go test ./...
-make lint     # golangci-lint run
+just check    # fmt + build + vet + lint + gen + tests + hygiene — the green bar before any commit
+just build    # -> bin/genai-otel-bridge (version stamped via git describe)
+just test     # go test ./...
+just lint     # golangci-lint run
 ```
 
-Requires Go 1.27+. Acceptance gates: `go test -tags acceptance ./internal/app/`.
+Requires Go 1.27+. Acceptance gates: `just test-acceptance`.
 
 ## Documentation
 

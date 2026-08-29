@@ -61,7 +61,7 @@ gcx resources pull <selector> -p deploy/grafana/self-obs -o yaml
 
 A tabbed, dynamic dashboard (v2 `TabsLayout` + responsive `AutoGridLayout`) covering the
 bridge's own health across all signals. The manifest is generated from `gen_dashboard.py`;
-edit the generator and run `make gen-dashboard` to regenerate it.
+edit the generator and run `just gen-dashboard` to regenerate it.
 
 ### Dashboard tabs
 

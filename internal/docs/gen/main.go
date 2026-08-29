@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Command gen renders the telemetry signal catalogue from each emitting package's Signals() and
-// splices it into docs/telemetry.md between the generated markers. Run via `make generate`.
+// splices it into docs/telemetry.md between the generated markers. Run via `just gen`.
 package main
 
 import (

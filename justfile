@@ -11,7 +11,7 @@ helm_version := env('HELM_VERSION', 'v4.2.4')
 # renovate: datasource=github-releases depName=k3d-io/k3d versioning=semver
 k3d_version := env('K3D_VERSION', 'v5.9.0')
 # renovate: datasource=docker depName=rancher/k3s versioning=semver
-k3s_image := env('K3S_IMAGE', 'rancher/k3s:v1.36.4-k3s1')
+k3s_image := env('K3S_IMAGE', 'rancher/k3s:v1.36.4-rc1-k3s1')
 # renovate: datasource=github-releases depName=google/go-licenses versioning=semver
 go_licenses_version := env('GO_LICENSES_VERSION', 'v2.0.1')
 # renovate: datasource=github-releases depName=anchore/syft versioning=semver

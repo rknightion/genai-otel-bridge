@@ -17,6 +17,9 @@ K3D_VERSION           ?= v5.9.0
 K3S_IMAGE             ?= rancher/k3s:v1.36.4-k3s1
 IMAGE                 ?= genai-otel-bridge:dev
 E2E_HELPER_IMAGE      ?= genai-otel-bridge-e2e-helper:dev
+# NOTE: the install path below carries the /v2 suffix. A Go module at v2+ must be
+# imported with that suffix, and Renovate bumps the version without knowing to
+# change the path — which is exactly how this broke. A v3 bump needs both edited.
 GO_LICENSES_VERSION   ?= v2.0.1
 SYFT_VERSION          ?= v1.51.1
 
@@ -193,7 +196,7 @@ ci-e2e: helm-package k3d-e2e
 tools-licensing:
 	@mkdir -p $(TOOLS_DIR)
 	@{ test -x $(TOOLS_DIR)/go-licenses && $(TOOLS_DIR)/go-licenses --help >/dev/null 2>&1; } || \
-	  GOBIN=$(TOOLS_DIR) $(GO) install github.com/google/go-licenses@$(GO_LICENSES_VERSION)
+	  GOBIN=$(TOOLS_DIR) $(GO) install github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION)
 tools-sbom:
 	@mkdir -p $(TOOLS_DIR)
 	@{ test -x $(TOOLS_DIR)/syft && $(TOOLS_DIR)/syft version >/dev/null 2>&1; } || \

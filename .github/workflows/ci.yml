@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# Cancel a superseded run on the same ref (rapid pushes / PR updates) to free runners.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # The `make ci` gate, fanned out across parallel jobs so a slow leg (race, envtest) no longer
   # serialises behind the others. Each leg is an independent required check; branch protection

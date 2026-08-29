@@ -1,10 +1,10 @@
 ---
 id: GOB-0016
 title: Migrate the repo task surface to just and retire Makefiles and ad-hoc scripts
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-28 19:15'
-updated_date: '2026-08-29 12:50'
+updated_date: '2026-08-29 14:14'
 labels:
   - 'wave:2-fleet'
 dependencies: []
@@ -828,22 +828,22 @@ Green at every step. Do not delete anything until step 7.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A top-level justfile exists defining all seven mandatory recipes (default, setup, fmt, fmt-check, lint, test, check), with set shell := ["bash", "-euo", "pipefail", "-c"] as its header and no unstable just features
-- [ ] #2 just check passes locally and is the union of ci.yml's gate matrix legs: build, typecheck (go vet), lint (plain + acceptance build tags), gen-check, test, test-race, test-acceptance, test-envtest, forbidden-words, spdx-check, helm-lint, tf-validate, fmt-check
-- [ ] #3 just --fmt --check exits 0, and just --list plus just --dump --dump-format json exit 0 with a # doc comment and a [group(...)] on every public recipe; only default and setup are ungrouped
-- [ ] #4 Makefile is deleted (git rm Makefile); scripts/envtest.sh and scripts/sbom.sh are absorbed into the test-envtest and sbom recipes and deleted
-- [ ] #5 Every KEEP script is byte-identical and reachable via a recipe: notices.sh via just notices, publish.sh via just publish ([confirm]-gated), k3d-e2e.sh via just e2e / k3d-up / k3d-down, forbidden-words.sh via just forbidden-words, spdx-check.sh via just spdx-check, gen_dashboard.py via just gen-dashboard, git-hooks/pre-commit via just install-hooks
-- [ ] #6 ci.yml's gate matrix, e2e, secret-scan, dynamodb-backends and coverage jobs call just recipes via a pinned extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4 step with just-version '1.58.0'; publish.yml's notices job runs just notices; the ci-success job (name, if: always(), needs: [gate, e2e, secret-scan, dynamodb-backends]) and every rknightion/.github reusable uses: call are unchanged
-- [ ] #7 The four generated-marker strings embedding 'make generate' in internal/config/gen/helmgen/helmgen.go and internal/docs/gen/render/render.go say 'just gen', and deploy/helm/values.yaml, deploy/ecs/terraform/config.example.yaml and docs/telemetry.md are regenerated and committed in the same commit so the drift tests stay green
-- [ ] #8 AGENTS.md carries the Task interface section naming just check as the gate (no pasted recipe list), and README.md, CONTRIBUTING.md, LICENSING.md, docs/installation.md, docs/dashboards.md, deploy/grafana/README.md, test/eks/README.md and the nested CLAUDE.md files under cmd/ deploy/ and internal/ no longer reference make
-- [ ] #9 scripts/cloud-environment-setup.sh installs just 1.58.0 from casey/just with SHA256SUMS verification, calls just setup instead of make tools tools-e2e, and closes by naming just check
-- [ ] #10 backlog/config.yml's definition_of_done reads 'just check' and 'just test-acceptance (only if a §9 acceptance seam changed)'
+- [x] #1 A top-level justfile exists defining all seven mandatory recipes (default, setup, fmt, fmt-check, lint, test, check), with set shell := ["bash", "-euo", "pipefail", "-c"] as its header and no unstable just features
+- [x] #2 just check passes locally and is the union of ci.yml's gate matrix legs: build, typecheck (go vet), lint (plain + acceptance build tags), gen-check, test, test-race, test-acceptance, test-envtest, forbidden-words, spdx-check, helm-lint, tf-validate, fmt-check
+- [x] #3 just --fmt --check exits 0, and just --list plus just --dump --dump-format json exit 0 with a # doc comment and a [group(...)] on every public recipe; only default and setup are ungrouped
+- [x] #4 Makefile is deleted (git rm Makefile); scripts/envtest.sh and scripts/sbom.sh are absorbed into the test-envtest and sbom recipes and deleted
+- [x] #5 Every KEEP script is byte-identical and reachable via a recipe: notices.sh via just notices, publish.sh via just publish ([confirm]-gated), k3d-e2e.sh via just e2e / k3d-up / k3d-down, forbidden-words.sh via just forbidden-words, spdx-check.sh via just spdx-check, gen_dashboard.py via just gen-dashboard, git-hooks/pre-commit via just install-hooks
+- [x] #6 ci.yml's gate matrix, e2e, secret-scan, dynamodb-backends and coverage jobs call just recipes via a pinned extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4 step with just-version '1.58.0'; publish.yml's notices job runs just notices; the ci-success job (name, if: always(), needs: [gate, e2e, secret-scan, dynamodb-backends]) and every rknightion/.github reusable uses: call are unchanged
+- [x] #7 The four generated-marker strings embedding 'make generate' in internal/config/gen/helmgen/helmgen.go and internal/docs/gen/render/render.go say 'just gen', and deploy/helm/values.yaml, deploy/ecs/terraform/config.example.yaml and docs/telemetry.md are regenerated and committed in the same commit so the drift tests stay green
+- [x] #8 AGENTS.md carries the Task interface section naming just check as the gate (no pasted recipe list), and README.md, CONTRIBUTING.md, LICENSING.md, docs/installation.md, docs/dashboards.md, deploy/grafana/README.md, test/eks/README.md and the nested CLAUDE.md files under cmd/ deploy/ and internal/ no longer reference make
+- [x] #9 scripts/cloud-environment-setup.sh installs just 1.58.0 from casey/just with SHA256SUMS verification, calls just setup instead of make tools tools-e2e, and closes by naming just check
+- [x] #10 backlog/config.yml's definition_of_done reads 'just check' and 'just test-acceptance (only if a §9 acceptance seam changed)'
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 make gate
-- [ ] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
+- [x] #1 make gate
+- [x] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
 
 ## Implementation Plan
@@ -860,6 +860,8 @@ Green at every step. Do not delete anything until step 7.
 
 <!-- SECTION:NOTES:BEGIN -->
 Campaign coordination authorizes this formerly Wave 2 lane under the current unified campaign; the historical wave-start gate is superseded while the task standards remain binding.
+
+Validation: just check; Just format/list/dump; Actionlint; targeted Zizmor; shell syntax; preserved-file hashes; official Just release checksum probes; and CodeRabbit (0 findings) passed. Exact source commit c3220bb5ecfc08017fd3e3386fd9e09a2de24ef9 passed CI run 33256695268, including Linux e2e and ci-success. The known local macOS/OrbStack e2e failure was not replayed after CI supplied the Linux proof.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -905,3 +907,9 @@ Eleven of the 42 lanes arrived at this shape independently before it was ratifie
 **If this repo has no such legs, it has no `ci` recipe at all** and `check` is the whole gate. Do not add an empty one.
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced the Makefile task surface with Just, migrated CI, documentation, generated markers, Renovate pins, and the cloud bootstrap, and removed the absorbed wrappers. Local gates and the exact-SHA GitHub CI run passed. Cloud bootstrap installation was syntax- and release-asset-verified but not run in a cloud container; the successful GitHub-hosted Linux e2e is the runtime proof.
+<!-- SECTION:FINAL_SUMMARY:END -->

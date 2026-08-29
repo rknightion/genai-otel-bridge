@@ -5,7 +5,7 @@ golangci_lint_version := env('GOLANGCI_LINT_VERSION', 'v2.13.2')
 # renovate: datasource=github-tags depName=kubernetes-sigs/controller-runtime versioning=loose
 setup_envtest_version := env('SETUP_ENVTEST_VERSION', 'release-0.23')
 # renovate: datasource=github-releases depName=kubernetes/kubernetes versioning=semver
-envtest_k8s_version := env('ENVTEST_K8S_VERSION', '1.35.0')
+envtest_k8s_version := env('ENVTEST_K8S_VERSION', '1.37.0')
 # renovate: datasource=github-releases depName=helm/helm versioning=semver
 helm_version := env('HELM_VERSION', 'v4.2.4')
 # renovate: datasource=github-releases depName=k3d-io/k3d versioning=semver

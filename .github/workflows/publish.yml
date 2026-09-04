@@ -81,7 +81,7 @@ jobs:
       id-token: write
       attestations: write
       security-events: write
-    uses: rknightion/.github/.github/workflows/container-publish.yml@79a72d215e806c12876526ff30fbd524250e1bf9 # v1.17.1
+    uses: rknightion/.github/.github/workflows/container-publish.yml@ff43f62eaec9f41d49b9a208d86b2eb932c97056 # v1.18.1
     with:
       release-tag: ${{ inputs.release_tag }}
       helm-chart-path: deploy/helm
@@ -95,7 +95,7 @@ jobs:
       contents: write
     steps:
       - name: Harden the runner (audit egress)
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
       - name: Checkout repository

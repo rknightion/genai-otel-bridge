@@ -59,7 +59,7 @@ jobs:
         if: matrix.name == 'hygiene'
         with:
           tofu_wrapper: false
-      - uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
+      - uses: terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6.3.1
         if: matrix.name == 'hygiene'
       - name: install checkov
         if: matrix.name == 'hygiene'
@@ -172,7 +172,7 @@ jobs:
     name: helm schema validate (kubeconform)
     permissions:
       contents: read
-    uses: rknightion/.github/.github/workflows/helm-validate.yml@ff43f62eaec9f41d49b9a208d86b2eb932c97056 # v1.18.1
+    uses: rknightion/.github/.github/workflows/helm-validate.yml@27b0bd31dbe7bf238b89773d00d60ed5dfe187bb # v1.20.0
     with:
       # This chart renders CRD kinds (ExternalSecret + SecretStore) that kubeconform has no
       # built-in schema for. Give it the schema rather than reaching for

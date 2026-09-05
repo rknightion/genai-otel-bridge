@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Product-specific additions to the central CodeRabbit defaults.
+# Keep inheritance enabled; shared review policy lives in the owner/coderabbit repository.
+inheritance: true
+reviews:
+  path_filters:
+  - '!deploy/helm/values.yaml'
+  - '!deploy/ecs/terraform/config.example.yaml'
+  - '!docs/telemetry.md'
+  - '!deploy/grafana/self-obs/dashboard-self-obs.yaml'
+  path_instructions:
+  - path: internal/**/*.go
+    instructions: >-
+      Preserve the collect -> sanitize -> single-flight queue -> deterministic emit -> epoch-fenced checkpoint
+      order. Check that a checkpoint cannot advance before settled emission and stale leaders cannot write.
+      Non-retryable rejects advance with a counted gap; retryable failures must not silently lose or duplicate
+      logical buckets. Frozen model and Source/Loop seams require an architecture update when changed.
+  - path: internal/source/**/*.go
+    instructions: >-
+      Keep vendor knowledge behind vendor source packages. Never request prompts, completions or message
+      bodies. Apply the outbound allow/deny policy to labels, log bodies and metadata, with label allow-listing
+      default-deny, and keep attacker- or tenant-selected values within explicit cardinality bounds.
+  - path: internal/httpx/**/*.go
+    instructions: >-
+      Preserve SSRF egress restrictions and cross-host redirect blocking across redirects, alternate address
+      forms and DNS resolution. Do not weaken these controls to accommodate a vendor endpoint without
+      a scoped contract change.

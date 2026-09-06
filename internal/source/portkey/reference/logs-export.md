@@ -104,7 +104,9 @@ promotion to be queryable as `{label=...}`. Until then they land as structured m
   `Deps.OnGraphSkipped` (`export_failed`/`export_stuck`); skipped lines and unparseable trace-id
   values reuse the same self-metric (`line_oversize`, `line_unparseable`, `trace_id_unparsed`), so a
   systematic upstream format change that drops 100% of records is alertable rather than a warn line
-  nobody sees. A download over the cap errors loudly rather than truncating silently.
+  nobody sees. A download over the cap errors loudly rather than truncating silently. All of these
+  land on `genai_otel_bridge_source_graph_unavailable_total{loop=logs_export,graph=...}`, where the
+  `graph` label carries a skip REASON, not a graph name.
 - **An over-size window PARKS rather than retrying.** Exceeding `max_pages_per_window` moves the
   cursor to phase `blocked`: the draft export is created AT MOST ONCE, each later tick re-raises the
   loud error from cursor state without re-creating, and `window_oversize` fires once on entry.

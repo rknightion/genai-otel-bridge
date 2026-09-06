@@ -38,7 +38,8 @@ sample or record.
   rather than masking a config or permission problem as empty data.
 - Any graph with `is_quota_exceeded=true` discards the whole batch with no advance
   (`ErrQuotaExceeded`, F34). There is no partial success.
-- An unknown graph name fails fast at `New`. The response body is capped at 1 MiB.
+- An unknown graph name fails fast at `New`. The supported set is `cost,errors,latency,requests,
+  tokens,users`. The response body is capped at 1 MiB.
 - **Settle-exceedance detection (`revision.go`) is detection only, never a re-emit.** `Collect`
   fetches from a widened lower bound so the response re-includes settled buckets, while emit keeps
   using the forward-only `start` and stays byte-identical. A bounded in-memory `revisionHistory`
@@ -50,14 +51,17 @@ sample or record.
 ## `api_key_use_cases`: N internal passes for metrics, fan-out for logs
 
 - **analytics and groups use ONE loop instance with N passes.** Each pass fetches with that
-  use-case's `api_key_ids` CSV and stamps the slug on every sample. `Key()` is unchanged regardless of
-  use-case count, so a migration never resets a watermark. **NEVER fan out into one loop instance per
-  use-case**: `ValidateOwnership` (M7) rejects it at startup (DESIGN §7 RP3).
+  use-case's `api_key_ids` CSV and stamps the slug as `Labels["api_key_use_case"]` on every sample.
+  `Key()` is unchanged regardless of use-case count, so a migration never resets a watermark.
+  **NEVER fan out into one loop instance per use-case**: `ValidateOwnership` (M7) rejects it at
+  startup (DESIGN §7 RP3).
 - analytics keeps a **per-slug `revisionHistory`** so a late arrival for one key cannot inflate
   another's revision counter.
 - **`logs_export` DOES fan out**, one loop per use-case, which is ownership-safe because
   `logsExportLoop` is not a `SeriesDeclarer`. `Key()` folds the slug into the naming component so each
-  instance owns a distinct cursor watermark.
+  instance owns a distinct cursor watermark. There the slug is a RECORD attribute
+  (`RecordAttributes["api_key_use_case"]`, queryable as `| api_key_use_case="..."`), so it needs no
+  GS1 stream-label promotion.
 
 ## groups: window-total snapshot
 
@@ -68,6 +72,9 @@ is not a re-parameterised graphs loop.
   trailing window `[now-window_span, now-settle]`. The validator skips bucket-math and the scheduler
   never accelerates it or counts `backfill_unstorable` against it. `Watermark.Time = now` is a
   forward-only liveness heartbeat; `since` is unused.
+- **`settle >= window_span` is rejected at `New`** (review-H1): settle comes off the UPPER bound and
+  `window_span` off the LOWER one, so an equal or larger settle inverts the query window
+  (`time_of_generation_min > max`) into a silent-empty or nonsense result.
 - **1DPM comes from minute-truncated timestamps.** Gauges are stamped at `(now-settle).Truncate(1m)`
   so two polls in the same wall-clock minute share a timestamp and Mimir dedups. The FETCH still uses
   the precise `now-settle` bound.
@@ -103,6 +110,9 @@ alarm; no traffic inside the 7d probe window means proceed unverified and re-che
 Set the SAME value on BOTH analytics and groups. `logs_export` is already hard-scoped via
 `workspace_id`, which Portkey does respect. Empty means no check.
 
+**analytics reads `expected_workspace` out of its own `settings:` map**, and it is the only knob it
+takes that way - everything else on that loop comes from structured `LoopConfig` fields.
+
 ## logs_export
 
 A job lifecycle (create, start, poll, download, page), not a GET. It emits `Batch.Logs` to the
@@ -125,6 +135,8 @@ gateway `/v1/logs` on the same base and auth as metrics, landing in Loki.
   allow-list: `Body` is never set, nested objects and arrays under an allowed key are skipped rather
   than stringified, a JSON `null` is dropped rather than emitted as `""`, and unlike the langsmith
   runs strip arrays are never rendered as csv. `source.Guard.SanitizeLogs` is the backstop.
+- **The end-to-end content gate lives in `internal/app`:** `TestLogsExportContentLeakConformanceGate`.
+  A strip change that only passes this package's tests has not been checked.
 
 Read `reference/logs-export.md` before changing the download path, the strip, or the failure
 handling: it holds the SSRF and credential-redaction rules, the chunker and Range-resume mechanics,

@@ -92,6 +92,8 @@ GitHub Issues is indexed in the "Closed GitHub issues" doc and cited by its orig
 task ID. Read the fan-out protocol doc before designing a wave, and the wave operating model doc for
 this project's own rules.
 
+- **Never pass `--notes` or `--plan` bare.** Both *silently replace* the whole section and exit 0, so
+  another session's writes vanish with no warning. Use `--append-notes` and `--append-plan`.
 - **`backlog/config.yml` is the one file to hand-edit.** List-valued keys cannot be set through
   `backlog config set`, and the tool directs you to the file. Every other task, draft, doc, decision
   and milestone file is CLI-only: section boundaries are HTML-comment markers, and breaking one

@@ -12,6 +12,16 @@ config that way rather than importing `config`.
 Unlike the product data plane (hand-rolled `emit/otlp` encoder), this package uses the real OTel-Go
 SDK, so SDK features (cardinality limits, views) apply here and only here.
 
+`internal/httpx` and `internal/emit` are decoupled from `selfobs` the same way: neither imports it.
+`main.go` wires an `httpx.Observer` to `Metrics.ObserveUpstreamRequest` and the emit-leg observer to
+`ObserveEmitRequest`, giving `upstream_request_duration_seconds{target,method,status_class}` and
+`emit_request_duration_seconds{plane,status_class}`. Keep new instrumentation on that pattern.
+
+- The histogram `_count` per `status_class` IS the request total and error ratio, so neither leg
+  needs a separate counter.
+- **`status_class` is deliberately the class (`2xx`..`5xx`, or `error` when no response arrived),
+  never the raw status code and never the path.** It is a label on a hot instrument.
+
 ## Self identity (H4)
 
 - Separate `ServiceNamespace` (product `genai-otel-bridge` to self `genai-otel-bridge-meta`) so
@@ -56,6 +66,10 @@ Only a configured sub-floor value is clamped up, and that clamp is logged.
   `/debug/pprof/` prefix dispatches `/heap`, `/goroutine` and friends - they are not separate
   handlers. The mutex and block endpoints exist but return empty: the runtime rates are deliberately
   left unset.
+- **push-mode profiling is `pyroscope.Start(buildPyroscopeConfig(cfg))`** to Grafana Cloud Profiles.
+  `buildPyroscopeConfig` is a pure seam with no I/O so it is unit-testable without a network, and the
+  H4 self identity travels in `Tags` (`service_namespace` = the `-meta` namespace,
+  `deployment_environment`, `service_instance_id` = POD_NAME), not in a resource.
 - **Profiling disabled is a pure no-op** (no listener, no agent, no global state). A start failure
   returns a no-op stop *and* the error, and `main` fatals: never run silently un-profiled. Profiling
   runs on leader and standby, wired before the coordinator (decision-ledger #12).

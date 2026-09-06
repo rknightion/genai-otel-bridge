@@ -22,11 +22,12 @@ legitimate.
 ## Backends
 
 - `file/` is per-pod, not shared, so config validation rejects `checkpoint=file` with
-  `coordinator=lease`. `New(path, ignoreInvalid)`: `false` refuses to start on corrupt YAML, `true`
-  logs loudly and bootstraps empty. An absent key is a zero `Watermark{}`, not an error.
+  `coordinator=lease`. Writes are atomic temp-then-rename and all access is mutex-guarded; keep both.
+  `New(path, ignoreInvalid)`: `false` refuses to start on corrupt YAML, `true` logs loudly and
+  bootstraps empty. An absent key is a zero `Watermark{}`, not an error.
 - `configmap/` keeps one JSON watermark per data key in a single ConfigMap. RMW under optimistic
   concurrency: a `resourceVersion` 409 re-reads and retries (5 retries), and a concurrent writer's
-  newer watermark then trips `CheckMonotonic`. A corrupt value makes `Load` error and `Save` refuse
+  newer watermark then trips `CheckMonotonic`. A single-writer `mu` serialises the RMW loop. A corrupt value makes `Load` error and `Save` refuse
   to overwrite, never clobber. Data keys are sanitised to `[-._a-zA-Z0-9]+` plus a 12-char SHA256
   suffix of the full logical key, so sanitisation cannot collide and the key is stable across
   restarts. Payload is bounded at 900 KiB for headroom under the 1 MiB API cap.

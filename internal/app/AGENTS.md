@@ -32,8 +32,8 @@ literal.
   backstop, and a content opt-in on a metrics loop has no effect on the guard at all.
 - A loop's per-loop release is the union of **all three** of its content-governance knobs
   (`settings.extra_record_fields`, `extra_indexed_fields`, `metadata_record_fields`). Considering
-  only the first is what once let a gray key promoted through one of the other two stay deny-dropped
-  while looking allow-listed - deny beats allow - silently eating every affected record. Floor keys
+  only the first lets a gray key promoted through one of the other two stay deny-dropped while
+  looking allow-listed - deny beats allow - which silently eats every affected record. Floor keys
   stay denied regardless of opt-in.
 - **The indexed/label allow-list is the unconditional union of every registered vendor package's
   `AllowedLabelKeys()`, not gated on which sources are enabled.** Every such key is content-free by

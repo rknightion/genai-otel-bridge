@@ -92,13 +92,17 @@ error. Use `<env ref>` placeholder prose in example blocks, never live syntax.
 
 ## Defaults applied in `Load` (0 is never a safe silent value here)
 
-- `max_dpm` 1 - 0 would mean "emit nothing".
+- `max_dpm` 1 - 0 would mean "emit nothing". It caps **both** planes: `emit.CoalesceDPM` collapses
+  each (series, 60s) group last-write-wins on the product plane, and the self-obs reader interval is
+  clamped to `60s / max_dpm`.
 - `per_metric_cardinality_budget` 10000 - this is a **per-metric** cap (distinct label sets per metric
   name, not global); 0 would mean unlimited in the guard. Negative is rejected.
 - `max_stream_label_keys` 15, the Grafana Cloud Loki `max_label_names_per_series` default (Grafana
   staff can raise it per tenant, in which case raise this knob to match). `internal/app` re-applies
   the default at point of use because struct-built test configs bypass `Load`. The metrics plane is
-  not affected: 3 resource attributes against Mimir's 40.
+  not affected: 3 resource attributes against Mimir's 40. **In the in-cluster-Alloy topology Alloy's
+  own `k8s.*` / `cloud.*` enrichment attributes share this same Loki budget**, and nothing here can
+  enforce that, so size with headroom.
 - `queue.max_batches` 256 and `queue.max_batch_bytes` 1 MiB. At 0, `max_batches` falls through to the
   runner's depth-1 clamp (about a minute of buffering instead of the documented hours) and
   `max_batch_bytes` disables the emitter's proactive over-cap split, leaving only the reactive 413
@@ -118,6 +122,8 @@ error. Use `<env ref>` placeholder prose in example blocks, never live syntax.
   and until then lands as structured metadata.
 - `log.format` (`logfmt` | `json`, empty means logfmt) - the handler for the service's own stdout
   logs, which are scraped to Loki, never sent over OTLP. Built in `internal/logging`.
-- `selfobs.profiling` - opt-in, default off. Validated only when `enabled`, and the cross-checks
-  reject a config that lies about intent: `push.*` set with `mode: pull`, or `pull.addr` set with
-  `mode: push`.
+- `selfobs.profiling` - opt-in, default off. `mode` empty means `pull`, whose listener defaults to
+  `:6060`: a dedicated pprof port, **not** the public health port. `push` needs an https (or
+  loopback) endpoint plus `instance_id` and `token`. Validated only when `enabled`, and the
+  cross-checks reject a config that lies about intent: `push.*` set with `mode: pull`, or `pull.addr`
+  set with `mode: push`.

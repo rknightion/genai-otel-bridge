@@ -15,6 +15,8 @@ label low-cardinality. The composition root wires it to
 
 ## SSRF egress guard
 
+- An empty `Config.AllowHosts` means no host allow-list at all: any host that passes the IP guard is
+  reachable. It is default-allow, the opposite of `source.Guard`'s label allow-list.
 - Always blocked, even with `AllowPrivate`: cloud metadata (`169.254.169.254`, `100.100.100.200`,
   `fd00:ec2::254`), CGNAT `100.64.0.0/10`, and link-local. CGNAT is not RFC-1918, so `IsPrivate`
   misses it and it needs its own check.

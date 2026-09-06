@@ -39,12 +39,13 @@ unit, label key, then timestamp to defeat map-iteration randomness. Two fixed bu
   its own error body.
 - OTLP is hand-encoded with `protowire`, wrapping `ResourceMetrics` as request field 1, to avoid
   importing `collector/*`.
-- A 200 carrying an OTLP `partial_success` body is still success and the batch advances, but part of
-  it was dropped past the taxonomy. `post()` decodes it from the raw pre-redaction bytes and fires
-  `Config.OnPartialReject(plane, n, msg)`. The emitter is loop-agnostic and owns no metrics or
-  logging, so the composition root (`cmd/genai-otel-bridge/main.go`) wires that to
-  `metrics.ObserveEmitPartialReject` plus a rate-limited warn. No confirmed backend emits this form;
-  the in-cluster Alloy topology could.
+- A 200 carrying an OTLP `partial_success` body (`rejected_data_points` / `rejected_log_records`) is
+  still success and the batch advances, but part of it was dropped past the taxonomy. `post()`
+  decodes it from the raw pre-redaction bytes and fires `Config.OnPartialReject(plane, n, msg)`. The
+  emitter is loop-agnostic and owns no metrics or logging, so the composition root
+  (`cmd/genai-otel-bridge/main.go`) wires that to `metrics.ObserveEmitPartialReject`
+  (`genai_otel_bridge_emit_partial_success_rejected_total{plane}`) plus a rate-limited warn. No
+  confirmed backend emits this form; the in-cluster Alloy topology could.
 - `CoalesceDPM` in `coalesce.go` is the stateless per-(series, minute) last-write-wins cap, called
   from `schedule.ProcessBatch` before `splitByBucket`. Its collision-safe key is independent of
   `otlp.labelKey`. Suppressions are counted by the caller as

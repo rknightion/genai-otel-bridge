@@ -47,6 +47,10 @@ cap on distinct label-sets per metric name, not a global cap; total cardinality 
 higher. The real ceiling is the downstream Mimir / Adaptive Metrics limit (DESIGN §7 GS2/GS3, Cdx-M3),
 so validate the configured value against the target stack.
 
+**A budget of 0 means UNLIMITED in the guard**, not "block everything". `internal/config` therefore
+defaults an unset `per_metric_cardinality_budget` to 10000 and never passes 0 through. Keep that
+mapping if you add another path into `GuardConfig`.
+
 **The OTel SDK's cardinality limit does not protect the product plane.** That feature only applies to
 the SDK aggregation pipeline; the product data plane uses the hand-rolled `emit/otlp` encoder and
 bypasses it entirely, so `Guard.PerSeriesBudget` is the only cardinality control there. (`internal/selfobs`
@@ -77,5 +81,11 @@ into its record allow-list. Floor keys are denied regardless of opt-in (Cdx-H7).
 
 Cross-cutting composition-root hooks that are not YAML data, passed alongside `config.SourceConfig`.
 Every hook's zero value is a no-op, so tests pass `Deps{}`. Add future cross-cutting dependencies
-(tracer, logger) here rather than widening the constructor again. `OnAuthError` fires on a 401/403 -
-use `source.IsAuthStatus(code)` rather than re-spelling the codes.
+(tracer, logger) here rather than widening the constructor again.
+
+- `UpstreamObserver` is wired into the source's `httpx` client so every outbound call feeds the
+  self-obs upstream-latency histogram. It is passed here, not imported, so `httpx` and
+  `internal/selfobs` never import each other.
+- `OnBucketRevised`, `OnGraphSkipped` and `OnAuthError(loop, source)` are the injected self-metric
+  hooks. `OnAuthError` fires on a 401/403 so a credential failure is its own alertable signal - use
+  `source.IsAuthStatus(code)` rather than re-spelling the codes.

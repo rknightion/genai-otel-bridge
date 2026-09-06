@@ -13,7 +13,7 @@ runs), `-container-mem-bytes` (numerator for `GOMEMLIMIT`).
 On ECS, `-identity` falls back to the Task ARN read from `$ECS_CONTAINER_METADATA_URI_V4/task`
 (`ecs.go`).
 
-## Five flags are alternate entry points, not modes of a normal run
+## Four flags are alternate entry points, not modes of a normal run
 
 Each branches **before** any config or wiring, so none of them needs credentials or a reachable
 backend. Keep that ordering when adding to `main`.
@@ -48,7 +48,7 @@ access to its own lease or checkpoint. Fixed names; the chart is single-instance
   here), which is what makes it safe to run before `cfg.Validate` inside `app.Build`.
 - **A leadership lapse re-campaigns in-process, it does not exit.** Both coordinators rebuild and
   re-enter their acquire loop when leadership is lost while the root ctx is still alive, so a
-  transient kube-apiserver or DynamoDB flap no longer kills the process mid-pod-life; a standby may
+  transient kube-apiserver or DynamoDB flap does not kill the process mid-pod-life; a standby may
   take over for the gap. `app.Run` therefore returns only on root-ctx cancellation (SIGTERM or
   rollout, clean exit 0) or a genuine construction error, which is fatal plus `os.Exit(1)`.
 - `selfobs.SetMemoryLimit(0.9, *memLimit)` runs **before** config load. No-op when the limit is <= 0.

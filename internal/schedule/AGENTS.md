@@ -33,8 +33,8 @@ implements.
   liveness heartbeat at `now`, not a replay frontier. Without the backfill gate, `MaxBackfill == 0`
   makes the floor `now` and produces a spurious skip count every tick.
 - The queue is bounded (cap at least 1) and `Enqueue` blocks when full: backpressure, not drop.
-- `ProcessBatch` calls `emit.CoalesceDPM` before `splitByBucket`, so the DPM cap applies to what is
-  emitted, and suppressions increment
+- `ProcessBatch` calls `emit.CoalesceDPM` before `splitByBucket`, so the `governance.max_dpm` cap
+  (points per series-minute, default 1) applies to what is emitted, and suppressions increment
   `genai_otel_bridge_samples_capped_total{loop,reason="dpm"}`.
 - `SetBeat` wires a per-tick attempt heartbeat, progress rather than success, into `/healthz`. The
   liveness threshold is deliberately the worst legitimate gap between beats, so a leader blocked in

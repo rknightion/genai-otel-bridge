@@ -36,7 +36,8 @@ The `runs` loop is the exception: it is a forward-only windowed log pull (see be
   identifiers never enter process memory. Keep new decode structs equally narrow.
 - Session names are often ephemeral per-experiment hashes, so `session_label_value` defaults to `id`
   and `session_filter` should be set in production to bound cardinality. The per-metric guard budget
-  is the backstop.
+  is the backstop. `session_filter` takes LangSmith's own filter-expression grammar, not a substring:
+  `eq(name, "my-project")`.
 - `AllowedLabelKeys()` in `labels.go` declares this source's content-free label keys; the composition
   root unions and dedupes them against the other vendors. Add a new label key there, not in
   `internal/app`.
@@ -57,6 +58,8 @@ The `runs` loop is the exception: it is a forward-only windowed log pull (see be
   generator. Knobs and defaults live in `settings.go` / `runs_settings.go` and are surfaced in the
   generated Helm example via `ExampleSource()` / `ExampleSettingsComments()`. A new knob without a
   `just gen` run fails `gen-check`.
+- **There is deliberately no `data_source_type` knob.** The parameter is inert on 0.13.5 (probed), so
+  exposing it would be a config surface that does nothing. Do not add one back without re-probing.
 
 ## runs loop
 
@@ -70,10 +73,12 @@ synchronous paginated POST.
   in-flight progress; without it the first window (at `Time == zero`) loops forever.
 - **Delivery is AT-LEAST-ONCE**, not the metric plane's exactly-once. A mid-window leader change
   resumes at `cur.Next`; an emit-then-checkpoint failure may re-emit a page. Loki tolerates dups.
-- **Scope is REQUIRED**: `settings.session_ids` (static csv) wins, else filter-bounded auto-discovery
-  via `GET /sessions` plus `settings.session_filter`, capped at `max_sessions` and cached in memory
-  (`session_refresh` TTL, reset on failover). Fail-fast if NEITHER is set. A LangSmith "session" is a
-  **project** (one per app), each a UUID - it is NOT an environment.
+- **Scope is REQUIRED because `runs/query` 400s without one**, and the tenant has 100+ projects so an
+  unscoped pull is a firehose. `settings.session_ids` (static csv) wins, else filter-bounded
+  auto-discovery via `GET /sessions` plus `settings.session_filter`, capped at `max_sessions` and
+  cached in memory (`session_refresh` TTL, reset on failover). Fail-fast if NEITHER is set, and a
+  filter matching no projects errors loudly rather than advancing over an empty scope. A LangSmith
+  "session" is a **project** (one per app), each a UUID - it is NOT an environment.
 - **`select` is enum-validated server-side and does NOT trim content.** A value outside the accepted
   set 422s the WHOLE `runs/query`, taking the entire loop down from one bad field.
   `validLangsmithSelectEnum` in `runs_strip.go` is the single source of truth, captured verbatim from
@@ -89,6 +94,10 @@ synchronous paginated POST.
 - **`hardDeniedRunsFields` is derived from `source.AbsoluteNeverDenyKeys()`** so it cannot drift from
   the guard backstop, plus the LangSmith-specific `inputs_s3_urls`/`outputs_s3_urls` - signed URLs to
   the raw blobs, i.e. a message body plus a live credential. Opting one in is rejected fail-fast.
+- **The end-to-end content gates live in `internal/app`, not here:**
+  `TestLangsmithRunsContentLeakConformanceGate` (default is content-free) and
+  `TestLangsmithRunsExtraRecordFieldFlows` (the opt-in flows, backstop still holds). A strip change
+  that only passes this package's tests has not been checked.
 - **Producer identity:** `strip` stamps `RecordAttributes["source"] = "langsmith"` on every run, at
   RECORD tier, so portkey and langsmith log data are distinguishable in Loki
   (`| source="langsmith"`) with no stream-label budget cost. The portkey strip mirrors it.

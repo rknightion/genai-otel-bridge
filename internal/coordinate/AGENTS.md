@@ -31,6 +31,9 @@ manual recovery is deleting the checkpoint objects.
 
 ## lease/
 
+- The Lease only reduces overlap and is not a write fence. Single-emit safety comes from the
+  checkpoint fence plus leaderCtx cancellation (`internal/checkpoint`). Never assume the Lease alone
+  prevents double-emit.
 - The async `OnStartedLeading` barrier: client-go runs the callback in a goroutine it does not join,
   and `LeaderElector.Run()` can return before that work finishes. The code sets `elected` inside the
   callback, closes `leadDone` when it returns, and after `Run()` waits on `leadDone` whenever
@@ -49,7 +52,9 @@ manual recovery is deleting the checkpoint objects.
   genuine renewal lapse builds a fresh elector, matching the `dynamodb/` acquire loop. It returns
   only when the root ctx is cancelled or the elector cannot be constructed. Before that, a lapse made
   `Run` return with `ctx.Err() == nil`, fell through `main`'s guard, and exited the process 0
-  mid-pod-life on every k8s API flap.
+  mid-pod-life on every k8s API flap. The drain barrier joins the prior term before the next
+  campaign, and each re-election reads a fresh epoch fence and re-enters `onElected`, which
+  `Scheduler.Run` handles by calling `Runner.Reset()`.
 
 ## dynamodb/
 

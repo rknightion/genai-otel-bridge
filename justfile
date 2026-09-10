@@ -7,7 +7,7 @@ setup_envtest_version := env('SETUP_ENVTEST_VERSION', 'release-0.23')
 # renovate: datasource=github-releases depName=kubernetes/kubernetes versioning=semver
 envtest_k8s_version := env('ENVTEST_K8S_VERSION', '1.37.0')
 # renovate: datasource=github-releases depName=helm/helm versioning=semver
-helm_version := env('HELM_VERSION', 'v4.2.4')
+helm_version := env('HELM_VERSION', 'v4.3.0')
 # renovate: datasource=github-releases depName=k3d-io/k3d versioning=semver
 k3d_version := env('K3D_VERSION', 'v5.9.0')
 # renovate: datasource=docker depName=rancher/k3s versioning=semver

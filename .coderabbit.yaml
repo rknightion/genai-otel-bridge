@@ -25,3 +25,10 @@ reviews:
       Preserve SSRF egress restrictions and cross-host redirect blocking across redirects, alternate address
       forms and DNS resolution. Do not weaken these controls to accommodate a vendor endpoint without
       a scoped contract change.
+knowledge_base:
+  linked_repositories:
+  - repository: m7kni/m7kni-net-site
+    instructions: >-
+      Documentation hub. This repository dispatches documentation changes to the hub, which clones the
+      docs source and builds it. Check docs_path, config_file and the dispatch payload against this
+      repository's entry in the hub's docs-repos.json manifest.

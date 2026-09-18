@@ -15,7 +15,7 @@ k3s_image := env('K3S_IMAGE', 'rancher/k3s:v1.36.4-rc1-k3s1')
 # renovate: datasource=github-releases depName=google/go-licenses versioning=semver
 go_licenses_version := env('GO_LICENSES_VERSION', 'v2.0.1')
 # renovate: datasource=github-releases depName=anchore/syft versioning=semver
-syft_version := env('SYFT_VERSION', 'v1.51.1')
+syft_version := env('SYFT_VERSION', 'v1.52.0')
 # renovate: datasource=github-releases depName=gitleaks/gitleaks versioning=semver extractVersion=^v(?<version>.*)$
 gitleaks_version := env('GITLEAKS_VERSION', '8.30.1')
 

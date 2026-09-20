@@ -27,6 +27,7 @@ keywords:
   - grafana-cloud
 maintainers:
   - name: rknightion
+    email: rob@m7kni.io
     url: https://github.com/rknightion
 annotations:
   artifacthub.io/category: ai-machine-learning
@@ -43,4 +44,4 @@ annotations:
       url: https://github.com/rknightion/genai-otel-bridge
   artifacthub.io/maintainers: |
     - name: rknightion
-      email: rob@rob-knight.com
+      email: rob@m7kni.io

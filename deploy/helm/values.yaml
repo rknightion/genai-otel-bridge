@@ -95,7 +95,7 @@ networkPolicy:
   # a Cilium CiliumNetworkPolicy toFQDNs (see networkpolicy.yaml). A self-hosted / in-VPC source (e.g. a
   # private LangSmith) would instead be the VPC/endpoint CIDR.
   # IMPORTANT (issue #128): the logs_export loop downloads export objects from a signed S3 URL on a
-  # DIFFERENT host than the control-plane API above (config sources[].signed_url_allow_hosts; see
+  # DIFFERENT host than the control-plane API above (config sources[].settings.signed_url_allow_hosts; see
   # internal/source/portkey/CLAUDE.md and docs/DESIGN.md §4.7). Tightening sourceEgressCIDR to just
   # the control-plane API's CIDR WITHOUT also covering that S3 host stalls logs_export downloads. Set
   # exportEgressCIDR (below) to the S3 host's CIDR to express both independently instead of leaving

@@ -52,6 +52,42 @@ The Portkey `logs_export` loop adds a second layer for signed-URL downloads: the
 URL is validated against `settings.signed_url_allow_hosts` with an exact host match before
 any fetch, independent of the dialer guard.
 
+### Accepted residual when using an HTTP proxy
+
+The IP guard is authoritative for direct connections. With an environment-selected proxy,
+hostname destinations retain an accepted DNS-rebinding residual; proxy support does not
+provide the same destination-IP guarantee as a direct connection.
+
+This applies when `HTTP_PROXY` selects a proxy for an HTTP request or `HTTPS_PROXY` selects
+one for an HTTPS request (including their lowercase equivalents), and `NO_PROXY` does not
+bypass it. `checkDest` first resolves the destination locally and checks every returned
+address. After that check, the request can wait for a rate-limit token before the transport
+contacts the proxy. The dial guard checks the proxy's address, not its upstream destination.
+The proxy then resolves the original hostname for forwarding or an HTTPS CONNECT tunnel.
+That later resolution is not pinned to the addresses checked by the bridge. A DNS change
+between these resolutions, or different answers from the bridge's and proxy's resolvers,
+can therefore direct the proxy to an address that the bridge would have rejected.
+
+Exploitation requires all of the following: an operator enables a reachable proxy for the
+request; the requested hostname passes the configured host allow-list (an empty
+`Config.AllowHosts` imposes no host restriction); an attacker can influence that hostname's
+DNS answers or the proxy's resolution; and the proxy can reach the forbidden destination
+without enforcing its own destination-IP restrictions. The signed-URL download allow-list
+still applies, so that path additionally requires an allowed download hostname. Reaching
+an HTTPS destination through CONNECT does not bypass TLS certificate verification; an
+application-level HTTPS exchange also needs a certificate valid for the requested host.
+Blocked IP-literal URLs remain rejected before forwarding.
+
+The accepted operating posture is direct egress. Keep proxy variables unset, or bypass the
+proxy for every relevant destination with `NO_PROXY`, to retain the direct dial guarantee.
+If a proxy is required, its operator must enforce destination-IP restrictions on the actual
+upstream connection, including metadata, link-local and CGNAT addresses and, unless
+explicitly permitted, private, loopback and unspecified addresses. A hostname allow-list
+alone does not close this resolution gap. Pod egress restrictions that only allow the proxy
+also do not constrain where that proxy forwards traffic; enforce the policy at the proxy
+or its egress boundary. Pinning checked addresses through proxy forwarding would require
+a separate transport design and is not implemented here.
+
 ---
 
 ## Cross-host redirect block
@@ -94,6 +130,16 @@ The Helm chart deploys a default-deny NetworkPolicy. Egress is whitelisted for:
 - OTLP endpoint (port 443, configurable CIDR)
 - Source APIs (port 443, configurable CIDR)
 
+Source egress must also cover signed-URL object downloads. In particular, Portkey
+`logs_export` downloads from an S3 hostname distinct from its control-plane API, validated
+against `sources[].settings.signed_url_allow_hosts`. When tightening
+`networkPolicy.sourceEgressCIDR`, configure `networkPolicy.exportEgressCIDR` for the export
+destination as well, or provide equivalent destination-aware egress rules covering both
+hosts. Leaving `exportEgressCIDR` empty makes downloads depend on the source egress rule;
+restricting that rule to the API alone stalls downloads (issue #128). Account for address
+changes at both destinations when maintaining CIDRs. With a proxy, enforce these upstream
+permissions at its egress boundary as described above.
+
 Ingress is default-deny except the health port (8080) from any source (required for kubelet
 probes). The pod cannot receive traffic from the product plane.
 
@@ -127,11 +173,11 @@ The pod's ServiceAccount is bound to a **namespace-scoped Role** (not a ClusterR
 
 ## License
 
-genai-otel-bridge is released under the **GNU Affero General Public License v3.0 only**
-(`AGPL-3.0-only`). Every source file carries the SPDX identifier:
+genai-otel-bridge is released under the **Apache License 2.0**
+(`Apache-2.0`). Every source file carries the SPDX identifier:
 
 ```go
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 ```
 
 Third-party dependencies retain their own upstream licenses. See

@@ -27,7 +27,7 @@
 #                - matchName: "otlp-gateway-<region>.grafana.net"   # your Grafana Cloud OTLP host
 #                - matchName: "<your-signed-url-host>"   # Portkey logs_export's S3 signed-download
 #                                                          # host (DIFFERENT from api.portkey.ai —
-#                                                          # see config sources[].signed_url_allow_hosts
+#                                                          # see config sources[].settings.signed_url_allow_hosts
 #                                                          # and values.yaml networkPolicy.exportEgressCIDR)
 #              toPorts:
 #                - ports:
@@ -166,7 +166,7 @@ spec:
     # Replace values.networkPolicy.sourceEgressCIDR with the CIDR of your source endpoints.
     # For FQDN-based control (api.portkey.ai), use Cilium toFQDNs — see header comment above.
     # [issue #128] Portkey's logs_export loop downloads export objects from a signed S3 URL on a
-    # DIFFERENT host than the control-plane API matched here (config sources[].signed_url_allow_hosts;
+    # DIFFERENT host than the control-plane API matched here (config sources[].settings.signed_url_allow_hosts;
     # see internal/source/portkey/CLAUDE.md and docs/DESIGN.md §4.7). Tightening this CIDR to just the
     # control-plane API's range WITHOUT also allowing that S3 host stalls logs_export downloads — set
     # networkPolicy.exportEgressCIDR below to cover it as a separate, independently-tightenable rule.

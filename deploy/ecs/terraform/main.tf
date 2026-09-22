@@ -138,7 +138,7 @@ resource "aws_security_group" "this" {
     cidr_blocks = ["0.0.0.0/0"]
     # [issue #128] "vendor APIs" here covers BOTH the Portkey control-plane API (api.portkey.ai) AND
     # the DIFFERENT host the logs_export loop downloads export objects from (a signed S3 URL — see
-    # config sources[].signed_url_allow_hosts, internal/source/portkey/CLAUDE.md, docs/DESIGN.md §4.7).
+    # config sources[].settings.signed_url_allow_hosts, internal/source/portkey/CLAUDE.md, docs/DESIGN.md §4.7).
     # This rule is already 0.0.0.0/0 so both are reachable today; if you ever narrow it to specific
     # CIDRs, you must include the S3 signed-URL host's range or logs_export downloads stall silently.
     description = "HTTPS: OTLP endpoint + vendor APIs (Portkey control-plane API + its S3 signed-URL export/download host + LangSmith) + DynamoDB public endpoint"

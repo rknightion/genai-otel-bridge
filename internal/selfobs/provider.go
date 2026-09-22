@@ -12,6 +12,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
@@ -58,10 +59,19 @@ func NewProvider(ctx context.Context, cfg ProviderConfig) (*metric.MeterProvider
 			"configured", cfg.Interval, "floor", floor, "max_dpm", cfg.MaxDPM)
 	}
 	mp := metric.NewMeterProvider(
+		metric.WithView(selfHistogramView()),
 		metric.WithResource(res),
 		metric.WithReader(metric.NewPeriodicReader(exp, metric.WithInterval(interval))),
 	)
 	return mp, mp.Shutdown, nil
+}
+
+// selfHistogramView fixes aggregation in code, independently of exporter environment defaults.
+func selfHistogramView() metric.View {
+	return metric.NewView(metric.Instrument{
+		Kind:  metric.InstrumentKindHistogram,
+		Scope: instrumentation.Scope{Name: "genai-otel-bridge/selfobs"},
+	}, metric.Stream{Aggregation: metric.AggregationBase2ExponentialHistogram{MaxSize: 160, MaxScale: 20}})
 }
 
 // minSelfInterval is the smallest export period that keeps the self plane at ≤ maxDPM points/minute:

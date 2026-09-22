@@ -17,8 +17,8 @@ SDK, so SDK features (cardinality limits, views) apply here and only here.
 `ObserveEmitRequest`, giving `upstream_request_duration_seconds{target,method,status_class}` and
 `emit_request_duration_seconds{plane,status_class}`. Keep new instrumentation on that pattern.
 
-- The histogram `_count` per `status_class` IS the request total and error ratio, so neither leg
-  needs a separate counter.
+- `histogram_count(rate(<native histogram>[window]))` per `status_class` is the request total and
+  error-ratio input, so neither leg needs a separate counter.
 - **`status_class` is deliberately the class (`2xx`..`5xx`, or `error` when no response arrived),
   never the raw status code and never the path.** It is a label on a hot instrument.
 

@@ -186,16 +186,16 @@ add(ts(136, "Guard dropped /s by loop (governance)", "rate(genai_otel_bridge_gua
 add(ts(137, "Buckets revised after settle /s", "rate(genai_otel_bridge_bucket_revised_after_settle_total). A settled bucket changed value after bucket_settle (late arrivals). Persistent non-zero => widen the loop's bucket_settle (GenaiOtelBridgeBucketRevisedAfterSettle).",
        "cps", [(f'sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_total{LOOP}[{RI}]))', "{{loop}}")]))
 add(ts(138, "Bucket revision lateness (age p50/p95)", "histogram_quantile over genai_otel_bridge_bucket_revised_after_settle_age_seconds — HOW LATE post-settle revisions are (now - bucketEnd), vs panel 137's how-often. Tune bucket_settle toward p95 to capture them (metrics can't be backfilled — Mimir rejects a changed value at an already-emitted timestamp). Floors at bucket_settle by construction.",
-       "s", [(f'histogram_quantile(0.50, sum by (le, loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds_bucket{LOOP}[{RI}])))', "p50 {{loop}}"),
-             (f'histogram_quantile(0.95, sum by (le, loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds_bucket{LOOP}[{RI}])))', "p95 {{loop}}")], fillop=0))
+       "s", [(f'histogram_quantile(0.50, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{LOOP}[{RI}])))', "p50 {{loop}}"),
+             (f'histogram_quantile(0.95, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{LOOP}[{RI}])))', "p95 {{loop}}")], fillop=0))
 
 # === Tab: Upstream source health =============================================
-add(ts(140, "Upstream request rate by target & status", "rate(genai_otel_bridge_upstream_request_duration_seconds_count) by target (source API host) & status_class. The poller's own pull traffic to vendor APIs.",
-       "reqps", [(f'sum by (target, status_class) (rate(genai_otel_bridge_upstream_request_duration_seconds_count[{RI}]))', "{{target}} {{status_class}}")], calcs=["lastNotNull"]))
-add(ts(141, "Upstream latency p50/p95/p99 by target", "histogram_quantile over genai_otel_bridge_upstream_request_duration_seconds_bucket (cumulative histogram — rate() correct). Time-to-response-headers, excludes limiter wait.",
-       "s", [(f'histogram_quantile(0.50, sum by (le, target) (rate(genai_otel_bridge_upstream_request_duration_seconds_bucket[{RI}])))', "p50 {{target}}"),
-             (f'histogram_quantile(0.95, sum by (le, target) (rate(genai_otel_bridge_upstream_request_duration_seconds_bucket[{RI}])))', "p95 {{target}}"),
-             (f'histogram_quantile(0.99, sum by (le, target) (rate(genai_otel_bridge_upstream_request_duration_seconds_bucket[{RI}])))', "p99 {{target}}")], fillop=0))
+add(ts(140, "Upstream request rate by target & status", "histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds)) by target (source API host) & status_class. The poller's own pull traffic to vendor APIs.",
+       "reqps", [(f'sum by (target, status_class) (histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds[{RI}])))', "{{target}} {{status_class}}")], calcs=["lastNotNull"]))
+add(ts(141, "Upstream latency p50/p95/p99 by target", "histogram_quantile over genai_otel_bridge_upstream_request_duration_seconds (cumulative histogram — rate() correct). Time-to-response-headers, excludes limiter wait.",
+       "s", [(f'histogram_quantile(0.50, sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds[{RI}])))', "p50 {{target}}"),
+             (f'histogram_quantile(0.95, sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds[{RI}])))', "p95 {{target}}"),
+             (f'histogram_quantile(0.99, sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds[{RI}])))', "p99 {{target}}")], fillop=0))
 add(ts(142, "Upstream error ratio by target", "genai-otel-bridge:upstream_error_ratio:5m — fraction of requests to each target with status_class 4xx/5xx/error (incl. timeouts). >0.2 sustained => GenaiOtelBridgeUpstreamErrorBudget. Needs the recording rules pushed.",
        "percentunit", [('genai-otel-bridge:upstream_error_ratio:5m', "{{target}}")], thresholds=steps((None, "green"), (0.2, "red"))))
 add(ts(143, "Auth errors /s (401/403)", "rate(genai_otel_bridge_auth_errors_total) by loop & source. Credential failure (wrong/expired key, missing scope) — distinct from slow/erroring endpoints. GenaiOtelBridgeAuthErrors fires on > 0.",

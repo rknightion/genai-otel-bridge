@@ -38,8 +38,8 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 		}
 		return g
 	}
-	mh := func(n, desc, unit string, bounds []float64) metric.Float64Histogram {
-		h, e := me.Float64Histogram("genai_otel_bridge_"+n, metric.WithDescription(desc), metric.WithUnit(unit), metric.WithExplicitBucketBoundaries(bounds...))
+	mh := func(n, desc, unit string) metric.Float64Histogram {
+		h, e := me.Float64Histogram("genai_otel_bridge_"+n, metric.WithDescription(desc), metric.WithUnit(unit))
 		if e != nil {
 			err = e
 		}
@@ -66,32 +66,11 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	// 10m, making an increase[10m] alert flap. A 0/1 gauge answers it in one query and supports a
 	// non-flapping `== 1 for 15m` alert. Bounded cardinality: the reason attr is the fixed enterDegraded set.
 	m.loopDegraded = mg("loop_degraded", "1 while a loop is degraded (reason attribute), 0 after the clearing commit", "1")
-	// Upstream-API request latency (self-obs): how slow/erroring the APIs we POLL are — distinct from
-	// the latency the product plane republishes. Bucketed by {target,method,status_class}. Boundaries
-	// are in SECONDS (the default OTel boundaries are ms-shaped and wrong for a _seconds histogram).
-	// [#121] Top boundaries extended past 10s to 20/30/60: the LangSmith client timeout is 30s (and its
-	// include_stats calls are documented-slow), and the portkey logs_export DOWNLOAD client (5m timeout)
-	// shares this instrument — so a 11s→29s degradation, one step from timeout, used to be invisible
-	// (everything above 10s pinned in +Inf, so histogram_quantile p95/p99 could not resolve it). Two/three
-	// extra buckets × the existing label set is negligible cardinality. (Downloads' 5-minute regime is only
-	// coarsely covered by the 60s ceiling; a dedicated coarser download instrument is a tracked follow-up.)
-	m.upstreamDur = mh("upstream_request_duration_seconds", "outbound request latency to upstream source APIs (time to response headers)", "s",
-		[]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60})
-	// [#60] Emit-leg POST latency (encode+gzip+POST+retry attempt), bucketed by {plane,status_class}.
-	// The emit POST uses a plain http.Client (30s timeout), NOT the httpx chokepoint feeding upstreamDur,
-	// so without this the entire downstream half of the pipeline had zero latency observability — a
-	// slowly-degrading gateway (creeping p99 that still succeeds in-budget) was invisible until it crossed
-	// the retry budget and flipped to an error. Recorded via an observer injected at the composition root
-	// (mirroring httpx.Observer) so emit and selfobs stay decoupled. Second-shaped buckets to 30s (the
-	// emit client timeout), matching upstreamDur.
-	m.emitDur = mh("emit_request_duration_seconds", "outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs)", "s",
-		[]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30})
-	// How LATE each post-settle bucket revision is (now − bucketEnd, SECONDS). Pairs with the
-	// bucket_revised_after_settle_total counter: the counter says how often, this says how late, so
-	// bucket_settle can be tuned to data (e.g. p95 of this) instead of a guess. Age is ≥ bucket_settle
-	// by construction and bounded by the detection band (≈2×settle), so boundaries span ~5m–1h.
-	m.revisedAge = mh("bucket_revised_after_settle_age_seconds", "age (now − bucketEnd) of a settled bucket observed to change after bucket_settle — how late the late arrival is", "s",
-		[]float64{300, 600, 900, 1200, 1500, 1800, 2400, 3000, 3600})
+	// Histograms use the provider's base2 exponential view; no fixed upper latency boundary.
+	m.upstreamDur = mh("upstream_request_duration_seconds", "outbound request latency to upstream source APIs (time to response headers)", "s")
+	m.emitDur = mh("emit_request_duration_seconds", "outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs)", "s")
+	// Revision age pairs with the revision counter to support tuning bucket_settle.
+	m.revisedAge = mh("bucket_revised_after_settle_age_seconds", "age (now − bucketEnd) of a settled bucket observed to change after bucket_settle — how late the late arrival is", "s")
 	return m, err
 }
 

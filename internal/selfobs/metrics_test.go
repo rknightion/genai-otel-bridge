@@ -4,7 +4,6 @@ package selfobs
 
 import (
 	"context"
-	"slices"
 	"testing"
 	"time"
 
@@ -18,7 +17,7 @@ var _ schedule.Metrics = (*Metrics)(nil) // compile-time: satisfies the seam
 
 func TestMetricsRecordViaManualReader(t *testing.T) {
 	r := metric.NewManualReader()
-	mp := metric.NewMeterProvider(metric.WithReader(r))
+	mp := metric.NewMeterProvider(metric.WithReader(r), metric.WithView(selfHistogramView()))
 	m, err := NewMetrics(mp)
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +41,7 @@ func TestMetricsRecordViaManualReader(t *testing.T) {
 
 func TestObserveUpstreamRequestRecordsHistogram(t *testing.T) {
 	r := metric.NewManualReader()
-	mp := metric.NewMeterProvider(metric.WithReader(r))
+	mp := metric.NewMeterProvider(metric.WithReader(r), metric.WithView(selfHistogramView()))
 	m, err := NewMetrics(mp)
 	if err != nil {
 		t.Fatal(err)
@@ -61,14 +60,6 @@ func TestObserveUpstreamRequestRecordsHistogram(t *testing.T) {
 	}
 	if len(hist.DataPoints) == 0 {
 		t.Fatal("histogram has no data points")
-	}
-	// Guard that the SECOND-shaped explicit buckets actually took effect — without them the OTel
-	// default boundaries are ms-shaped (up to 10000) and a _seconds histogram is useless granularity.
-	// [#121] Boundaries extended past 10s to 20/30/60 so a 30s-timeout (LangSmith) / degrading request
-	// resolves in a finite bucket instead of pinning at +Inf.
-	wantBounds := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}
-	if !slices.Equal(hist.DataPoints[0].Bounds, wantBounds) {
-		t.Fatalf("histogram must use second-shaped explicit buckets, got %v", hist.DataPoints[0].Bounds)
 	}
 	classes := map[string]bool{}
 	var total uint64
@@ -99,7 +90,7 @@ func TestObserveUpstreamRequestRecordsHistogram(t *testing.T) {
 // the dashboard cannot distinguish an 11s regime from a 29s regime, one step from timeout.
 func TestUpstreamHistogramResolvesLongRequestIntoFiniteBucket(t *testing.T) {
 	r := metric.NewManualReader()
-	mp := metric.NewMeterProvider(metric.WithReader(r))
+	mp := metric.NewMeterProvider(metric.WithReader(r), metric.WithView(selfHistogramView()))
 	m, err := NewMetrics(mp)
 	if err != nil {
 		t.Fatal(err)
@@ -115,20 +106,22 @@ func TestUpstreamHistogramResolvesLongRequestIntoFiniteBucket(t *testing.T) {
 		t.Fatal("upstream histogram not recorded")
 	}
 	dp := hist.DataPoints[0]
-	// BucketCounts has len(Bounds)+1 entries; the last is the +Inf overflow. A 25s observation must NOT
-	// land there (boundaries now reach 60), so the overflow bucket stays 0.
-	if overflow := dp.BucketCounts[len(dp.BucketCounts)-1]; overflow != 0 {
-		t.Fatalf("25s request landed in the +Inf overflow bucket (count=%d); boundaries do not cover the client timeout", overflow)
+	var bucketCount uint64
+	for _, count := range dp.PositiveBucket.Counts {
+		bucketCount += count
+	}
+	if bucketCount != 1 {
+		t.Fatalf("25s observation missing from finite exponential buckets: %v", dp.PositiveBucket)
 	}
 	if dp.Count != 1 {
 		t.Fatalf("expected 1 observation, got %d", dp.Count)
 	}
 }
 
-// [#60] Emit-leg POST latency histogram: bucketed by {plane,status_class}, second-shaped buckets to 30s.
+// [#60] Emit-leg POST latency histogram: bucketed by {plane,status_class}, base2 exponential buckets.
 func TestObserveEmitRequestRecordsHistogram(t *testing.T) {
 	r := metric.NewManualReader()
-	mp := metric.NewMeterProvider(metric.WithReader(r))
+	mp := metric.NewMeterProvider(metric.WithReader(r), metric.WithView(selfHistogramView()))
 	m, err := NewMetrics(mp)
 	if err != nil {
 		t.Fatal(err)
@@ -144,10 +137,6 @@ func TestObserveEmitRequestRecordsHistogram(t *testing.T) {
 	hist, ok := findHistogram(&rm, "genai_otel_bridge_emit_request_duration_seconds")
 	if !ok || len(hist.DataPoints) == 0 {
 		t.Fatal("genai_otel_bridge_emit_request_duration_seconds histogram not recorded")
-	}
-	wantBounds := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30}
-	if !slices.Equal(hist.DataPoints[0].Bounds, wantBounds) {
-		t.Fatalf("emit histogram must use second-shaped buckets to 30s, got %v", hist.DataPoints[0].Bounds)
 	}
 	planes, classes := map[string]bool{}, map[string]bool{}
 	var total uint64
@@ -179,7 +168,7 @@ func TestObserveEmitRequestRecordsHistogram(t *testing.T) {
 // the SAME {loop,reason} series — so it returns to 0 rather than sticking at 1.
 func TestLoopDegradedGauge(t *testing.T) {
 	r := metric.NewManualReader()
-	mp := metric.NewMeterProvider(metric.WithReader(r))
+	mp := metric.NewMeterProvider(metric.WithReader(r), metric.WithView(selfHistogramView()))
 	m, err := NewMetrics(mp)
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +218,7 @@ func findGauge(rm *metricdata.ResourceMetrics, name string) (metricdata.Gauge[fl
 
 func TestSamplesCappedCounter(t *testing.T) {
 	r := metric.NewManualReader()
-	mp := metric.NewMeterProvider(metric.WithReader(r))
+	mp := metric.NewMeterProvider(metric.WithReader(r), metric.WithView(selfHistogramView()))
 	m, err := NewMetrics(mp)
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +244,7 @@ func TestSamplesCappedCounter(t *testing.T) {
 
 func TestAuthErrorCounter(t *testing.T) {
 	r := metric.NewManualReader()
-	mp := metric.NewMeterProvider(metric.WithReader(r))
+	mp := metric.NewMeterProvider(metric.WithReader(r), metric.WithView(selfHistogramView()))
 	m, err := NewMetrics(mp)
 	if err != nil {
 		t.Fatal(err)
@@ -294,16 +283,16 @@ func TestAuthErrorCounter(t *testing.T) {
 	}
 }
 
-func findHistogram(rm *metricdata.ResourceMetrics, name string) (metricdata.Histogram[float64], bool) {
+func findHistogram(rm *metricdata.ResourceMetrics, name string) (metricdata.ExponentialHistogram[float64], bool) {
 	for _, sm := range rm.ScopeMetrics {
 		for _, mm := range sm.Metrics {
 			if mm.Name != name {
 				continue
 			}
-			if h, ok := mm.Data.(metricdata.Histogram[float64]); ok {
+			if h, ok := mm.Data.(metricdata.ExponentialHistogram[float64]); ok {
 				return h, true
 			}
 		}
 	}
-	return metricdata.Histogram[float64]{}, false
+	return metricdata.ExponentialHistogram[float64]{}, false
 }

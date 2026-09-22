@@ -1427,7 +1427,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.50, sum by (le, loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds_bucket{loop=~"$loop"}[$__rate_interval])))
+                    expr: histogram_quantile(0.50, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{loop=~"$loop"}[$__rate_interval])))
                     legendFormat: p50 {{loop}}
                     range: true
                     instant: false
@@ -1445,7 +1445,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.95, sum by (le, loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds_bucket{loop=~"$loop"}[$__rate_interval])))
+                    expr: histogram_quantile(0.95, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{loop=~"$loop"}[$__rate_interval])))
                     legendFormat: p95 {{loop}}
                     range: true
                     instant: false
@@ -1485,7 +1485,7 @@ spec:
       spec:
         id: 140
         title: Upstream request rate by target & status
-        description: rate(genai_otel_bridge_upstream_request_duration_seconds_count) by target (source API host) & status_class. The poller's own pull traffic to vendor APIs.
+        description: histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds)) by target (source API host) & status_class. The poller's own pull traffic to vendor APIs.
         links: []
         data:
           kind: QueryGroup
@@ -1503,7 +1503,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (target, status_class) (rate(genai_otel_bridge_upstream_request_duration_seconds_count[$__rate_interval]))
+                    expr: sum by (target, status_class) (histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds[$__rate_interval])))
                     legendFormat: '{{target}} {{status_class}}'
                     range: true
                     instant: false
@@ -1542,7 +1542,7 @@ spec:
       spec:
         id: 141
         title: Upstream latency p50/p95/p99 by target
-        description: "histogram_quantile over genai_otel_bridge_upstream_request_duration_seconds_bucket (cumulative histogram \u2014 rate() correct). Time-to-response-headers, excludes limiter wait."
+        description: "histogram_quantile over genai_otel_bridge_upstream_request_duration_seconds (cumulative histogram \u2014 rate() correct). Time-to-response-headers, excludes limiter wait."
         links: []
         data:
           kind: QueryGroup
@@ -1560,7 +1560,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.50, sum by (le, target) (rate(genai_otel_bridge_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    expr: histogram_quantile(0.50, sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds[$__rate_interval])))
                     legendFormat: p50 {{target}}
                     range: true
                     instant: false
@@ -1578,7 +1578,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.95, sum by (le, target) (rate(genai_otel_bridge_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    expr: histogram_quantile(0.95, sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds[$__rate_interval])))
                     legendFormat: p95 {{target}}
                     range: true
                     instant: false
@@ -1596,7 +1596,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: histogram_quantile(0.99, sum by (le, target) (rate(genai_otel_bridge_upstream_request_duration_seconds_bucket[$__rate_interval])))
+                    expr: histogram_quantile(0.99, sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds[$__rate_interval])))
                     legendFormat: p99 {{target}}
                     range: true
                     instant: false

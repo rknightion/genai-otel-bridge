@@ -29,7 +29,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: '(sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds_count{status_class=~"4xx|5xx|error"}[10m])) / clamp_min(sum by (target) (rate(genai_otel_bridge_upstream_request_duration_seconds_count[10m])), 1e-9)) > 0.2'
+        expr: '(sum by (target) (histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds{status_class=~"4xx|5xx|error"}[10m]))) / clamp_min(sum by (target) (histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds[10m]))), 1e-9)) > 0.2'
         instant: true
         range: false
         intervalMs: 1000

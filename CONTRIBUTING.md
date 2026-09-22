@@ -43,7 +43,7 @@ just test-acceptance   # acceptance gates (failover / outage / soak)
    tests where they fit; `httptest.Server` fakes for HTTP; injectable clocks for determinism. Tests
    must not make live network calls.
 3. Every new `.go` file must carry the license header:
-   `// SPDX-License-Identifier: AGPL-3.0-only` (enforced by `just spdx-check`).
+   `// SPDX-License-Identifier: Apache-2.0` (enforced by `just spdx-check`).
 4. Keep `just check` green.
 5. Open a pull request with a clear description of the change and its motivation.
 
@@ -69,7 +69,7 @@ design change that requires an `ARCHITECTURE.md` update and discussion first —
 ## License
 
 By contributing, you agree that your contributions are licensed under the
-[GNU Affero General Public License v3.0 only](./LICENSE) (`AGPL-3.0-only`), consistent with the rest
+[Apache License 2.0](./LICENSE) (`Apache-2.0`), consistent with the rest
 of the project. See [LICENSING.md](./LICENSING.md).
 
 ## Cloud agent environments

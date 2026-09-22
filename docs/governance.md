@@ -149,5 +149,5 @@ itself.
 
 - [Portkey](./portkey.md) — Portkey-specific content controls
 - [LangSmith](./langsmith.md) — LangSmith-specific content controls
-- [Security](./security.md) — SSRF guard, secret handling, and the AGPL-3.0-only license
+- [Security](./security.md) — SSRF guard, secret handling, and the Apache-2.0 license
 - [Telemetry reference](./telemetry.md) — the full signal catalogue

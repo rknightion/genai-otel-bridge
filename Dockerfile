@@ -24,10 +24,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=builder /genai-otel-bridge /genai-otel-bridge
-# License compliance travels with the image (OCI /licenses convention): AGPL text + third-party notices.
+# License compliance travels with the image (OCI /licenses convention): Apache-2.0 text + third-party notices.
 COPY --from=builder /build/LICENSE /licenses/LICENSE
 COPY --from=builder /build/THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
-LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 USER 65532:65532
 EXPOSE 8080
 # Exec form (no shell in distroless): reuses the binary's own shell-free -healthcheck probe mode

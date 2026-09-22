@@ -11,7 +11,7 @@ Do not include secrets, tokens, or any prompt/response content.
 
 - [ ] `just check` is green (fmt + build + vet + lint + gen + tests + hygiene)
 - [ ] Tests added/updated (TDD: failing test first), no live network in tests
-- [ ] New `.go` files carry the `SPDX-License-Identifier: AGPL-3.0-only` header
+- [ ] New `.go` files carry the `SPDX-License-Identifier: Apache-2.0` header
 - [ ] Conventional Commit title (`feat:` / `fix:` / `docs:` / … ; `!` for breaking)
 - [ ] No customer/vendor/domain specifics added to core code or defaults (kept configurable)
 - [ ] Content-free invariant preserved (no prompt/response bodies; field allow/deny-list intact)

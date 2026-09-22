@@ -112,6 +112,6 @@ Requires Go 1.27+. Acceptance gates: `just test-acceptance`.
 
 ## License
 
-`genai-otel-bridge` is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).
+`genai-otel-bridge` is licensed under the Apache License 2.0 (`Apache-2.0`).
 See [LICENSE](./LICENSE) and [LICENSING.md](./LICENSING.md). Every Go source file carries an
-`SPDX-License-Identifier: AGPL-3.0-only` header.
+`SPDX-License-Identifier: Apache-2.0` header.

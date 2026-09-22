@@ -69,4 +69,4 @@ It targets two categories of source:
 
 ## License
 
-`genai-otel-bridge` is licensed under the [GNU Affero General Public License v3.0 only (AGPL-3.0-only)](https://github.com/rknightion/genai-otel-bridge/blob/main/LICENSE). Every Go source file carries an `SPDX-License-Identifier: AGPL-3.0-only` header.
+`genai-otel-bridge` is licensed under the [Apache License 2.0 (Apache-2.0)](https://github.com/rknightion/genai-otel-bridge/blob/main/LICENSE). Every Go source file carries an `SPDX-License-Identifier: Apache-2.0` header.

@@ -9,13 +9,16 @@ import (
 )
 
 // SetLoopClockForTest overrides a loop's wall-clock so acceptance tests (in another package) can
-// drive deterministic windows. Returns false if lp is not a portkey analytics loop. TEST-ONLY seam —
+// drive deterministic windows. Returns false if lp is not a supported Portkey loop. TEST-ONLY seam —
 // the production clock is UTC time.Now (set in New); nothing in prod calls this.
 func SetLoopClockForTest(lp source.Loop, now func() time.Time) bool {
-	al, ok := lp.(*analyticsLoop)
-	if !ok {
+	switch l := lp.(type) {
+	case *analyticsLoop:
+		l.now = now
+	case *logsExportLoop:
+		l.now = now
+	default:
 		return false
 	}
-	al.now = now
 	return true
 }

@@ -10,6 +10,10 @@ import (
 	"sort"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/rknightion/genai-otel-bridge/internal/httpx"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
@@ -40,6 +44,12 @@ type exportCursor struct {
 	PageOffsetDone int    `json:"page_offset_done,omitempty"` // LINES of the current page already consumed (chunk resume; the correctness fallback)
 	PageByteOffset int64  `json:"page_byte_offset,omitempty"` // [#61] BYTES of the current page already consumed (line-boundary) — sent as an HTTP Range on resume so a multi-chunk page does not re-transfer/re-scan the consumed prefix; degrades to PageOffsetDone line-skip if the server ignores Range
 	PollDeadline   string `json:"poll_deadline,omitempty"`    // RFC3339Nano — abandon (cancel+restart) a job still running past this
+	// LifecycleTraceID/LifecycleSpanID identify the first self-APM step for this in-flight window.
+	// They are checkpoint-only correlation state: never product-log attributes or labels. Later ticks
+	// create their own timing spans and link to this completed first step rather than pretending a
+	// cancelled tick context can be kept alive across a leader change.
+	LifecycleTraceID string `json:"lifecycle_trace_id,omitempty"`
+	LifecycleSpanID  string `json:"lifecycle_span_id,omitempty"`
 }
 
 // decodeCursor parses the Watermark.Cursor. An empty cursor (first run / after a clean window) OR an
@@ -197,18 +207,90 @@ func (l *logsExportLoop) Key() model.CheckpointKey {
 func (l *logsExportLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
 	cur := decodeCursor(since.Cursor)
+	ctx, span := l.startLifecycleStep(ctx, cur)
+	var batch model.Batch
+	var err error
 	switch cur.Phase {
 	case phaseCreated:
-		return l.stepCreated(ctx, since, cur)
+		batch, err = l.stepCreated(ctx, since, cur)
 	case phasePolling:
-		return l.stepPolling(ctx, since, cur, now)
+		batch, err = l.stepPolling(ctx, since, cur, now)
 	case phaseDownloading:
-		return l.stepDownloading(ctx, since, cur)
+		batch, err = l.stepDownloading(ctx, since, cur)
 	case phaseBlocked:
-		return l.stepBlocked(since, cur, now)
+		batch, err = l.stepBlocked(since, cur, now)
 	default: // phaseIdle (and any unrecognised phase, which decodeCursor already normalises to idle)
-		return l.stepIdle(ctx, since, now)
+		batch, err = l.stepIdle(ctx, since, now)
 	}
+	if err != nil {
+		// Error text can contain upstream details, so self-APM records only a fixed status description.
+		span.SetStatus(codes.Error, "lifecycle step failed")
+	} else {
+		l.persistLifecycleLink(&batch, cur, span.SpanContext())
+	}
+	span.End()
+	return batch, err
+}
+
+const logsExportTracerName = "genai-otel-bridge/selfobs"
+
+// startLifecycleStep makes each non-blocking lifecycle action independently timed. The scheduler's
+// loop.tick context remains this tick's parent; the durable link is intentionally a link rather than a
+// parent because no tick context survives the scheduler/leader hand-off.
+func (l *logsExportLoop) startLifecycleStep(ctx context.Context, cur exportCursor) (context.Context, trace.Span) {
+	options := make([]trace.SpanStartOption, 0, 1)
+	if parent, ok := cur.lifecycleSpanContext(); ok {
+		options = append(options, trace.WithLinks(trace.Link{SpanContext: parent}))
+	}
+	return otel.Tracer(logsExportTracerName).Start(ctx, lifecycleStepName(cur), options...)
+}
+
+func lifecycleStepName(cur exportCursor) string {
+	switch cur.Phase {
+	case phaseCreated:
+		if cur.JobID == "" {
+			return "portkey.logs_export.page"
+		}
+		return "portkey.logs_export.start"
+	case phasePolling:
+		return "portkey.logs_export.poll"
+	case phaseDownloading:
+		return "portkey.logs_export.download"
+	case phaseBlocked:
+		return "portkey.logs_export.blocked"
+	default:
+		return "portkey.logs_export.create"
+	}
+}
+
+// persistLifecycleLink copies an existing lifecycle link forward, or stores this first step's identity
+// in a non-idle cursor. Additive cursor fields preserve all existing checkpoint encodings unchanged.
+func (l *logsExportLoop) persistLifecycleLink(batch *model.Batch, prior exportCursor, current trace.SpanContext) {
+	next := decodeCursor(batch.Watermark.Cursor)
+	if next.Phase == phaseIdle {
+		return // no in-flight lifecycle to correlate
+	}
+	if priorTrace, ok := prior.lifecycleSpanContext(); ok {
+		next.LifecycleTraceID = priorTrace.TraceID().String()
+		next.LifecycleSpanID = priorTrace.SpanID().String()
+	} else if current.IsValid() {
+		next.LifecycleTraceID = current.TraceID().String()
+		next.LifecycleSpanID = current.SpanID().String()
+	}
+	batch.Watermark.Cursor = next.encode()
+}
+
+func (c exportCursor) lifecycleSpanContext() (trace.SpanContext, bool) {
+	traceID, err := trace.TraceIDFromHex(c.LifecycleTraceID)
+	if err != nil {
+		return trace.SpanContext{}, false
+	}
+	spanID, err := trace.SpanIDFromHex(c.LifecycleSpanID)
+	if err != nil {
+		return trace.SpanContext{}, false
+	}
+	ctx := trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, Remote: true})
+	return ctx, ctx.IsValid()
 }
 
 // stepIdle starts a new window. It computes [winMin, winMax] (winMax clamped to the settled cutoff

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package model is the vendor-neutral seam between sources and the emitter.
 // Sources produce these types; the emitter consumes them. Nothing else crosses this boundary.

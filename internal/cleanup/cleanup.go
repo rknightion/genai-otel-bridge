@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package cleanup deletes the app-created HA state objects that `helm uninstall` cannot remove on
 // its own — the leader-election Lease and the watermark-checkpoint ConfigMap. The binary creates

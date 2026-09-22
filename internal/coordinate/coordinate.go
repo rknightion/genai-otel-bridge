@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package coordinate provides single-active-replica semantics (ARCHITECTURE.md §5/§8). The
 // leader epoch (lease transitions) rides in the leader context so the checkpoint write fence

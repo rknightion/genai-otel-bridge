@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Signals enumerates the Portkey product telemetry this source can emit. Names are config-derived,
 // so descriptors carry {placeholder} templates and a DependsOn note rather than literal names. The

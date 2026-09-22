@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package signal is the shared, dependency-free descriptor for a telemetry signal the bridge can
 // emit. Each emitting package (selfobs, source/<vendor>) returns a []Signal from a Signals() func;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // The `usage` loop derives LangSmith PLATFORM cost-driver gauges (distinct from the sessions loop's
 // eval/LLM metrics). LangSmith Enterprise bills on TRACES INGESTED × retention tier (+ storage), NOT on

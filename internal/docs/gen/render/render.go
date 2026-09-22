@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package render turns telemetry signal descriptors into the generated Markdown region of
 // docs/telemetry.md and splices it between markers. It mirrors internal/config/gen/helmgen: pure

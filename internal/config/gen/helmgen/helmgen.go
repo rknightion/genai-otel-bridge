@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package helmgen renders the Helm chart's default config block straight from the Go config
 // schema. It reflects a config struct type, reads each field's `helm:"..."` render tag, pulls the

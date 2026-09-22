@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package selfobs is OTLP-native self-observability: self-metrics (schedule.Metrics), a
 // distinct resource identity (H4), and health endpoints. /healthz tracks scheduler progress

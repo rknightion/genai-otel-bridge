@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package dynamodb implements coordinate.Coordinator using a single DynamoDB lock item.
 // A conditional-write CAS acquires/renews the lease; a monotonic `fence` attribute is the leader

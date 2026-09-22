@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package logging builds the integrator's own operational-log handler. Logs are written to STDOUT
 // (by the caller) and scraped by the k8s-monitoring collector → Loki — they are NOT pushed via OTLP.

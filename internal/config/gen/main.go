@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Command gen renders the Helm chart's default config block from the Go config schema and splices it
 // into deploy/helm/values.yaml (between the BEGIN/END generated-config markers). Run via `make

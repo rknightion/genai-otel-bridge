@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package config loads, resolves secret refs in, and validates the YAML config (DESIGN §4.1).
 // It is intentionally free of a `source` import (no cycle): unknown-type and series-name

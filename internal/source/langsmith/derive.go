@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package langsmith is the eval-platform source: the sessions loop derives per-session aggregate
 // gauges (run counts, latency/cost/token aggregates, numeric feedback scores) from LangSmith's

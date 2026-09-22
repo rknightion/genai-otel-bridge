@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // TestTelemetryDocUpToDate is the telemetry drift gate: it re-runs the catalogue render in-memory
 // (via AllSignals from main.go) and byte-compares it against the committed generated region in

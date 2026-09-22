@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package configmap is the default prod Checkpointer: a single ConfigMap, one data key per
 // CheckpointKey, RMW with resource-version optimistic concurrency, serialized through one

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package eks holds the drift gates that keep the EKS internal-test Helm overrides
 // (test/eks/values-eks.yaml) in lockstep with the production config SCHEMA as it evolves.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package file is the dev/non-k8s Checkpointer: a YAML map persisted with atomic temp-then-
 // rename. DISCOURAGED for HA/critical prod (Cdx-M5) — prefer the configmap impl.

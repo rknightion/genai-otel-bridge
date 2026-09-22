@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package checkpoint defines the Checkpointer seam (ARCHITECTURE.md §5) and the monotonic+
 // epoch write fence — the real guarantee against a backward/double-advanced frontier, since a

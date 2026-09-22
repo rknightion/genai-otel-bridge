@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package lease implements the Coordinator with a Kubernetes Lease (client-go leaderelection).
 // The Lease reduces overlap; the actual double-emit guarantee is the checkpoint fence (Cdx-C14).

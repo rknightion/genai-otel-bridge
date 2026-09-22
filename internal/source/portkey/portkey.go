@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package portkey is the LLM-gateway source. Three loops behind the common Source interface, each
 // independently enabled via config: the time-bucketed `analytics` loop derives workspace-aggregate

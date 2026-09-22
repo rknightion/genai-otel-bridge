@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Command e2e-helper is a tiny dual-mode test double used only by the k3d failover e2e.
 //

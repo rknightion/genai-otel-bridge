@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package dynamodb implements checkpoint.Checkpointer over DynamoDB items. Save does GetItem →
 // checkpoint.CheckMonotonic (the single fence) → conditional PutItem (optimistic-concurrency on a

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Signals is the static catalogue of self-observability signals this package emits. It is the
 // source the docs generator renders into docs/telemetry.md, and is held in lockstep with the live

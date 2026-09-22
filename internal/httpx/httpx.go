@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package httpx is the shared outbound HTTP client: a configurable User-Agent (default
 // client UAs are WAF-blocked — DESIGN §15), a per-source rate token acquired per request

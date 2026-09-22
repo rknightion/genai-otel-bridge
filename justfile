@@ -142,7 +142,7 @@ secret-scan:
 forbidden-words:
     @if [ -f scripts/forbidden-words.sh ]; then bash scripts/forbidden-words.sh; else echo "forbidden-words: skipped (guard not present in this repo)"; fi
 
-# Require AGPL-3.0-only SPDX headers on tracked Go sources.
+# Require Apache-2.0 SPDX headers on tracked non-vendor Go sources.
 [group('check')]
 [no-exit-message]
 spdx-check:

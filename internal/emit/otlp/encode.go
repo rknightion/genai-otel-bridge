@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 // Package otlp hand-encodes OTLP/HTTP. Modelled on a sibling tool's OTLP sink, but with DETERMINISTIC
 // ordering (that tool does not sort): attribute KVs and series are sorted so re-emitting a

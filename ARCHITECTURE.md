@@ -462,6 +462,15 @@ The tool is on the production critical path, so it observes itself as a first-cl
   as a child of the enqueueing `loop.tick` around batch processing for both planes. A private schedule
   queue envelope carries the unchanged `model.Batch` plus a copied `trace.SpanContext`; cancellation
   and lease epoch still come from the live leader context, and checkpoint fencing remains authoritative.
+- **Commit, upstream and export lifecycle traces:** `loop.commit` covers the common epoch-fenced
+  `Checkpointer.Save` path and carries a fixed `outcome` of `committed`, `fenced`, `stale`, or `error`.
+  The shared `httpx` transport emits standard `otelhttp` CLIENT spans under `loop.tick` because each
+  source request retains the Collect context; `Config.Observer` remains the decoupled histogram hook.
+  Portkey logs-export steps are timed by `portkey.logs_export.create`,
+  `portkey.logs_export.start`, `portkey.logs_export.poll`, `portkey.logs_export.download`,
+  `portkey.logs_export.page`, and `portkey.logs_export.blocked`. Later ticks link to the initial
+  create span through optional checkpoint-only trace/span ids in `exportCursor`; no vendor content,
+  signed URL, product-log field, or emitted label participates in that correlation.
 - **Self-logs**: structured (logfmt) to **stdout**, scraped by the k8s-monitoring collector → Loki —
   NOT pushed via OTLP (a deliberate divergence from OTLP-everywhere, for logs only; self-metrics stay
   OTLP-push). Format is config-keyed (`log.format`, default `logfmt`) for cheap Loki parsing; built in
@@ -676,5 +685,5 @@ modules must encode, and they **correct several assumptions** in the originating
 
 See [`followup.md`](./followup.md): data-sensitivity/compliance governance; additional emit backends
 (remote_write+Loki, on-disk WAL); vendor Go SDKs; LangSmith bulk-export; further source vendors;
-deeper self-APM trace coverage (the opt-in per-tick span shipped in #14; cross-queue emit-span
-propagation + more spans are followup §4); a plugin runtime.
+additional self-APM spans beyond the shipped tick, emit, commit, upstream-client and logs-export
+lifecycle coverage (for example election timing); a plugin runtime.

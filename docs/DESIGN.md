@@ -277,6 +277,20 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
   context and starts `loop.emit`, a child of `loop.tick`, around `ProcessBatch`. Both planes receive
   the child context; lease epoch and cancellation still come from the current leader. The queue never
   retains a live tick context, and checkpoint fencing remains unchanged.
+- **Checkpoint trace outcome:** the common commit path starts `loop.commit` around the epoch-fenced
+  `Checkpointer.Save` and records one fixed `outcome`: `committed`, `fenced`, `stale`, or `error`.
+  ConfigMap and DynamoDB therefore share the same timing without changing either backend or the live
+  leadership context.
+- **Upstream trace parentage:** `httpx` wraps its transport with `otelhttp`, while the scheduler passes
+  the `loop.tick` context into `Collect` and sources construct requests with that context. Standard
+  CLIENT spans therefore nest under the tick. `Config.Observer` remains context-free and independently
+  records the controlled upstream-duration histogram; the otelhttp meter provider is disabled to avoid
+  duplicate HTTP metrics.
+- **Portkey logs-export lifecycle:** `portkey.logs_export.create`, `.start`, `.poll`, `.download`,
+  `.page`, and `.blocked` time the one-step-per-tick state machine. Later step spans link to the
+  initial create span using optional trace/span ids stored only in `exportCursor`. The additive cursor
+  fields preserve legacy decode/round-trip behavior and never enter product logs, labels, span names,
+  or link attributes.
 
 ### 4.7 HTTP client (`internal/httpx`)
 - Shared client with a **configurable, non-default User-Agent** (default-UA WAF-block is real, §15);
@@ -577,9 +591,11 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   `signed-url-host.example.com`); a self-hosted Portkey changes both hosts —
   `signed_url_allow_hosts` allow-list required before fetch (DESIGN §4.7:271).
   The Loop/Collect variant encodes the job state machine in `Watermark.Cursor` (JSON: `phase`,
-  `job_id`, `win_min/max`, `page`, `pages`, `total_records`) — one non-blocking step per tick, empty
+  `job_id`, `win_min/max`, `page`, `pages`, `total_records`, plus optional checkpoint-only
+  `lifecycle_trace_id`/`lifecycle_span_id`) — one non-blocking step per tick, empty
   batch while mid-flight; `Watermark.Time` advances only when all pages of a window are emitted. No
-  FROZEN seam change. Loki label-promotion list (feeds GS1): promote `ai_org`, `ai_model`,
+  FROZEN seam change. The lifecycle ids link the per-step self-APM spans named in §4.6 across ticks
+  and leader resume without becoming emitted log content. Loki label-promotion list (feeds GS1): promote `ai_org`, `ai_model`,
   `response_status_code` as new stream labels; keep `trace_id` as structured metadata (high-card);
   never promote `id`, `created_at`, cost/token values; strip `metadata`/`portkeyHeaders`/content
   fields entirely. GS1 is a SHIP prerequisite (stream labels) for the logs loop, not a code-build

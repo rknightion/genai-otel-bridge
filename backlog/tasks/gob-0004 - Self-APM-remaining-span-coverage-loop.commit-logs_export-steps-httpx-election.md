@@ -3,10 +3,11 @@ id: GOB-0004
 title: >-
   Self-APM: remaining span coverage (loop.commit, logs_export steps, httpx,
   election)
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-08-14 16:11'
-updated_date: '2026-09-22 09:06'
+updated_date: '2026-09-22 11:39'
 labels:
   - followup-v2
   - self-obs
@@ -47,3 +48,20 @@ Treat the four as separately landable; a partial result is fine if the notes say
 - [ ] #1 just check
 - [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Wave 2 (2026-09-22):
+1. Run L1-L3 concurrently on disjoint owned files: loop.commit span, end-to-end upstream span nesting proof, and logs_export step-timing accept/reject disposition.
+2. Root accepts each return against the frozen goal and performs the L4 design/catalogue/generated-doc wiring pass.
+3. Run targeted review plus `just check < /dev/null`, commit explicit paths to main, push, and verify CI plus ci-success at the exact SHA.
+4. Admit gob-0006 reserve R1 only if its post-L4 conditions and cutoff still hold.
+5. Reconcile gob-0004 through the Backlog CLI, then write the terminal wave report and notify once.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Wave 2 preflight at 2026-09-22T11:38Z: fetched origin/main; local HEAD and origin/main both 220eca611ac5c1ad8c6eb0f1a5203acd5f7d6323; clean single worktree; exact-base CI run 35722047761 still in progress. Release PR #3 remains explicitly out of scope.
+<!-- SECTION:NOTES:END -->

@@ -13,6 +13,12 @@ limiter wait and the body read. `Target` is the destination host only, never the
 label low-cardinality. The composition root wires it to
 `genai_otel_bridge_upstream_request_duration_seconds`, so httpx and selfobs stay decoupled.
 
+Independently of the observer, the shared transport is wrapped with `otelhttp` to emit standard
+CLIENT spans parented to the request context. The scheduler passes its `loop.tick` context through
+`source.Loop.Collect`, and every source request uses `http.NewRequestWithContext`, so upstream spans
+nest under the tick without widening `Observer` to carry context. The wrapper receives a no-op meter
+provider because the observer histogram is the sole HTTP metric.
+
 ## SSRF egress guard
 
 - An empty `Config.AllowHosts` means no host allow-list at all: any host that passes the IP guard is

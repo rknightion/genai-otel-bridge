@@ -119,11 +119,16 @@ A job lifecycle (create, start, poll, download, page), not a GET. It emits `Batc
 gateway `/v1/logs` on the same base and auth as metrics, landing in Loki.
 
 - **State lives in `Watermark.Cursor`** (phase, job id, window bounds, page and byte offsets, poll
-  deadline). One non-blocking step per `Collect`; `LoopConfig.Window == 0` so the scheduler
+  deadline, plus optional self-APM lifecycle trace/span ids). One non-blocking step per `Collect`;
+  `LoopConfig.Window == 0` so the scheduler
   snapshot-gates it and the real window is `settings.window`. `Watermark.Time` advances only when
   every page of a window is emitted; the same-Time/cursor-change checkpoint relaxation persists
   in-flight progress, and the runner's `Cursor != ""` commit arm is what stops window 1 looping
   forever.
+- **Per-step self-APM timing** uses `portkey.logs_export.create`, `.start`, `.poll`, `.download`,
+  `.page`, and `.blocked` spans. Each tick remains independently parented to its `loop.tick`; later
+  steps link to the initial create span using the optional checkpoint-only ids. Those ids never
+  become product-log fields, labels, or link attributes.
 - **Delivery is AT-LEAST-ONCE**, not the metric plane's exactly-once gap-free. In-flight pages resume
   from the cursor by re-downloading the stable S3 object; a job failure or mid-window leader change
   restarts the window at page 0 and may re-emit a page. A completed window is never re-pulled.

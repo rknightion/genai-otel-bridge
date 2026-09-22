@@ -19,7 +19,9 @@ implements.
   advances after leadership loss even if the checkpointer ignores ctx. On `ErrStaleWrite` where the
   durable time is behind the attempt (a genuine fence, not a benign already-advanced write) it fires
   `checkpoint_fenced` and resyncs the in-memory frontier to durable, so `Since()` can never run ahead
-  of a rejected write.
+  of a rejected write. With self tracing enabled, one `loop.commit` span covers the common
+  `Checkpointer.Save` path and records the fixed `outcome` set `committed`, `fenced`, `stale`, or
+  `error`; the span never changes the live leadership context or commit semantics.
 - Leadership-loss race. A `select` can dequeue a batch in the same iteration `leaderCtx` is
   cancelled, so both `Run()` and `ProcessBatch()` re-check `ctx.Err()` before emit and drop it.
 

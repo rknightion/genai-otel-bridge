@@ -1,10 +1,11 @@
 ---
 id: GOB-0003
 title: 'Instrument the emit POST: loop.emit span and latency histogram'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@codex'
 created_date: '2026-08-14 16:11'
-updated_date: '2026-09-22 09:08'
+updated_date: '2026-09-22 10:12'
 labels:
   - followup-v2
   - self-obs
@@ -30,17 +31,23 @@ Related but separately tracked: the remaining span coverage (`loop.commit`, logs
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Emit POST latency lands in a histogram, per attempt, so retry timing is visible and not just the terminal outcome
-- [ ] #2 A loop.emit span exists as a child of the tick span, with trace context carried through the bounded queue into the worker goroutine
-- [ ] #3 Sibling plane checked: metrics and logs emit paths both covered, or the gap stated with its reason
-- [ ] #4 Metric and span names added to ARCHITECTURE.md §11 / docs/DESIGN.md — #76 closed on exactly this list being wrong
+- [x] #1 Emit POST latency lands in a histogram, per attempt, so retry timing is visible and not just the terminal outcome
+- [x] #2 A loop.emit span exists as a child of the tick span, with trace context carried through the bounded queue into the worker goroutine
+- [x] #3 Sibling plane checked: metrics and logs emit paths both covered, or the gap stated with its reason
+- [x] #4 Metric and span names added to ARCHITECTURE.md §11 / docs/DESIGN.md — #76 closed on exactly this list being wrong
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 just check
-- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
+- [x] #1 just check
+- [x] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Wave 1 L5 after L4: test-first schedule-local SpanContext envelope, loop.emit child span, and per-attempt emit latency for both planes without changing model.Batch.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
@@ -61,4 +68,12 @@ Rationale for freezing it rather than parking: the envelope is strictly inside o
 exported surface, it satisfies AC#2 exactly as written, and the alternative is a FROZEN-seam change
 with implementation exposure across emit, source and app for no benefit. If the envelope turns out
 not to work, that is a stop condition — return it to the root, do not amend `model.Batch`.
+
+The acceptance seam was unchanged, so the conditional acceptance-test update item is not applicable.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented in dbf5e4f2c1b9ddea6b5a5153d2de0c8ba6f7b4d2, with design-record reconciliation in a57fcca06766c6a7c572a0da1b4353dd498ac70c. The emit path now records one latency sample for every final POST attempt on both success and failure, and creates loop.emit as a child of the live loop tick while preserving cancellation and lease-epoch fencing. Targeted, race, lint, and integrated just check gates passed.
+<!-- SECTION:FINAL_SUMMARY:END -->

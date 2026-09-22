@@ -1,10 +1,11 @@
 ---
 id: GOB-0017
 title: Default to native (exponential) histograms for all histogram instruments
-status: To Do
-assignee: []
+status: Parked
+assignee:
+  - '@codex'
 created_date: '2026-09-15 13:00'
-updated_date: '2026-09-22 09:09'
+updated_date: '2026-09-22 10:12'
 labels:
   - observability
   - cardinality
@@ -37,16 +38,22 @@ Do this before the bridge carries real traffic. Retrofitting means reworking eve
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Histogram instruments emit base2 exponential histograms by default
-- [ ] #2 The aggregation choice is documented in the repo config reference, with the env var named
+- [x] #1 Histogram instruments emit base2 exponential histograms by default
+- [x] #2 The aggregation choice is documented in the repo config reference, with the env var named
 - [ ] #3 No classical _bucket family reaches the stack once the bridge carries traffic, verified with gcx metrics query for job=genai-otel-bridge
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 just check
-- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
+- [x] #1 just check
+- [x] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Wave 1 L4: add an explicit base2 exponential histogram view, pin it with a failing-first test, regenerate dashboard consumers, and defer live-stack AC#3 to gob-0002.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
@@ -82,4 +89,12 @@ cheapest route, but this repo owns its MeterProvider construction in `internal/s
 and an env var set outside the chart is exactly the 'config accepted, behaviour silently wrong' shape
 the wave operating model names as this codebase's worst failure mode. A View in code cannot be
 un-set by a deployment that forgets an env var.
+
+The acceptance seam was unchanged, so the conditional acceptance-test update item is not applicable. AC3 requires a deployed, emitting instance and remains deliberately unchecked.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Native base2 exponential histogram views landed in 35b2dfba437053b85c981c0e22f0ea8965e6c0e8, and the authoritative aggregation settings were documented in ace1329d93c8c3915dc7e1f7422b3454b2bb394b. Parked because no deployed telemetry exists in this wave. Resume after gob-0002 deploys: query the job's self-observability series and prove native histograms exist while classical _bucket series do not.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -1,10 +1,11 @@
 ---
 id: GOB-0001
 title: Don't promote service.version to a per-series metric label
-status: To Do
-assignee: []
+status: Parked
+assignee:
+  - '@codex'
 created_date: '2026-08-14 16:10'
-updated_date: '2026-09-22 09:07'
+updated_date: '2026-09-22 10:12'
 labels:
   - telemetry
   - cardinality
@@ -38,17 +39,23 @@ What remains doable with no live data is the documentation half — recording th
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The OTLP-to-Prometheus resource-attribute convention is documented in docs/telemetry.md: only service.name/service.namespace map to job and service.instance.id to instance; every other resource attribute belongs on target_info, and promoting one to per-series labels is a non-default opt-in
-- [ ] #2 The docs state explicitly that service.version is set on the self-observability planes only (provider.go, tracing.go) and is absent from ProductIdentity(), so no product series can carry it
+- [x] #1 The OTLP-to-Prometheus resource-attribute convention is documented in docs/telemetry.md: only service.name/service.namespace map to job and service.instance.id to instance; every other resource attribute belongs on target_info, and promoting one to per-series labels is a non-default opt-in
+- [x] #2 The docs state explicitly that service.version is set on the self-observability planes only (provider.go, tracing.go) and is absent from ProductIdentity(), so no product series can carry it
 - [ ] #3 DEFERRED, needs a deployed binary: query the target stack for genai_otel_bridge_* series and record whether service_version is present as a per-series label or only on target_info. Record the answer in these notes either way
 - [ ] #4 DEFERRED, conditional on AC#3 finding a real per-series label: stop the promotion and repoint any deploy/grafana query that filters on or aggregates over service_version at the info metric, with a documented group_left example
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 just check
-- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
+- [x] #1 just check
+- [x] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Wave 1 L8 docs half: document OTLP-to-Prometheus resource attribute handling and the self-observability-only scope of service.version; defer live AC#3 and conditional AC#4 to gob-0002 deployment evidence.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
@@ -60,6 +67,8 @@ jq ".[] | select(.number == 165)" archive/github-issues-2026-08-14.json
 ```
 
 It is not in the closed-issues index doc either, because that table indexes the *closed* set and this one was open. The archive plus this task are the whole record.
+
+The acceptance seam was unchanged, so the conditional acceptance-test update item is not applicable. AC3 and AC4 require deployed, emitting telemetry and remain deliberately unchecked.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -71,3 +80,9 @@ created: 2026-09-22 09:07
 Premise corrected during wave-1 goal authoring (2026-09-22). Probed the code directly: ProductIdentity() carries no service.version, so the product plane was never affected; service.version is self-obs-only (#91, deliberate). Whether it becomes a per-series label is an ingest-side question nobody has checked, and it cannot be checked because nothing is emitting. Dropped High to Medium: the cardinality harm the original issue asserted is unproven for this repo, and the only unblocked work is a docs note. Code half parked behind the probe below.
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Documentation changes landed in a57fcca06766c6a7c572a0da1b4353dd498ac70c. Parked because no deployment or emitted telemetry exists in this wave. Resume after gob-0002 deploys: query the target Grafana stack for genai_otel_bridge_* and target_info; confirm service.version is absent from per-series labels and present on self-observability resource metadata. Stop promotion if either contract fails.
+<!-- SECTION:FINAL_SUMMARY:END -->

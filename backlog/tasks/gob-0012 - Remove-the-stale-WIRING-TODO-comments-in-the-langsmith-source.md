@@ -1,10 +1,11 @@
 ---
 id: GOB-0012
 title: Remove the stale WIRING TODO comments in the langsmith source
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@codex'
 created_date: '2026-08-14 16:12'
-updated_date: '2026-09-22 09:07'
+updated_date: '2026-09-22 10:12'
 labels:
   - docs-drift
   - cleanup
@@ -31,14 +32,32 @@ Small, but it is the same doc-vs-code drift class that dominates the closed issu
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Both WIRING TODO comments at internal/source/langsmith/langsmith.go:51 and :74 are corrected to describe what the code actually does
-- [ ] #2 No tracked Go source references a path under gitignored docs/superpowers/ — the live set is internal/source/langsmith/langsmith.go, internal/source/langsmith/derive.go and internal/logging/logging.go
-- [ ] #3 Any docs/superpowers/ citation in ARCHITECTURE.md, docs/DESIGN.md or followup.md is reported to the root for the wiring pass rather than edited by this lane
-- [ ] #4 just check green
+- [x] #1 Both WIRING TODO comments at internal/source/langsmith/langsmith.go:51 and :74 are corrected to describe what the code actually does
+- [x] #2 No tracked Go source references a path under gitignored docs/superpowers/ — the live set is internal/source/langsmith/langsmith.go, internal/source/langsmith/derive.go and internal/logging/logging.go
+- [x] #3 Any docs/superpowers/ citation in ARCHITECTURE.md, docs/DESIGN.md or followup.md is reported to the root for the wiring pass rather than edited by this lane
+- [x] #4 just check green
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 just check
-- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
+- [x] #1 just check
+- [x] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Wave 1 L6: correct stale Go comments and report root-owned documentation citations for the wiring pass.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+The acceptance seam was unchanged, so the conditional acceptance-test update item is not applicable.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Removed the stale LangSmith WIRING TODOs in 200bc9737e20bfe5967c4e4a8bf979d889ef1e05 and reconciled the remaining scratch references in a57fcca06766c6a7c572a0da1b4353dd498ac70c. Integrated just check passed.
+<!-- SECTION:FINAL_SUMMARY:END -->

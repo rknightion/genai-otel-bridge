@@ -1,0 +1,1 @@
+# Historical false positives are allowlisted narrowly by rule and commit in .gitleaks.toml.

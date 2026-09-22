@@ -8,3 +8,10 @@ description = "intentional placeholder/example values, not real secrets"
 paths = [
   '''scripts/forbidden-words\.local\.example''',
 ]
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "removed historical overlay contained a non-secret workspace identifier"
+commits = ["6d36d1d6239768b9abf413e7cb6561659d68f323"]

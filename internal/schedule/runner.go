@@ -16,10 +16,20 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/logging"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // [CP-C9] consecutive checkpoint-save failures before the loop enters degraded mode.
 const checkpointFailThreshold = 5
+
+// queuedBatch copies only the tick's trace identity: its context is cancelled before
+// the worker runs. Cancellation and lease epoch must come from the live leader.
+type queuedBatch struct {
+	batch  model.Batch
+	parent trace.SpanContext
+}
 
 // LoopRunner owns one loop's bounded queue and its single emit worker (single-flight EMIT) plus a
 // single-flight gate over COLLECTION ([CP-C1]) so the scheduler can never re-collect a window
@@ -31,7 +41,7 @@ type LoopRunner struct {
 	em     emit.Emitter
 	cp     checkpoint.Checkpointer
 	guard  *source.Guard
-	q      chan model.Batch
+	q      chan queuedBatch
 	m      Metrics
 	name   string
 	maxDPM int // hard ≤ N points per (series, minute); from governance.max_dpm (default 1)
@@ -63,7 +73,7 @@ func NewLoopRunner(loop source.Loop, em emit.Emitter, cp checkpoint.Checkpointer
 	if maxDPM < 1 {
 		maxDPM = 1
 	}
-	return &LoopRunner{loop: loop, em: em, cp: cp, guard: guard, q: make(chan model.Batch, queueDepth), m: m, name: loop.Key().Loop, maxDPM: maxDPM, lim: logging.NewLimiter(time.Minute)}
+	return &LoopRunner{loop: loop, em: em, cp: cp, guard: guard, q: make(chan queuedBatch, queueDepth), m: m, name: loop.Key().Loop, maxDPM: maxDPM, lim: logging.NewLimiter(time.Minute)}
 }
 
 // Busy reports a collected-but-unsaved batch is in flight — the scheduler skips the tick. [CP-C1]
@@ -142,7 +152,7 @@ func (r *LoopRunner) Enqueue(ctx context.Context, b model.Batch) error {
 	r.busy = true
 	r.mu.Unlock()
 	select {
-	case r.q <- b:
+	case r.q <- queuedBatch{batch: b, parent: trace.SpanContextFromContext(ctx)}:
 		r.m.QueueDepth(r.name, len(r.q))
 		return nil
 	case <-ctx.Done():
@@ -167,7 +177,10 @@ func (r *LoopRunner) Run(leaderCtx context.Context) {
 				return
 			}
 			r.m.QueueDepth(r.name, len(r.q))
-			r.ProcessBatch(leaderCtx, b)
+			ctx := trace.ContextWithSpanContext(leaderCtx, b.parent)
+			ctx, span := otel.Tracer(tracerName).Start(ctx, "loop.emit", trace.WithAttributes(attribute.String("loop", r.name)))
+			r.ProcessBatch(ctx, b.batch)
+			span.End()
 		}
 	}
 }

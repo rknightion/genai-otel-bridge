@@ -4,16 +4,78 @@ package selfobs
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 )
 
 var _ schedule.Metrics = (*Metrics)(nil) // compile-time: satisfies the seam
+
+func TestEmitRetryRecordsEachAttemptHistogramBothPlanes(t *testing.T) {
+	for _, plane := range []string{"metrics", "logs"} {
+		t.Run(plane, func(t *testing.T) {
+			reader := metric.NewManualReader()
+			provider := metric.NewMeterProvider(metric.WithReader(reader), metric.WithView(selfHistogramView()))
+			t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+			metrics, err := NewMetrics(provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/v1/"+plane {
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				if attempts.Add(1) == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			emitter := otlp.New(otlp.Config{Endpoint: server.URL, MaxBytes: 1 << 20,
+				Retry:    otlp.RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: time.Millisecond, MaxElapsed: time.Second, Multiplier: 1},
+				Observer: metrics.ObserveEmitRequest})
+			batch := model.Batch{Samples: []model.Sample{{Name: "requests", Kind: model.Gauge, Value: 1, Timestamp: time.Unix(60, 0)}}}
+			if plane == "logs" {
+				batch.Samples = nil
+				batch.Logs = []model.LogRecord{{Timestamp: time.Unix(60, 0)}}
+			}
+			if err := emitter.Emit(context.Background(), batch); err != nil {
+				t.Fatal(err)
+			}
+			var collected metricdata.ResourceMetrics
+			if err := reader.Collect(context.Background(), &collected); err != nil {
+				t.Fatal(err)
+			}
+			histogram, ok := findHistogram(&collected, "genai_otel_bridge_emit_request_duration_seconds")
+			if !ok {
+				t.Fatal("native emit latency histogram missing")
+			}
+			counts := map[string]uint64{}
+			for _, point := range histogram.DataPoints {
+				p, _ := point.Attributes.Value("plane")
+				class, _ := point.Attributes.Value("status_class")
+				if p.AsString() != plane || point.Attributes.Len() != 2 || point.Sum <= 0 {
+					t.Fatalf("invalid attempt observation: %+v", point)
+				}
+				counts[class.AsString()] += point.Count
+			}
+			if attempts.Load() != 2 || counts["5xx"] != 1 || counts["2xx"] != 1 || len(counts) != 2 {
+				t.Fatalf("attempts=%d histogram counts=%v", attempts.Load(), counts)
+			}
+		})
+	}
+}
 
 func TestMetricsRecordViaManualReader(t *testing.T) {
 	r := metric.NewManualReader()

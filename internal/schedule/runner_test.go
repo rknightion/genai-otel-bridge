@@ -15,7 +15,67 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/emit"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
+
+func TestEmitSpanSurvivesQueueTransfer(t *testing.T) {
+	for _, plane := range []string{"metrics", "logs"} {
+		t.Run(plane, func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+			previous := otel.GetTracerProvider()
+			otel.SetTracerProvider(provider)
+			t.Cleanup(func() { otel.SetTracerProvider(previous); _ = provider.Shutdown(context.Background()) })
+			workerCtx, stop := context.WithCancel(leaderCtx())
+			defer stop()
+			var emitted trace.SpanContext
+			r, key := newRunner(emitterFunc(func(ctx context.Context, _ model.Batch) error {
+				if ctx.Err() != nil || coordinate.EpochFromContext(ctx) != 1 {
+					t.Errorf("worker lost live leadership context: err=%v epoch=%d", ctx.Err(), coordinate.EpochFromContext(ctx))
+				}
+				emitted = trace.SpanContextFromContext(ctx)
+				stop()
+				return nil
+			}), newMemCP())
+			b := batchAt(key, 60)
+			if plane == "logs" {
+				b.Samples = nil
+				b.Logs = []model.LogRecord{{Timestamp: time.Unix(60, 0)}}
+			}
+			tickCtx, tick := provider.Tracer(tracerName).Start(context.Background(), "loop.tick")
+			tickCtx, cancelTick := context.WithCancel(tickCtx)
+			if err := r.Enqueue(tickCtx, b); err != nil {
+				t.Fatal(err)
+			}
+			cancelTick()
+			tick.End()
+			done := make(chan struct{})
+			go func() { r.Run(workerCtx); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				stop()
+				<-done
+				t.Fatal("worker did not emit")
+			}
+			for _, span := range recorder.Ended() {
+				if span.Name() == "loop.emit" {
+					if !span.Parent().Equal(tick.SpanContext()) {
+						t.Fatalf("emit parent=%v want tick=%v", span.Parent(), tick.SpanContext())
+					}
+					if !emitted.Equal(span.SpanContext()) {
+						t.Fatal("emitter did not receive loop.emit context")
+					}
+					return
+				}
+			}
+			t.Fatal("no loop.emit span recorded after queue transfer")
+		})
+	}
+}
 
 // --- test doubles ---
 type memCP struct {

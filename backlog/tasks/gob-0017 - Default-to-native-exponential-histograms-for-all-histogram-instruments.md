@@ -5,7 +5,7 @@ status: Parked
 assignee:
   - '@codex'
 created_date: '2026-09-15 13:00'
-updated_date: '2026-09-22 10:12'
+updated_date: '2026-09-22 11:22'
 labels:
   - observability
   - cardinality
@@ -91,6 +91,18 @@ the wave operating model names as this codebase's worst failure mode. A View in 
 un-set by a deployment that forgets an env var.
 
 The acceptance seam was unchanged, so the conditional acceptance-test update item is not applicable. AC3 requires a deployed, emitting instance and remains deliberately unchecked.
+
+SCOPE-TEXT CORRECTION (recorded 2026-09-22 during wave-2 preparation; description line left intact as history).
+
+The description's "7 `histogram_quantile` queries in `dashboard-self-obs.yaml`" is **WRONG**. The
+measured consumer set, re-verified by grep against `deploy/grafana/self-obs/dashboard-self-obs.yaml`
+at `a86961e`, is **five** `histogram_quantile` queries - two over
+`genai_otel_bridge_bucket_revised_after_settle_age_seconds` (p50, p95) and three over
+`genai_otel_bridge_upstream_request_duration_seconds` (p50, p95, p99) - plus a count panel, one
+alert rule and one recording rule.
+
+Wave 1 (L4) migrated the measured set, not the stated count, and that was correct. AC#1 and AC#2 are
+complete on that basis. Do not re-derive scope from the "7" figure.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

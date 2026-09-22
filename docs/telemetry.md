@@ -15,6 +15,21 @@ is `portkey_api`, so `{loops.analytics.metric_prefix}_requests` becomes `portkey
 The catalogue below is **generated from the code** (`just gen`) and gate-checked in CI, so it
 cannot drift from what the binary actually emits.
 
+### OTLP resource attributes and Prometheus labels
+
+Product telemetry uses `ProductIdentity()` for its resource identity: it stamps
+`service.name`, `service.namespace`, and `deployment.environment.name`. It deliberately does
+not stamp `service.version`. The bridge sets `service.version` only on self-observability
+metrics and traces, from the build version configured in `provider.go` and `tracing.go`.
+
+The resulting Prometheus labels are determined by the receiving OTLP gateway, not by this
+catalogue alone. With Mimir's default OTLP mapping, `service.name` and `service.namespace` are
+combined into the `job` label, `service.instance.id` becomes `instance`, and other resource
+attributes are represented on `target_info`. A per-series label such as `service_version` requires
+the tenant to opt in through `promote_resource_attributes`; it is not a default convention.
+This documents the receiver convention, not a claim that this path has been deployed or observed
+live.
+
 <!-- >>> BEGIN generated telemetry catalogue — do not edit by hand; run `just gen` <<< -->
 
 ### Product telemetry
@@ -64,11 +79,11 @@ cannot drift from what the binary actually emits.
 | Name | Kind | Unit | Labels / attributes | Depends on | Description |
 |------|------|------|---------------------|-----------|-------------|
 | `genai_otel_bridge_auth_errors_total` | counter | 1 | loop, source | — | upstream source API responded 401/403 — a credential failure |
-| `genai_otel_bridge_bucket_revised_after_settle_age_seconds` | histogram | s | loop | — | age (now − bucketEnd) of a settled bucket observed to change after bucket_settle |
+| `genai_otel_bridge_bucket_revised_after_settle_age_seconds` | histogram | s | loop | — | base2 exponential histogram: age (now − bucketEnd) of a settled bucket observed to change after bucket_settle |
 | `genai_otel_bridge_bucket_revised_after_settle_total` | counter | 1 | loop | — | settled buckets observed to change value after settle (late arrival beyond bucket_settle) |
 | `genai_otel_bridge_emit_errors_total` | counter | 1 | loop, kind | — | emit errors by kind |
 | `genai_otel_bridge_emit_partial_success_rejected_total` | counter | 1 | plane | — | data points or log records the gateway rejected via an OTLP 200 partial_success response (rejected_data_points/rejected_log_records) |
-| `genai_otel_bridge_emit_request_duration_seconds` | histogram | s | plane, status_class | — | outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs) |
+| `genai_otel_bridge_emit_request_duration_seconds` | histogram | s | plane, status_class | — | base2 exponential histogram: outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs) |
 | `genai_otel_bridge_emitted_logs_total` | counter | 1 | loop | — | log records emitted (logs-export loop) |
 | `genai_otel_bridge_emitted_total` | counter | 1 | loop | — | samples emitted |
 | `genai_otel_bridge_guard_dropped_total` | counter | 1 | loop | — | data points or log records dropped by the governance guard |
@@ -79,7 +94,7 @@ cannot drift from what the binary actually emits.
 | `genai_otel_bridge_samples_capped_total` | counter | 1 | loop, reason | — | samples suppressed by the DPM cap (coalesced last-write-wins per series-minute) |
 | `genai_otel_bridge_samples_skipped_total` | counter | 1 | loop, reason | — | data points or log records skipped with a counted gap |
 | `genai_otel_bridge_source_graph_unavailable_total` | counter | 1 | loop, graph | — | configured source graph skipped on a poll due to a 404 (capability/permission/absence) |
-| `genai_otel_bridge_upstream_request_duration_seconds` | histogram | s | target, method, status_class | — | outbound request latency to upstream source APIs (time to response headers) |
+| `genai_otel_bridge_upstream_request_duration_seconds` | histogram | s | target, method, status_class | — | base2 exponential histogram: outbound request latency to upstream source APIs (time to response headers) |
 | `genai_otel_bridge_window_lag_seconds` | gauge | s | loop | — | now minus the watermark frontier |
 
 #### Traces

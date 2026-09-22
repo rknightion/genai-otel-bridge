@@ -5,8 +5,7 @@
 interfaces between them, how data flows, how it stays available and correct, how it emits, and
 how it is configured. The **detailed, build-facing design spec** (concrete contracts, schemas,
 failure handling F1–F47, the test plan, and the Opus + Codex review-disposition matrices) is the
-tracked **`docs/DESIGN.md`**; only the step-by-step **implementation plans** live in the gitignored
-`docs/superpowers/` scratch area.
+tracked **`docs/DESIGN.md`**; step-by-step implementation plans remain gitignored scratch artifacts.
 
 ---
 
@@ -455,6 +454,14 @@ The tool is on the production critical path, so it observes itself as a first-cl
   aggregation** — they are the staleness signal and must not be silently dropped. Leadership is NOT a
   metric: it is exposed via `/healthz` (a leader past the stale threshold returns 503; a standby is
   always healthy).
+- **Emit latency and trace continuity:** `genai_otel_bridge_emit_request_duration_seconds` is a
+  native base2 exponential histogram of each outbound OTLP POST attempt's time to response headers,
+  including retry attempts, for both `/v1/metrics` and `/v1/logs`. Its only attributes are `plane`
+  (`metrics` or `logs`) and `status_class` (response class, or `error` without a response). Response-body
+  reading and retry backoff are excluded. When self tracing is enabled, the worker starts `loop.emit`
+  as a child of the enqueueing `loop.tick` around batch processing for both planes. A private schedule
+  queue envelope carries the unchanged `model.Batch` plus a copied `trace.SpanContext`; cancellation
+  and lease epoch still come from the live leader context, and checkpoint fencing remains authoritative.
 - **Self-logs**: structured (logfmt) to **stdout**, scraped by the k8s-monitoring collector → Loki —
   NOT pushed via OTLP (a deliberate divergence from OTLP-everywhere, for logs only; self-metrics stay
   OTLP-push). Format is config-keyed (`log.format`, default `logfmt`) for cheap Loki parsing; built in

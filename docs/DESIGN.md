@@ -2,7 +2,7 @@
 
 **Tracked** (promoted from gitignored scratch on 2026-06-18 so the load-bearing invariants and the
 §12 review-disposition matrix are durable and reviewable from a clone). `ARCHITECTURE.md` is the
-higher-level durable design; **implementation plans** remain gitignored scratch in `docs/superpowers/`.
+higher-level durable design; implementation plans remain gitignored scratch artifacts.
 This is the detailed, build-facing spec — v1 scope, concrete contracts, schemas, failure handling,
 the test plan, and the Opus + Codex review dispositions (§11/§12). Date: 2026-06-18.
 
@@ -266,6 +266,17 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
   scheduler-loop progress within K×cadence — so a wedged goroutine is restartable; it is *not* a
   constant 200 (a leader correctly blocked on backpressure must stay alive, so the heartbeat tracks
   *loop progress attempts*, not successful emits).
+- **Per-attempt emit latency:** the injected OTLP emitter observer records
+  `genai_otel_bridge_emit_request_duration_seconds{plane,status_class}` for every POST attempt,
+  including retries, on both metrics and logs paths. It measures time to response headers and uses
+  the self provider's native base2 exponential histogram view without explicit bucket boundaries.
+  Retry backoff and response-body reading are outside the measurement.
+- **Emit trace parentage:** the bounded schedule queue stores a private envelope containing the
+  unchanged `model.Batch` and the enqueueing tick's copied `trace.SpanContext`. After the existing
+  leadership-cancellation re-check, the worker attaches that trace identity to its live leadership
+  context and starts `loop.emit`, a child of `loop.tick`, around `ProcessBatch`. Both planes receive
+  the child context; lease epoch and cancellation still come from the current leader. The queue never
+  retains a live tick context, and checkpoint fencing remains unchanged.
 
 ### 4.7 HTTP client (`internal/httpx`)
 - Shared client with a **configurable, non-default User-Agent** (default-UA WAF-block is real, §15);
@@ -531,7 +542,8 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   dashboard before naming the metric `_usd` or applying a divisor; ship `requests` first); **(ii)
   metadata-group row field name** (dev workspace has no tagged requests, so the exact JSON key for the
   dimension value in `metadata/{key}` rows is unobserved — confirm against a workspace that actually
-  tags request metadata before freezing the derive path). Full spec: `docs/superpowers/specs/portkey-groups-poc.md`.
+  tags request metadata before freezing the derive path). This RP1 section and
+  `internal/source/portkey/AGENTS.md` are the durable contract.
   **As built:** a separate `groupsLoop` (NOT a re-parameterised `analyticsLoop`) sharing the source's
   httpx client/limiter; `Window==0` so the scheduler treats it as a snapshot (no catch-up acceleration,
   no bucket-math, and — fix landed alongside — no spurious `backfill_unstorable` count, which also
@@ -572,7 +584,7 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   never promote `id`, `created_at`, cost/token values; strip `metadata`/`portkeyHeaders`/content
   fields entirely. GS1 is a SHIP prerequisite (stream labels) for the logs loop, not a code-build
   blocker — the loop emits OTLP logs today; GS1 makes the indexed attrs queryable as Loki stream labels.
-  Full spec: `docs/superpowers/specs/portkey-logs-export-poc.md`.
+  This RP2 section and `internal/source/portkey/AGENTS.md` are the durable contract.
 
 - **RP3 — Portkey `api_key_use_cases`: per-key use-case label (BUILT 2026-06-24).** Operators configure
   a source-level `api_key_use_cases` list mapping each use-case name to one or more Portkey api-key UUIDs.
@@ -811,8 +823,8 @@ to H2/M1/H1/H3/C7/M8 (resolved/accepted). **Codex's 14 required tests** are adop
 ## 15. OP5 measured — live Portkey API (2026-06-19)
 
 GET-only probe with the dev `portkey_apikey` across four windows (50m/59m/61m/24h) × six graphs; all
-**200**. Record: `docs/superpowers/poc/OP5-findings.md` (scratch). These are the measured facts the
-Portkey source encodes; they **supersede** the corresponding assumptions in §3.1/§3.2/§3.3.
+**200**. The measured facts below are the durable record of the probe and the behavior the Portkey
+source encodes; they **supersede** the corresponding assumptions in §3.1/§3.2/§3.3.
 
 - **OP5a — latency shape (schema change).** The `latency` graph is structurally different from the
   count graphs: summary `{avg,p50,p90,p99}`, data points `{timestamp,avg,p50,p90,p99}` (**no `total`**).

@@ -520,9 +520,9 @@ func TestCollect404IsCapabilitySkipNotFatal(t *testing.T) {
 	}
 }
 
-// TestCollect404FiresGraphSkippedHook asserts a skipped-404 graph fires Deps.OnGraphSkipped so the
-// (otherwise silent) skip is observable via SourceGraphUnavailable (round3-#4).
-func TestCollect404FiresGraphSkippedHook(t *testing.T) {
+// TestCollect404FiresCapabilityHook asserts a skipped-404 graph fires the capability hook so the
+// (otherwise silent) skip is observable (round3-#4).
+func TestCollect404FiresCapabilityHook(t *testing.T) {
 	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	now := base.Add(10 * time.Minute)
 	srv := fakePortkey(t,
@@ -530,7 +530,7 @@ func TestCollect404FiresGraphSkippedHook(t *testing.T) {
 		map[string]int{"latency": 404},
 	)
 	defer srv.Close()
-	var skipped []string
+	var capabilities [][3]string
 	cfg := config.SourceConfig{
 		Type: "portkey", Enabled: true, BaseURL: srv.URL, SourceInstance: "pk-test",
 		Auth:      config.AuthConfig{Header: "x-portkey-api-key", Value: "k"},
@@ -543,7 +543,9 @@ func TestCollect404FiresGraphSkippedHook(t *testing.T) {
 			Graphs: []string{"requests", "latency"},
 		}},
 	}
-	src, err := New(cfg, source.Deps{OnGraphSkipped: func(_, g string) { skipped = append(skipped, g) }})
+	src, err := New(cfg, source.Deps{OnCapability: func(loop, graph string, state source.CapabilityState) {
+		capabilities = append(capabilities, [3]string{loop, graph, string(state)})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,8 +554,8 @@ func TestCollect404FiresGraphSkippedHook(t *testing.T) {
 	if _, err := lp.Collect(context.Background(), model.Watermark{Time: base}); err != nil {
 		t.Fatal(err)
 	}
-	if len(skipped) != 1 || skipped[0] != "latency" {
-		t.Fatalf("OnGraphSkipped should fire once for 'latency', got %v", skipped)
+	if len(capabilities) != 1 || capabilities[0] != [3]string{"analytics", "latency", string(source.CapabilityTransient404)} {
+		t.Fatalf("OnCapability should fire once for analytics/latency/transient-404, got %v", capabilities)
 	}
 }
 

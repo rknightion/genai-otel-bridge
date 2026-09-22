@@ -88,11 +88,18 @@ func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, 
 	if deps.OnBucketRevised == nil {
 		deps.OnBucketRevised = m.BucketRevisedAfterSettle
 	}
-	// [round3-#4] Make a source's (otherwise silent) capability-skip observable: a configured graph that
-	// 404s is logged + skipped (derive from the rest), but now also counted via SourceGraphUnavailable so
-	// a flapping-404 graph is distinguishable from a permanently-absent one. Same pattern as above.
-	if deps.OnGraphSkipped == nil {
-		deps.OnGraphSkipped = m.SourceGraphUnavailable
+	// Capability/permission conditions and incomplete-data events are separate closed contracts.
+	// Source packages pass typed constants; these adapters are the only conversion to the schedule
+	// metrics seam's deliberately plain strings.
+	if deps.OnCapability == nil {
+		deps.OnCapability = func(loop, graph string, state source.CapabilityState) {
+			m.SourceCapability(loop, graph, string(state))
+		}
+	}
+	if deps.OnDataIncomplete == nil {
+		deps.OnDataIncomplete = func(loop string, reason source.IncompleteReason) {
+			m.SourceDataIncomplete(loop, string(reason))
+		}
 	}
 	// [followup §9] An upstream 401/403 already surfaces as a retryable Collect error (window_lag rises),
 	// but that is indistinguishable in metrics from a generic slow/erroring endpoint. Wire OnAuthError to

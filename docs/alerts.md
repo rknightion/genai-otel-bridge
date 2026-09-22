@@ -5,7 +5,7 @@ description: Bundled self-observability alert rules for genai-otel-bridge, with 
 
 # Alerts & Runbooks
 
-genai-otel-bridge ships eleven self-observability alert rules under
+genai-otel-bridge ships thirteen self-observability alert rules under
 `deploy/grafana/self-obs/alertrule-*.yaml`. All rules query `genai_otel_bridge_*` metrics
 directly (no recording-rule dependency) and use `noDataState: Ok` so the healthy case (no
 series at all) never fires spuriously.
@@ -28,6 +28,8 @@ gcx resources push -p deploy/grafana/self-obs --context self-obs-stack
 | [GenaiOtelBridgeAuthErrors](#genaiotelbridgeautherrors) | critical | Upstream returned 401/403 (credential failure) |
 | [GenaiOtelBridgeUpstreamErrorBudget](#genaiotelbridgeupstreamerrorbudget) | warning | > 20% of requests to an upstream target are errors |
 | [GenaiOtelBridgeWindowTruncatedDroppingRecords](#genaiotelbridgewindowtruncateddroppingrecords) | warning | A log loop truncated a window; records were dropped |
+| [GenaiOtelBridgeExportPipelineDataIncomplete](#genaiotelbridgeexportpipelinedataincomplete) | critical | A Portkey export job failed or remained stuck |
+| [GenaiOtelBridgeWorkspaceScopePermissionDenied](#genaiotelbridgeworkspacescopepermissiondenied) | critical | A credential does not match the configured workspace scope |
 | [GenaiOtelBridgeDataLoss](#genaiotelbridgedataloss) | warning | Samples skipped for a real-loss reason (too-old / duplicate) |
 | [GenaiOtelBridgeBucketRevisedAfterSettle](#genaiotelbridgebucketrevisedaftersettle) | warning | > 30 settled buckets/h still changing after `bucket_settle` |
 | [GenaiOtelBridgeQueueBackpressure](#genaiotelbridgequeuebackpressure) | warning | Emit cannot keep up with collect (queue depth > 0 for 15m) |
@@ -158,7 +160,7 @@ See also: [Troubleshooting — auth errors](./troubleshooting.md#auth-errors-401
 **Fires when:** a windowed log loop (`runs`, `logs_export`) truncated a window — it advanced
 past undrained records with a counted gap. Some log records were dropped.
 
-**Query:** `sum by (loop) (increase(genai_otel_bridge_source_graph_unavailable_total{graph="window_truncated"}[10m])) > 0`
+**Query:** `sum by (loop) (increase(genai_otel_bridge_source_data_incomplete_total{reason="window_truncated"}[10m])) > 0`
 
 The truncated count is unknowable by construction (the loop stops at the page cap).
 
@@ -169,6 +171,37 @@ The truncated count is unknowable by construction (the loop stops at the page ca
    `settings.window` to reduce the volume per window.
 3. If `runs` is truncating: increase `settings.max_pages_per_window` or narrow the scope
    via `settings.session_filter`.
+
+---
+
+### GenaiOtelBridgeExportPipelineDataIncomplete
+
+**Severity:** critical
+
+**Fires when:** `genai_otel_bridge_source_data_incomplete_total` increases for `reason=export_failed`
+or `reason=export_stuck`. The export-job lifecycle cannot produce the target's data.
+
+**Query:** `sum by (loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck"}[15m])) > 0`
+
+**What to check:** inspect the export-job status, then its retry and backoff behaviour. The `loop` and
+`reason` labels distinguish a failed export from a stuck one.
+
+---
+
+### GenaiOtelBridgeWorkspaceScopePermissionDenied
+
+**Severity:** critical
+
+**Fires when:** `genai_otel_bridge_source_capability_total` increases with
+`graph="workspace_scope",state="permission-denied"`. The loop refuses to emit until the configured
+credential and expected workspace scope agree.
+
+**Query:** `sum by (loop) (increase(genai_otel_bridge_source_capability_total{graph="workspace_scope",state="permission-denied"}[15m])) > 0`
+
+**What to check:** compare the configured expected workspace scope with the credential, especially
+after a key rotation. `endpoint-absent` and `plan-unsupported` are valid capability states but currently
+producerless; a single 404 cannot distinguish them, so use the observed capability series and its
+steady versus intermittent pattern as query-time judgement.
 
 ---
 

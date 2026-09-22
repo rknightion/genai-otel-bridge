@@ -157,7 +157,7 @@ func TestRunsCollectQuotaAndRetryable(t *testing.T) {
 }
 
 // TestRunsCollectBackfillFloorCounted (#53): a watermark older than now-max_backfill clamps winMin to the
-// floor AND fires an alertable self-metric (OnGraphSkipped runs/backfill_skipped) — not only slog.Warn.
+// floor AND fires an alertable self-metric (backfill_skipped) — not only slog.Warn.
 // The scheduler's pre-emptive backfill_unstorable counter can never fire for this snapshot loop
 // (Window==0), so without this hook a >max_backfill outage would drop the span log-only (unalertable).
 func TestRunsCollectBackfillFloorCounted(t *testing.T) {
@@ -174,8 +174,8 @@ func TestRunsCollectBackfillFloorCounted(t *testing.T) {
 	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
 	lp := newTestRunsLoop(t, srv.URL, now, map[string]string{"window": "10m", "settle": "1m", "max_backfill": "1h"})
 	var skipped int32
-	lp.onGraphSkipped = func(loop, graph string) {
-		if loop == "runs" && graph == "backfill_skipped" {
+	lp.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+		if loop == "runs" && reason == source.IncompleteBackfillSkipped {
 			atomic.AddInt32(&skipped, 1)
 		}
 	}
@@ -201,8 +201,8 @@ func TestRunsCollectMaxPagesTruncation(t *testing.T) {
 	now := time.Date(2026, 6, 20, 2, 0, 0, 0, time.UTC)
 	lp := newTestRunsLoop(t, srv.URL, now, map[string]string{"window": "1h", "settle": "10m", "max_pages_per_window": "1"})
 	var skipped int32
-	lp.onGraphSkipped = func(loop, graph string) {
-		if loop == "runs" && graph == "window_truncated" {
+	lp.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+		if loop == "runs" && reason == source.IncompleteWindowTruncated {
 			atomic.AddInt32(&skipped, 1)
 		}
 	}
@@ -215,6 +215,6 @@ func TestRunsCollectMaxPagesTruncation(t *testing.T) {
 		t.Fatalf("truncation must advance + clear cursor (never stall): %+v", b.Watermark)
 	}
 	if atomic.LoadInt32(&skipped) != 1 {
-		t.Fatalf("truncation must fire the window_truncated skip metric, got %d", skipped)
+		t.Fatalf("truncation must fire the window_truncated data-incomplete metric, got %d", skipped)
 	}
 }

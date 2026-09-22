@@ -25,7 +25,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop) (increase(genai_otel_bridge_source_graph_unavailable_total{graph="window_truncated"}[10m])) > 0'
+        expr: 'sum by (loop) (increase(genai_otel_bridge_source_data_incomplete_total{reason="window_truncated"}[10m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

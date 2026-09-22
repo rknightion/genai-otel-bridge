@@ -1,24 +1,23 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: genai-otel-bridge-export-pipeline-data-incomplete
+  name: genai-otel-bridge-workspace-scope-permission-denied
   annotations:
     grafana.app/folder: genai-otel-bridge
   labels:
     grafana.app/folder: genai-otel-bridge
 spec:
-  title: GenaiOtelBridgeExportPipelineDataIncomplete
+  title: GenaiOtelBridgeWorkspaceScopePermissionDenied
   execErrState: Ok
   noDataState: Ok
   for: 0s
   trigger:
     interval: 1m
   labels:
-    # export_failed/export_stuck mean the export pipeline cannot produce its target's data.
     severity: critical
   annotations:
-    summary: "genai-otel-bridge {{ $labels.loop }} export pipeline has incomplete data ({{ $labels.reason }})"
-    description: "genai_otel_bridge_source_data_incomplete_total{reason=\"{{ $labels.reason }}\"} increased for the {{ $labels.loop }} loop in the last 15m. export_failed/export_stuck mean the export-job lifecycle cannot produce the target's data; check export-job status plus retry/backoff behaviour. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge {{ $labels.loop }} loop is denied the workspace_scope capability"
+    description: "genai_otel_bridge_source_capability_total{graph=\"workspace_scope\",state=\"permission-denied\"} increased for the {{ $labels.loop }} loop in the last 15m. The loop refuses to emit data until the configured credential and expected workspace scope agree; check recent key rotation and scope configuration. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -26,7 +25,7 @@ spec:
       relativeTimeRange: {from: 16m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck"}[15m])) > 0'
+        expr: 'sum by (loop) (increase(genai_otel_bridge_source_capability_total{graph="workspace_scope",state="permission-denied"}[15m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

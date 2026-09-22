@@ -18,7 +18,7 @@ deploy/grafana/
 ├── self-obs/     # genai_otel_bridge_* signals — push to your self-obs stack
 │   ├── folder.yaml
 │   ├── dashboard-self-obs.yaml
-│   ├── alertrule-*.yaml          (11 alert rules)
+│   ├── alertrule-*.yaml          (13 alert rules)
 │   └── recordingrule-*.yaml      (7 recording rules)
 └── product/      # portkey_api_* and langsmith_* signals — push to your product stack
     ├── folder.yaml
@@ -70,7 +70,7 @@ edit the generator and run `just gen-dashboard` to regenerate it.
 | Overview / SLO | At-a-glance badges: loops-healthy, leader present, replicas, worst freshness ratio, max window lag, fatal emit errors; freshness-by-loop + throughput |
 | Liveness & leadership | Window lag, last-success age vs each loop's own baseline, replicas over time, per-loop freshness gauge (repeats per `$loop`) |
 | Emit pipeline | Emitted samples/logs, emit errors by kind, queue depth, samples skipped/capped, guard dropped, buckets revised after settle |
-| Upstream source health | Request rate/latency/error-ratio per target, auth errors, source-graph-unavailable |
+| Upstream source health | Request rate/latency/error-ratio per target, auth errors, capability outcomes, and data incompleteness |
 | Cardinality & governance | New-label-value growth, guard drops, DPM capping |
 | Logs | The poller's own stdout logs (not the high-volume product logs) |
 | Profiling | The poller's own Pyroscope profiles: CPU, heap in-use, goroutines, CPU flame graph |
@@ -137,7 +137,7 @@ These encode the correct query patterns for per-bucket gauges (using `sum_over_t
     `portkey_api_*` metrics are **per-bucket gauges**, not counters. An instant query between
     emit cycles may read as absent — use `last_over_time(...[20m])` to see the last known value.
     Always use `sum_over_time` to aggregate; never use `rate()` or `increase()` on these metrics.
-    `genai_otel_bridge_source_graph_unavailable_total` and
+    `genai_otel_bridge_source_capability_total`, `genai_otel_bridge_source_data_incomplete_total`, and
     `genai_otel_bridge_upstream_request_duration_seconds` are counters — `rate()` is correct there.
 
 ---
@@ -156,6 +156,6 @@ Before deploying to production:
 
 ## See also
 
-- [Alerts & Runbooks](./alerts.md) — the eleven bundled alert rules with runbooks
+- [Alerts & Runbooks](./alerts.md) — the thirteen bundled alert rules with runbooks
 - [Telemetry reference](./telemetry.md) — full signal catalogue
 - [Troubleshooting](./troubleshooting.md) — common failure modes

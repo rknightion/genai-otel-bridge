@@ -28,8 +28,8 @@ const defaultDownloadMaxBytes = 512 << 20 // 512 MiB
 // maxLogLineBytes caps one JSONL line. Operational export records are small; a line beyond this is
 // treated as malformed (corrupt or content-bearing) and is SKIPPED loudly — its bytes are drained and
 // discarded (never parsed/stringified), the line offset still advances so the loop resumes PAST it (it
-// never wedges re-reading the same over-long line), and it is counted via OnGraphSkipped(graph=
-// "line_oversize"). Overridable per-loop via logsExportLoop.maxLineBytes so the skip path is testable
+// never wedges re-reading the same over-long line), and it is counted via the data-incomplete hook.
+// Overridable per-loop via logsExportLoop.maxLineBytes so the skip path is testable
 // without a multi-MiB fixture. See readLine / downloadChunk.
 const maxLogLineBytes = 1 << 20 // 1 MiB
 

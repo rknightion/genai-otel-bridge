@@ -105,13 +105,13 @@ func checkWorkspaceScope(ctx context.Context, hc *httpx.Client, baseURL, authHdr
 // verifyScopeForCollect runs the one-time workspace-scope assertion at the top of a key-scoped loop's
 // Collect (analytics/groups). Returns (verified, err):
 //   - matched      ⇒ (true, nil): cache it; never re-check.
-//   - mismatch     ⇒ (false, err) AND fires onGraphSkipped(loop,"workspace_scope_mismatch"): the caller
+//   - mismatch     ⇒ (false, err) AND fires OnCapability(loop,"workspace_scope",permission-denied): the caller
 //     bubbles the error so the loop REFUSES TO EMIT (loud, no advance, window_lag grows) — the resilient
 //     "stay up but emit nothing wrong" posture; recovers without restart once the key is fixed.
 //   - undeterminable (no traffic) ⇒ (false, nil): proceed unverified, re-check next tick (don't block a
 //     legitimately-quiet workspace).
 //   - transient probe failure     ⇒ (false, err) WITHOUT the hook: retryable, not a real mismatch.
-func verifyScopeForCollect(ctx context.Context, hc *httpx.Client, baseURL, authHdr, authVal, expected, loop, sourceInstance string, now time.Time, onGraphSkipped func(loop, graph string), onAuthError func(loop, source string)) (bool, error) {
+func verifyScopeForCollect(ctx context.Context, hc *httpx.Client, baseURL, authHdr, authVal, expected, loop, sourceInstance string, now time.Time, onCapability func(loop, graph string, state source.CapabilityState), onAuthError func(loop, source string)) (bool, error) {
 	res, detail, err := checkWorkspaceScope(ctx, hc, baseURL, authHdr, authVal, expected, loop, sourceInstance, now, onAuthError)
 	if err != nil {
 		return false, fmt.Errorf("portkey %s: workspace scope probe failed (transient; retrying): %w", loop, err)
@@ -124,8 +124,8 @@ func verifyScopeForCollect(ctx context.Context, hc *httpx.Client, baseURL, authH
 			"loop", loop, "expected_workspace", expected)
 		return false, nil
 	default: // scopeMismatch
-		if onGraphSkipped != nil {
-			onGraphSkipped(loop, "workspace_scope_mismatch")
+		if onCapability != nil {
+			onCapability(loop, "workspace_scope", source.CapabilityPermissionDenied)
 		}
 		return false, fmt.Errorf("portkey %s: API key analytics scope is %q but expected_workspace=%q — refusing to emit (the key is too broad; use a workspace-scoped key)", loop, detail, expected)
 	}

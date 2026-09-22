@@ -96,9 +96,11 @@ func TestGroupsCollectRefusesOnWorkspaceScopeMismatch(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
 	srv := wsServer(t, 200, "ws-global-admin") // key sees the wrong (too-broad) workspace
 	defer srv.Close()
-	var skipped [][2]string
+	var capabilities [][3]string
 	gl := mkGroups(t, groupsCfg(srv, map[string]string{"expected_workspace": "ws-acme-001", "page_size": "100"}),
-		source.Deps{OnGraphSkipped: func(l, g string) { skipped = append(skipped, [2]string{l, g}) }}, now)
+		source.Deps{OnCapability: func(l, g string, state source.CapabilityState) {
+			capabilities = append(capabilities, [3]string{l, g, string(state)})
+		}}, now)
 	batch, err := gl.Collect(context.Background(), model.Watermark{})
 	if err == nil {
 		t.Fatal("scope mismatch must refuse to emit (error)")
@@ -106,8 +108,9 @@ func TestGroupsCollectRefusesOnWorkspaceScopeMismatch(t *testing.T) {
 	if len(batch.Samples) != 0 {
 		t.Fatalf("must emit nothing on mismatch, got %d samples", len(batch.Samples))
 	}
-	if len(skipped) != 1 || skipped[0] != [2]string{"groups", "workspace_scope_mismatch"} {
-		t.Fatalf("want OnGraphSkipped(groups, workspace_scope_mismatch), got %v", skipped)
+	want := [3]string{"groups", "workspace_scope", string(source.CapabilityPermissionDenied)}
+	if len(capabilities) != 1 || capabilities[0] != want {
+		t.Fatalf("want OnCapability %v, got %v", want, capabilities)
 	}
 }
 
@@ -172,7 +175,7 @@ func TestVerifyScopeForCollect(t *testing.T) {
 		srv := wsServer(t, 200, "ws-acme-001")
 		defer srv.Close()
 		var hookFired bool
-		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "analytics", "pk-test", now, func(string, string) { hookFired = true }, nil)
+		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "analytics", "pk-test", now, func(string, string, source.CapabilityState) { hookFired = true }, nil)
 		if !ok || err != nil || hookFired {
 			t.Fatalf("match: ok=%v err=%v hook=%v", ok, err, hookFired)
 		}
@@ -181,19 +184,20 @@ func TestVerifyScopeForCollect(t *testing.T) {
 		srv := wsServer(t, 200, "ws-global-admin")
 		defer srv.Close()
 		var gotLoop, gotGraph string
-		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "analytics", "pk-test", now, func(l, g string) { gotLoop, gotGraph = l, g }, nil)
+		var gotState source.CapabilityState
+		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "analytics", "pk-test", now, func(l, g string, state source.CapabilityState) { gotLoop, gotGraph, gotState = l, g, state }, nil)
 		if ok || err == nil {
 			t.Fatalf("mismatch must refuse: ok=%v err=%v", ok, err)
 		}
-		if gotLoop != "analytics" || gotGraph != "workspace_scope_mismatch" {
-			t.Fatalf("hook args = %q/%q, want analytics/workspace_scope_mismatch", gotLoop, gotGraph)
+		if gotLoop != "analytics" || gotGraph != "workspace_scope" || gotState != source.CapabilityPermissionDenied {
+			t.Fatalf("hook args = %q/%q/%q, want analytics/workspace/permission-denied", gotLoop, gotGraph, gotState)
 		}
 	})
 	t.Run("undeterminable-proceeds", func(t *testing.T) {
 		srv := wsServer(t, 200)
 		defer srv.Close()
 		var hookFired bool
-		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "groups", "pk-test", now, func(string, string) { hookFired = true }, nil)
+		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "groups", "pk-test", now, func(string, string, source.CapabilityState) { hookFired = true }, nil)
 		if ok || err != nil || hookFired {
 			t.Fatalf("undeterminable: want (false,nil,no-hook), got ok=%v err=%v hook=%v", ok, err, hookFired)
 		}
@@ -202,7 +206,7 @@ func TestVerifyScopeForCollect(t *testing.T) {
 		srv := wsServer(t, 503)
 		defer srv.Close()
 		var hookFired bool
-		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "groups", "pk-test", now, func(string, string) { hookFired = true }, nil)
+		ok, err := verifyScopeForCollect(context.Background(), scopeTestClient(t), srv.URL, "h", "k", "ws-acme-001", "groups", "pk-test", now, func(string, string, source.CapabilityState) { hookFired = true }, nil)
 		if ok || err == nil || hookFired {
 			t.Fatalf("transient: want (false,err,no-hook), got ok=%v err=%v hook=%v", ok, err, hookFired)
 		}

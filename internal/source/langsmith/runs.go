@@ -92,10 +92,10 @@ type runsLoop struct {
 	rootOnly bool
 	runType  string
 
-	policy         runsFieldPolicy
-	onGraphSkipped func(loop, graph string)
-	onAuthError    func(loop, source string)
-	now            func() time.Time
+	policy           runsFieldPolicy
+	onDataIncomplete func(loop string, reason source.IncompleteReason)
+	onAuthError      func(loop, source string)
+	now              func() time.Time
 
 	// in-memory discovery cache (Collect is single-flight → no lock; resets on failover → re-discover).
 	cachedSessions []string
@@ -136,8 +136,8 @@ func (l *runsLoop) Key() model.CheckpointKey {
 
 // windowTruncated records an oversize-window tail-drop as a loud, counted, alertable event.
 func (l *runsLoop) windowTruncated() {
-	if l.onGraphSkipped != nil {
-		l.onGraphSkipped("runs", "window_truncated")
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete("runs", source.IncompleteWindowTruncated)
 	}
 }
 
@@ -145,8 +145,8 @@ func (l *runsLoop) windowTruncated() {
 // alertable event ([adversarial-review M1] — counted, not merely logged, so a project population
 // growing past the cap is observable, not a silent drop).
 func (l *runsLoop) sessionsTruncated() {
-	if l.onGraphSkipped != nil {
-		l.onGraphSkipped("runs", "sessions_truncated")
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete("runs", source.IncompleteSessionsTruncated)
 	}
 }
 
@@ -157,8 +157,8 @@ func (l *runsLoop) sessionsTruncated() {
 // can't catch it either (the skipped span is never fetched), so without this hook a >max_backfill outage
 // silently drops that log span with only a log line — violating the "every gap is alertable" rule.
 func (l *runsLoop) backfillSkipped() {
-	if l.onGraphSkipped != nil {
-		l.onGraphSkipped("runs", "backfill_skipped")
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete("runs", source.IncompleteBackfillSkipped)
 	}
 }
 

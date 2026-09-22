@@ -106,53 +106,52 @@ type logsExportLoop struct {
 	// apiKeyIDs is the comma-separated list of API key UUIDs to scope the export filter (empty ⇒ all keys).
 	useCase   string
 	apiKeyIDs string
-	// onGraphSkipped, if set, counts a failed/abandoned export job as an alertable self-metric
-	// (→ genai_otel_bridge_source_graph_unavailable_total{loop="logs_export",graph=...}) so a flapping export is
-	// visible in metrics, not just logs — distinct from window_lag (the "stuck" symptom). nil ⇒ log only.
-	onGraphSkipped func(loop, graph string)
-	onAuthError    func(loop, source string) // followup §9: 401/403 on a lifecycle call → own alertable signal
-	now            func() time.Time
+	// onDataIncomplete, if set, counts a failed/abandoned export job as an alertable self-metric so a
+	// flapping export is visible in metrics, not just logs — distinct from window_lag (the "stuck" symptom).
+	// nil ⇒ log only.
+	onDataIncomplete func(loop string, reason source.IncompleteReason)
+	onAuthError      func(loop, source string) // followup §9: 401/403 on a lifecycle call → own alertable signal
+	now              func() time.Time
 }
 
 // jobFailed records an export-job failure/abandonment as a loud, counted, alertable event.
-func (l *logsExportLoop) jobFailed(reason string) {
-	if l.onGraphSkipped != nil {
-		l.onGraphSkipped("logs_export", reason)
+func (l *logsExportLoop) jobFailed(reason source.IncompleteReason) {
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete("logs_export", reason)
 	}
 }
 
 // traceIDUnparsed counts a record whose CONFIGURED trace-id metadata field was present but not a parseable
 // UUID, so the OTLP trace_id mapping was lost (the raw value still ships as a record attr). Reuses the
-// graph-skipped self-metric (→ genai_otel_bridge_source_graph_unavailable_total{loop="logs_export",graph="trace_id_unparsed"})
-// so a fleet-wide broken mapping — operator configured logs↔traces correlation, upstream changed the format —
-// is alertable rather than silently 0% effective.
+// data-incomplete self-metric so a fleet-wide broken mapping — operator configured logs↔traces correlation,
+// upstream changed the format — is alertable rather than silently 0% effective.
 func (l *logsExportLoop) traceIDUnparsed() {
-	if l.onGraphSkipped != nil {
-		l.onGraphSkipped("logs_export", "trace_id_unparsed")
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete("logs_export", source.IncompleteTraceIDUnparsed)
 	}
 }
 
 // lineOversize counts a single JSONL export line that exceeded maxLogLineBytes and was SKIPPED (the line
 // offset still advances, so the loop never wedges re-reading the same bytes forever). Reuses the
-// graph-skipped self-metric (→ genai_otel_bridge_source_graph_unavailable_total{loop="logs_export",graph="line_oversize"})
-// so an over-long line is loud + alertable — matching the "skipped loudly" contract in CLAUDE.md — rather
+// data-incomplete self-metric so an over-long line is loud + alertable — matching the "skipped loudly" contract
+// in CLAUDE.md — rather
 // than a silent gap. The oversized bytes are NEVER parsed or stringified (they may be content-bearing).
 func (l *logsExportLoop) lineOversize() {
-	if l.onGraphSkipped != nil {
-		l.onGraphSkipped("logs_export", "line_oversize")
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete("logs_export", source.IncompleteLineOversize)
 	}
 }
 
 // lineMalformed counts a single JSONL export line that failed json.Unmarshal and was SKIPPED (the line
 // offset still advances, so the page always completes and the loop never re-attempts the bad bytes). Reuses
-// the graph-skipped self-metric (→ genai_otel_bridge_source_graph_unavailable_total{loop="logs_export",graph="line_unparseable"})
-// so a SYSTEMATIC upstream format change — every line failing to parse, zero records emitted while the
+// data-incomplete self-metric so a SYSTEMATIC upstream format change — every line failing to parse, zero
+// records emitted while the
 // window completes cleanly — is alertable via rate(...)>0, not a silent 100% drop that only shows in a
 // Warn log the metrics-based self-obs stack never turns into an alert (#66). Mirrors lineOversize /
 // export_failed / trace_id_unparsed.
 func (l *logsExportLoop) lineMalformed() {
-	if l.onGraphSkipped != nil {
-		l.onGraphSkipped("logs_export", "line_unparseable")
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete("logs_export", source.IncompleteLineUnparseable)
 	}
 }
 
@@ -336,7 +335,7 @@ func (l *logsExportLoop) stepIdle(ctx context.Context, since model.Watermark, no
 		slog.Error("portkey logs_export: window exceeds max_pages_per_window — parking (loud, no advance, no re-create) until `window` is shrunk",
 			"win_min", winMin.UTC().Format(time.RFC3339), "win_max", winMax.UTC().Format(time.RFC3339),
 			"pages", pages, "max_pages_per_window", l.maxPagesPerWindow, "source", l.sourceInstance)
-		l.jobFailed("window_oversize")
+		l.jobFailed(source.IncompleteWindowOversize)
 		cur := exportCursor{
 			Phase:  phaseBlocked,
 			WinMin: winMin.UTC().Format(time.RFC3339Nano), WinMax: winMax.UTC().Format(time.RFC3339Nano),
@@ -445,7 +444,7 @@ func (l *logsExportLoop) stepPolling(ctx context.Context, since model.Watermark,
 		if deadline, ok := parseCursorTime(cur.PollDeadline); ok && now.After(deadline) {
 			slog.Error("portkey logs_export: job exceeded job_poll_timeout — cancelling + restarting window",
 				"job", cur.JobID, "source", l.sourceInstance)
-			l.jobFailed("export_stuck")
+			l.jobFailed(source.IncompleteExportStuck)
 			_ = l.cancelExport(ctx, cur.JobID) // best-effort
 			return model.Batch{Key: l.Key(), Watermark: l.resetIdle(since.Time)}, nil
 		}
@@ -453,7 +452,7 @@ func (l *logsExportLoop) stepPolling(ctx context.Context, since model.Watermark,
 	default: // failed, stopped, or unexpected
 		slog.Error("portkey logs_export: export job failed/stopped — restarting window",
 			"job", cur.JobID, "status", status, "source", l.sourceInstance)
-		l.jobFailed("export_failed")
+		l.jobFailed(source.IncompleteExportFailed)
 		return model.Batch{Key: l.Key(), Watermark: l.resetIdle(since.Time)}, nil
 	}
 }

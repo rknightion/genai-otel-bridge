@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // rangeServer serves a fixed JSONL body and (unless ignoreRange) honours HTTP `Range: bytes=N-` with a
@@ -203,8 +204,10 @@ func TestDownloadChunkSkipsMalformedLine(t *testing.T) {
 	body := exportLine(0, "m") + "{not json\n" + exportLine(2, "m")
 	srv := bodyServer(t, body)
 	l := dlLoop(t, srv)
-	var skipped []string
-	l.onGraphSkipped = func(loop, graph string) { skipped = append(skipped, loop+"/"+graph) }
+	var events [][2]string
+	l.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+		events = append(events, [2]string{loop, string(reason)})
+	}
 	recs, lines, _, eof, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 10, time.Unix(0, 0).UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -221,8 +224,9 @@ func TestDownloadChunkSkipsMalformedLine(t *testing.T) {
 	// #66: the skipped unparseable line must fire exactly one alertable self-metric count (a Warn log
 	// alone is invisible to the metrics-based self-obs stack — a systematic format change would otherwise
 	// drop 100% of records while the window completes silently).
-	if len(skipped) != 1 || skipped[0] != "logs_export/line_unparseable" {
-		t.Fatalf("unparseable line must fire exactly one logs_export/line_unparseable count, got %v", skipped)
+	want := [2]string{"logs_export", string(source.IncompleteLineUnparseable)}
+	if len(events) != 1 || events[0] != want {
+		t.Fatalf("unparseable line must fire exactly one %v count, got %v", want, events)
 	}
 }
 
@@ -237,8 +241,10 @@ func TestDownloadChunkCountsUnparsedTraceID(t *testing.T) {
 	srv := bodyServer(t, body)
 	l := dlLoop(t, srv)
 	l.policy = defaultLogFieldPolicy().withMetadataFields(nil, "correlation_id")
-	var skipped []string
-	l.onGraphSkipped = func(loop, graph string) { skipped = append(skipped, loop+"/"+graph) }
+	var events [][2]string
+	l.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+		events = append(events, [2]string{loop, string(reason)})
+	}
 	recs, _, _, _, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 10, time.Unix(0, 0).UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -255,8 +261,9 @@ func TestDownloadChunkCountsUnparsedTraceID(t *testing.T) {
 	if recs[1].RecordAttributes["correlation_id"] != "not-a-uuid" {
 		t.Fatal("r1 raw value should still ship as a record attr")
 	}
-	if len(skipped) != 1 || skipped[0] != "logs_export/trace_id_unparsed" {
-		t.Fatalf("want exactly one logs_export/trace_id_unparsed count, got %v", skipped)
+	want := [2]string{"logs_export", string(source.IncompleteTraceIDUnparsed)}
+	if len(events) != 1 || events[0] != want {
+		t.Fatalf("want exactly one %v count, got %v", want, events)
 	}
 }
 
@@ -271,8 +278,10 @@ func TestDownloadChunkCountsUnparsedTopLevelTraceID(t *testing.T) {
 	srv := bodyServer(t, body)
 	l := dlLoop(t, srv)
 	l.policy = defaultLogFieldPolicy().withTraceIDField("trace_id")
-	var skipped []string
-	l.onGraphSkipped = func(loop, graph string) { skipped = append(skipped, loop+"/"+graph) }
+	var events [][2]string
+	l.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+		events = append(events, [2]string{loop, string(reason)})
+	}
 	recs, _, _, _, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 10, time.Unix(0, 0).UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -289,8 +298,9 @@ func TestDownloadChunkCountsUnparsedTopLevelTraceID(t *testing.T) {
 	if recs[1].RecordAttributes["trace_id"] != "not-a-uuid" {
 		t.Fatal("r1 raw value should still ship as a record attr")
 	}
-	if len(skipped) != 1 || skipped[0] != "logs_export/trace_id_unparsed" {
-		t.Fatalf("want exactly one logs_export/trace_id_unparsed count, got %v", skipped)
+	want := [2]string{"logs_export", string(source.IncompleteTraceIDUnparsed)}
+	if len(events) != 1 || events[0] != want {
+		t.Fatalf("want exactly one %v count, got %v", want, events)
 	}
 }
 
@@ -332,8 +342,10 @@ func TestDownloadChunkSkipsOversizeLine(t *testing.T) {
 	srv := bodyServer(t, body)
 	l := dlLoop(t, srv)
 	l.maxLineBytes = 1024 // a normal exportLine (~few hundred B) fits; the padded line (>4 KiB) is over-long
-	var skipped []string
-	l.onGraphSkipped = func(loop, graph string) { skipped = append(skipped, loop+"/"+graph) }
+	var events [][2]string
+	l.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+		events = append(events, [2]string{loop, string(reason)})
+	}
 	recs, lines, _, eof, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 10, time.Unix(0, 0).UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -350,8 +362,9 @@ func TestDownloadChunkSkipsOversizeLine(t *testing.T) {
 	if !eof {
 		t.Fatal("want eof=true (3 < chunk max 10)")
 	}
-	if len(skipped) != 1 || skipped[0] != "logs_export/line_oversize" {
-		t.Fatalf("over-long line must fire exactly one logs_export/line_oversize count, got %v", skipped)
+	want := [2]string{"logs_export", string(source.IncompleteLineOversize)}
+	if len(events) != 1 || events[0] != want {
+		t.Fatalf("over-long line must fire exactly one %v count, got %v", want, events)
 	}
 }
 

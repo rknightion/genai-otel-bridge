@@ -472,7 +472,14 @@ func TestLogsCollectStuckJobTimeout(t *testing.T) {
 	f.pollsUntilSuccess = 1000 // never succeeds
 	cur := base
 	clock := &cur
-	src, err := New(logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m", "job_poll_timeout": "2m"}), source.Deps{})
+	var reasons []source.IncompleteReason
+	src, err := New(logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m", "job_poll_timeout": "2m"}), source.Deps{
+		OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
+			if loop == "logs_export" {
+				reasons = append(reasons, reason)
+			}
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,6 +498,9 @@ func TestLogsCollectStuckJobTimeout(t *testing.T) {
 	b, _ = l.Collect(context.Background(), wm)
 	if decodeCursor(b.Watermark.Cursor).Phase != phaseIdle {
 		t.Fatalf("stuck job past deadline must reset to idle, got %q", b.Watermark.Cursor)
+	}
+	if len(reasons) != 1 || reasons[0] != source.IncompleteExportStuck {
+		t.Fatalf("stuck job must fire export_stuck, got %v", reasons)
 	}
 }
 
@@ -564,16 +574,16 @@ func TestLogsCollectClampsBackfill(t *testing.T) {
 	}
 }
 
-// TestLogsCollectFailedJobFiresMetric: a failed export fires the OnGraphSkipped hook (→ a counted,
+// TestLogsCollectFailedJobFiresMetric: a failed export fires the data-incomplete hook (→ a counted,
 // alertable self-metric), so a flapping export is visible in metrics, not just logs.
 func TestLogsCollectFailedJobFiresMetric(t *testing.T) {
 	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
 	f := newFakeExport(t, 3, func(page int) string { return nLines(3, "m") })
 	f.failStatus = "failed"
-	var skips []string
-	deps := source.Deps{OnGraphSkipped: func(loop, graph string) {
+	var reasons []source.IncompleteReason
+	deps := source.Deps{OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
 		if loop == "logs_export" {
-			skips = append(skips, graph)
+			reasons = append(reasons, reason)
 		}
 	}}
 	src, err := New(logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}), deps)
@@ -591,8 +601,8 @@ func TestLogsCollectFailedJobFiresMetric(t *testing.T) {
 		b, _ := l.Collect(context.Background(), wm)
 		wm = b.Watermark
 	}
-	if len(skips) != 1 || skips[0] != "export_failed" {
-		t.Fatalf("failed job must fire OnGraphSkipped(export_failed), got %v", skips)
+	if len(reasons) != 1 || reasons[0] != source.IncompleteExportFailed {
+		t.Fatalf("failed job must fire export_failed, got %v", reasons)
 	}
 }
 
@@ -628,8 +638,12 @@ func TestLogsCollectCompletesWindowWithOversizeLine(t *testing.T) {
 	big := `{"id":"big","pad":"` + strings.Repeat("x", 4096) + `"}` + "\n"
 	body := exportLine(0, "m") + big + exportLine(2, "m")
 	f := newFakeExport(t, 3, func(int) string { return body })
-	var skipped []string
-	deps := source.Deps{OnGraphSkipped: func(loop, graph string) { skipped = append(skipped, loop+"/"+graph) }}
+	var reasons []source.IncompleteReason
+	deps := source.Deps{OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
+		if loop == "logs_export" {
+			reasons = append(reasons, reason)
+		}
+	}}
 	l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}), deps, now)
 	l.maxLineBytes = 1024
 
@@ -641,14 +655,8 @@ func TestLogsCollectCompletesWindowWithOversizeLine(t *testing.T) {
 	if !wm.Time.After(start.Time) {
 		t.Fatalf("window frontier must advance past the over-long line (no wedge), got %v", wm.Time)
 	}
-	found := false
-	for _, s := range skipped {
-		if s == "logs_export/line_oversize" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("over-long line must fire logs_export/line_oversize, got %v", skipped)
+	if len(reasons) != 1 || reasons[0] != source.IncompleteLineOversize {
+		t.Fatalf("over-long line must fire line_oversize, got %v", reasons)
 	}
 }
 
@@ -693,10 +701,10 @@ func TestLogsCollectOversizeWindowParksNoOrphanSpam(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
 	f := newFakeExport(t, 10, func(int) string { return nLines(2, "m") }) // total 10
-	var skips []string
-	deps := source.Deps{OnGraphSkipped: func(loop, g string) {
+	var reasons []source.IncompleteReason
+	deps := source.Deps{OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
 		if loop == "logs_export" {
-			skips = append(skips, g)
+			reasons = append(reasons, reason)
 		}
 	}}
 	// page_size 2, total 10 ⇒ 5 pages > max_pages_per_window 1. since.Time = now-2h ⇒ a FULL, stable window.
@@ -729,8 +737,8 @@ func TestLogsCollectOversizeWindowParksNoOrphanSpam(t *testing.T) {
 	if f.seq != 1 {
 		t.Fatalf("blocked window must NOT re-create a draft every tick; got %d creates (orphan spam)", f.seq)
 	}
-	if len(skips) != 1 || skips[0] != "window_oversize" {
-		t.Fatalf("the oversize window must fire exactly one window_oversize metric (on entry), got %v", skips)
+	if len(reasons) != 1 || reasons[0] != source.IncompleteWindowOversize {
+		t.Fatalf("the oversize window must fire exactly one window_oversize metric (on entry), got %v", reasons)
 	}
 
 	// Recovery: operator shrinks `window` (and the smaller window now fits the page cap).

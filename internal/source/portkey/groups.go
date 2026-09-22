@@ -155,7 +155,8 @@ func newGroupsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps source
 		metadataKeys: gs.metadataKeys, emitCost: gs.emitCost, emitPrompts: gs.emitPrompts,
 		expectedWorkspace: gs.expectedWS,
 		passes:            passes,
-		onGraphSkipped:    deps.OnGraphSkipped,
+		onCapability:      deps.OnCapability,
+		onDataIncomplete:  deps.OnDataIncomplete,
 		onAuthError:       deps.OnAuthError,
 		now:               func() time.Time { return time.Now().UTC() },
 	}, nil
@@ -180,11 +181,12 @@ type groupsLoop struct {
 	// passes is the set of filtered passes to run each Collect. Empty use-cases ⇒ a single pass with
 	// slug "" and the legacy settings.api_key_ids filter (backward compatible). Each pass stamps its slug.
 	// Key() is NOT folded with the slug — one instance, one watermark (M7 ownership invariant).
-	passes         []resolvedUseCase
-	scopeVerified  bool // caches a passing scope check (Collect is single-flight, no lock)
-	onGraphSkipped func(loop, graph string)
-	onAuthError    func(loop, source string)
-	now            func() time.Time
+	passes           []resolvedUseCase
+	scopeVerified    bool // caches a passing scope check (Collect is single-flight, no lock)
+	onCapability     func(loop, graph string, state source.CapabilityState)
+	onDataIncomplete func(loop string, reason source.IncompleteReason)
+	onAuthError      func(loop, source string)
+	now              func() time.Time
 }
 
 func (l *groupsLoop) Cadence() time.Duration { return l.cadence }
@@ -262,14 +264,14 @@ func (l *groupsLoop) endpoints() []groupsEndpoint {
 
 // Collect fetches each configured dimension INDEPENDENTLY over the fixed trailing window and emits
 // fresh gauges stamped at the window upper bound (now-settle). A failed endpoint emits nothing for
-// itself, is counted via OnGraphSkipped, and does NOT block the others (snapshot ⇒ no shared watermark
+// itself, is counted via the appropriate source hook, and does NOT block the others (snapshot ⇒ no shared watermark
 // to corrupt). Only when EVERY endpoint fails does Collect error (loud, no advance) — like the
 // analytics all-404 case. The returned watermark is a forward-only liveness heartbeat (Time=now);
 // `since` is intentionally unused (no replay frontier for a snapshot loop).
 func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
 	if l.expectedWorkspace != "" && !l.scopeVerified {
-		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, l.sourceInstance, now, l.onGraphSkipped, l.onAuthError)
+		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, l.sourceInstance, now, l.onCapability, l.onAuthError)
 		if err != nil {
 			return model.Batch{}, err // refuse to emit (mismatch) or retry (transient) — never silently advance
 		}
@@ -293,9 +295,6 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 			rows, ok := l.collectEndpoint(ctx, ep, from, until, p.apiKeyIDsCSV)
 			if !ok {
 				skipped++
-				if l.onGraphSkipped != nil {
-					l.onGraphSkipped(l.Key().Loop, ep.label)
-				}
 				continue
 			}
 			s := deriveGroups(rows, l.prefix, ep.dim, ep.baseLabels, ep.valueLabelKey, ep.emitCost, stamp)
@@ -324,15 +323,15 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 	// (returns overlapping pages) OR distinct dimension values COLLAPSE to the same string — most acutely
 	// when a non-string dim decode falls back to "" (groups_derive.go), which would otherwise silently
 	// discard every row after the first and report one arbitrary row's total as the whole endpoint. Report
-	// it (Warn + OnGraphSkipped) on success so the collapse is alertable, never silent — we keep dedup-by-
+	// it (Warn + the data-incomplete hook) on success so the collapse is alertable, never silent — we keep dedup-by-
 	// first (NOT sum) so a genuinely repeated page can't double-count.
 	dupDropped := 0
 	defer func() {
 		if ok && dupDropped > 0 {
 			slog.Warn("portkey groups: dropped duplicate-dimension rows in cross-page dedup (possible dim-value collapse to \"\", or an offset-ignoring server)",
 				"endpoint", ep.label, "dropped", dupDropped, "source", l.sourceInstance)
-			if l.onGraphSkipped != nil {
-				l.onGraphSkipped(l.Key().Loop, ep.label+"_dup_dim")
+			if l.onDataIncomplete != nil {
+				l.onDataIncomplete(l.Key().Loop, source.IncompleteDuplicateDimension)
 			}
 		}
 	}()
@@ -353,6 +352,9 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 			// proceed
 		case http.StatusNotFound:
 			slog.Warn("portkey groups endpoint unavailable (capability)", "endpoint", ep.label, "source", l.sourceInstance)
+			if l.onCapability != nil {
+				l.onCapability(l.Key().Loop, ep.label, source.CapabilityTransient404)
+			}
 			return nil, false
 		default:
 			// 401/403/429/5xx: discard this endpoint's batch this poll (no shared watermark to advance).

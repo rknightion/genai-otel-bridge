@@ -6,7 +6,7 @@ health and runs the scheduler under the coordinator. `checkpoint.Checkpointer`,
 ones and tests supply fakes.
 
 `deps source.Deps` carries composition-root hooks that are not config data (the upstream-request
-observer, the settle-exceedance, graph-skip and auth-error hooks), forwarded to each source. The
+observer, settle-exceedance, capability, data-incompleteness and auth-error hooks), forwarded to each source. The
 guard's per-metric cardinality budget comes from `cfg.Governance.PerMetricCardinalityBudget`, never a
 literal.
 

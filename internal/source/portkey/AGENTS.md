@@ -79,9 +79,9 @@ is not a re-parameterised graphs loop.
   so two polls in the same wall-clock minute share a timestamp and Mimir dedups. The FETCH still uses
   the precise `now-settle` bound.
 - **Per-endpoint independent.** `ai-models` (always on), one `metadata/<key>` per configured
-  `settings.metadata_keys`, and the prompt dimension (`emit_prompts`, on by default). A failed
-  endpoint emits nothing for itself, fires `Deps.OnGraphSkipped`, and does NOT block the others. Only
-  when EVERY endpoint fails does `Collect` error.
+  `settings.metadata_keys`, and the prompt dimension (`emit_prompts`, on by default). A 404 endpoint
+  emits nothing for itself, fires `Deps.OnCapability(loop, endpoint, CapabilityTransient404)`, and
+  does NOT block the others. Only when EVERY endpoint fails does `Collect` error.
 - **All-or-nothing across pages.** `current_page` is 0-indexed; discard the whole endpoint's set on
   any page error, non-200, `is_quota_exceeded` or parse failure - it is a snapshot, so re-fetching
   next poll is free. Terminate on an empty or short page; the page cap
@@ -103,7 +103,8 @@ analytics and groups data is bound to the API key's workspace and is **not reque
 Portkey ignores the workspace parameter on the analytics endpoints. With
 `settings.expected_workspace` set, the loop asserts once, lazily, on first `Collect` that
 `GET /analytics/groups/workspace` returns EXACTLY that slug. A too-broad or global key means **refuse
-to emit** - loud `Collect` error, no advance, `OnGraphSkipped(loop, "workspace_scope_mismatch")` -
+to emit** - loud `Collect` error, no advance,
+`OnCapability(loop, "workspace_scope", CapabilityPermissionDenied)` -
 and it recovers without a restart. A transient probe failure is retried rather than raising a false
 alarm; no traffic inside the 7d probe window means proceed unverified and re-check.
 

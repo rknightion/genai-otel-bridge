@@ -67,7 +67,8 @@ telemetry).
 - **`portkey_api_*` are per-bucket gauges**, emitted only at the analytics/groups loop cadence
   (roughly 11 minutes). Aggregate them with `sum_over_time`, **never `rate()` or `increase()`**, and
   wrap an instant lookup in `last_over_time(...[20m])` - otherwise a quick query between emits reads
-  as "metric absent". `genai_otel_bridge_source_graph_unavailable_total` and the
+  as "metric absent". `genai_otel_bridge_source_capability_total`,
+  `genai_otel_bridge_source_data_incomplete_total`, and the
   `genai_otel_bridge_upstream_request_duration_seconds` histogram *are* counters, so `rate()` and
   `increase()` are correct there.
 - **The queue metric is `genai_otel_bridge_queue_depth_ratio`, not `_depth`.** The code declares

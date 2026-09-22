@@ -49,7 +49,7 @@ type usageLoop struct {
 	emitSpanCounts            bool
 	deriveCfg                 usageDeriveConfig
 	onAuthError               func(loop, source string)
-	onGraphSkipped            func(loop, graph string)
+	onDataIncomplete          func(loop string, reason source.IncompleteReason)
 	now                       func() time.Time
 }
 
@@ -185,8 +185,8 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 				if source.IsAuthStatus(code) && l.onAuthError != nil {
 					l.onAuthError("usage", l.sourceInstance)
 				}
-				if l.onGraphSkipped != nil {
-					l.onGraphSkipped("usage", "span_stats")
+				if l.onDataIncomplete != nil {
+					l.onDataIncomplete("usage", source.IncompleteSpanStatsUnavailable)
 				}
 				slog.Warn("langsmith usage: span count skipped for project",
 					"source", l.sourceInstance, "status", code, "err", err)

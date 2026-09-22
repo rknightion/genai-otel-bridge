@@ -48,9 +48,9 @@ cannot widen what is emitted, but asking for it at all is a content-minimisation
   fail-fast. Each takes a SINGLE key; a comma is rejected (use `metadata_record_fields` for several).
 
 A non-UUID value leaves `TraceID` unset but still ships the attribute, and the record is counted via
-`OnGraphSkipped(logs_export, "trace_id_unparsed")` so a systematically broken upstream format is
-alertable. Expect a non-trivial unparsed fraction where the native `trace_id` doubles as a free-text
-caller label.
+`OnDataIncomplete(logs_export, IncompleteTraceIDUnparsed)` so a systematically broken upstream
+format is alertable. Expect a non-trivial unparsed fraction where the native `trace_id` doubles as a
+free-text caller label.
 
 ## Hard-denied everywhere
 
@@ -101,15 +101,14 @@ promotion to be queryable as `{label=...}`. Until then they land as structured m
   the status and `Content-Range` and falls back to the line-skip, so correctness never depends on
   Range being honoured.
 - **Failure honesty.** Failed, stopped and stuck jobs log at error level AND fire
-  `Deps.OnGraphSkipped` (`export_failed`/`export_stuck`); skipped lines and unparseable trace-id
-  values reuse the same self-metric (`line_oversize`, `line_unparseable`, `trace_id_unparsed`), so a
-  systematic upstream format change that drops 100% of records is alertable rather than a warn line
-  nobody sees. A download over the cap errors loudly rather than truncating silently. All of these
-  land on `genai_otel_bridge_source_graph_unavailable_total{loop=logs_export,graph=...}`, where the
-  `graph` label carries a skip REASON, not a graph name.
+  `Deps.OnDataIncomplete` (`IncompleteExportFailed`/`IncompleteExportStuck`); skipped lines and
+  unparseable trace-id values use the same typed hook (`IncompleteLineOversize`,
+  `IncompleteLineUnparseable`, `IncompleteTraceIDUnparsed`), so a systematic upstream format change
+  that drops 100% of records is alertable rather than a warn line nobody sees. A download over the
+  cap errors loudly rather than truncating silently. All of these land on
+  `genai_otel_bridge_source_data_incomplete_total{loop="logs_export",reason=...}`.
 - **An over-size window PARKS rather than retrying.** Exceeding `max_pages_per_window` moves the
   cursor to phase `blocked`: the draft export is created AT MOST ONCE, each later tick re-raises the
   loud error from cursor state without re-creating, and `window_oversize` fires once on entry.
   Portkey has no delete API and cancel is invalid on a draft, so re-creating every tick would spam
   orphaned drafts and burn rate tokens. It clears automatically once `window` is shrunk.
-

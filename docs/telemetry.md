@@ -93,7 +93,8 @@ live.
 | `genai_otel_bridge_queue_depth` | gauge | 1 | loop | — | per-loop queue depth |
 | `genai_otel_bridge_samples_capped_total` | counter | 1 | loop, reason | — | samples suppressed by the DPM cap (coalesced last-write-wins per series-minute) |
 | `genai_otel_bridge_samples_skipped_total` | counter | 1 | loop, reason | — | data points or log records skipped with a counted gap |
-| `genai_otel_bridge_source_graph_unavailable_total` | counter | 1 | loop, graph | — | configured source graph skipped on a poll due to a 404 (capability/permission/absence) |
+| `genai_otel_bridge_source_capability_total` | counter | 1 | loop, graph, state | — | source capability or permission condition by graph and closed state: endpoint-absent, plan-unsupported, permission-denied, no-data, transient-404, or schema-changed. endpoint-absent and plan-unsupported are enumerated but currently producerless because one 404 cannot distinguish them from a transient failure; steady versus intermittent increments remain a query-time judgement |
+| `genai_otel_bridge_source_data_incomplete_total` | counter | 1 | loop, reason | — | source data was incomplete for a closed reason: window_truncated, sessions_truncated, backfill_skipped, window_oversize, span_stats_unavailable, duplicate_dimension, trace_id_unparsed, line_oversize, line_unparseable, export_stuck, or export_failed |
 | `genai_otel_bridge_upstream_request_duration_seconds` | histogram | s | target, method, status_class | — | base2 exponential histogram: outbound request latency to upstream source APIs (time to response headers) |
 | `genai_otel_bridge_window_lag_seconds` | gauge | s | loop | — | now minus the watermark frontier |
 

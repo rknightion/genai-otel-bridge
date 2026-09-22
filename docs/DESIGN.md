@@ -352,18 +352,24 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
 - **F4 Partial graph success** (e.g. `cost` ok, `latency` 500) → emit the graphs that succeeded for
   the window; do not advance the watermark past a bucket unless *all configured graphs* for it
   succeeded (else a later success would be an out-of-order write). **Open design point — see §7.**
-- **F5 Schema drift + capability detection (Cdx-H4).** Don't hardcode a static capability set from one
-  key/date (the live probe already found graph endpoints 404 that the source material expected). At
-  startup (and on drift) the source does **capability detection** that distinguishes: endpoint absent ·
-  plan/edition unsupported · permission denied · workspace-has-no-data · transient 404/route · schema
-  changed. Derive what parses, emit a `source_capability{state}` self-metric + `schema_warning`, never
-  panic on a missing field, and surface a removed-but-expected metric rather than silently dropping it.
+- **F5 Schema drift + capability detection (Cdx-H4).** Capability and permission conditions emit
+  `genai_otel_bridge_source_capability_total{loop,graph,state}`. `state` is the closed set
+  `endpoint-absent`, `plan-unsupported`, `permission-denied`, `no-data`, `transient-404`,
+  `schema-changed`; producers pass typed constants. Current 404 producers use `transient-404`, because
+  one response cannot distinguish permanent absence from a plan gate or transient route failure.
+  `endpoint-absent` and `plan-unsupported` are therefore enumerated but producerless; steady versus
+  intermittent increments are interpreted at query time.
 - **F6 Open/incomplete & revised buckets (C1, the big one)** → a recent bucket may be incomplete (if
   emitted now → undercount) *and* may still change value *after* it settles (eventual consistency).
   **Mitigation:** emit a bucket only once `bucket_end ≤ now − bucket_settle`, where `bucket_settle` is
   the **measured** max late-arrival lag (PoC), not a guess. Emit once; **never re-emit a changed
   bucket** (you can't correct a same-`ts` value in Mimir) — count `bucket_revised_after_settle_total`
   so drift is visible and `bucket_settle` tunable (§3.3). Clock handling is UTC throughout (F26/F28).
+  Other bounded loss/quality events emit
+  `genai_otel_bridge_source_data_incomplete_total{loop,reason}` with the closed reasons
+  `window_truncated`, `sessions_truncated`, `backfill_skipped`, `window_oversize`,
+  `span_stats_unavailable`, `duplicate_dimension`, `trace_id_unparsed`, `line_oversize`,
+  `line_unparseable`, `export_stuck`, and `export_failed`. No event emits both successor counters.
 
 ### Emission failures
 - **F7 Gateway 5xx/timeout** → retry per policy; on exhaustion the batch stays unemitted, watermark

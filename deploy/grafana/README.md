@@ -48,7 +48,7 @@ threshold alerts/panels rely on the recording rules being present). Re-pull to r
 | Overview / SLO | at-a-glance badges: loops-healthy (self-relative), leader present, replicas, worst freshness ratio, max window lag, fatal emit errors; freshness-by-loop + throughput |
 | Liveness & leadership | window lag, last-success age vs each loop's own baseline, replicas over time, per-loop freshness gauge (repeats per `$loop`) |
 | Emit pipeline | emitted samples/logs, emit errors by kind, queue depth, samples skipped/capped, guard dropped, buckets revised after settle |
-| Upstream source health | request rate/latency/error-ratio per target, auth errors, source-graph-unavailable |
+| Upstream source health | request rate/latency/error-ratio per target, auth errors, capability outcomes, and data incompleteness |
 | Cardinality & governance | new-label-value growth, guard drops, DPM capping |
 | Logs | the poller's OWN stdout (`{namespace="$namespace", service_name="genai-otel-bridge"}`, via the dashboard's namespace variable) — log rate by level + a warn/error stream. NOT the high-volume republished product logs (`service_namespace=genai-otel-bridge`) |
 | Profiling | the poller's OWN Pyroscope profiles (`service_name=genai-otel-bridge`): CPU, heap in-use, goroutines, CPU flame graph |
@@ -76,7 +76,7 @@ generator, then `just gen-dashboard` and commit the emitted YAML. gcx 0.3.x requ
 
 ## Self-obs alerts
 
-The `self-obs/` dir ships **twelve** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
+The `self-obs/` dir ships **thirteen** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
 
 | Alert | Severity | Fires when |
 |-------|----------|------------|
@@ -86,7 +86,8 @@ The `self-obs/` dir ships **twelve** alerts (push the whole dir with `gcx resour
 | `GenaiOtelBridgeAuthErrors` | critical | `increase(genai_otel_bridge_auth_errors_total[10m]) > 0` — upstream returned 401/403 (credential failure). |
 | `GenaiOtelBridgeUpstreamErrorBudget` | warning | >20% of requests to an upstream `target` are 4xx/5xx/error (incl. timeouts) over 10m. |
 | `GenaiOtelBridgeWindowTruncatedDroppingRecords` | warning | a windowed log loop truncated a window — records dropped (see below). |
-| `GenaiOtelBridgeSourceGraphUnavailable` | critical | `source_graph_unavailable_total{graph=~"export_failed\|export_stuck\|workspace_scope_mismatch"}` increased in 15m — an unrecoverable graph skip, distinct from `window_truncated` (see below). |
+| `GenaiOtelBridgeExportPipelineDataIncomplete` | critical | `source_data_incomplete_total{reason=~"export_failed\|export_stuck"}` increased in 15m — the export pipeline cannot produce its target's data (see below). |
+| `GenaiOtelBridgeWorkspaceScopePermissionDenied` | critical | `source_capability_total{graph="workspace_scope",state="permission-denied"}` increased in 15m — configured credential and expected workspace scope disagree (see below). |
 | `GenaiOtelBridgeDataLoss` | warning | samples skipped for a real-loss reason (`too_old`/`payload_too_large`/`duplicate_timestamp`); benign reasons excluded. |
 | `GenaiOtelBridgeBucketRevisedAfterSettle` | warning | >30 settled buckets/h still changing after `bucket_settle` — late arrivals; widen the loop's `bucket_settle`. |
 | `GenaiOtelBridgeQueueBackpressure` | warning | `genai_otel_bridge_queue_depth_ratio > 0` sustained 15m — emit can't keep up with collect. |
@@ -105,29 +106,31 @@ full sensitivity for snapshot loops (`sessions`, normally ~2m). Tune the `2×` m
 
 `GenaiOtelBridgeWindowTruncatedDroppingRecords` fires (`severity: warning`) when a windowed log loop
 (`runs`, `logs_export`) truncates a window — it advanced past undrained records with a counted gap,
-so records were dropped. Query: `sum by (loop) (increase(genai_otel_bridge_source_graph_unavailable_total{graph="window_truncated"}[10m])) > 0`.
+so records were dropped. Query: `sum by (loop) (increase(genai_otel_bridge_source_data_incomplete_total{reason="window_truncated"}[10m])) > 0`.
 The truncated COUNT is unknowable by construction (we stop at the page cap), so it's an event signal.
 Remedy: raise the loop's `settings.max_pages_per_window` or shrink `settings.window`.
 
-## The unrecoverable-graph-skip alert
+## Export-pipeline data incompleteness alert
 
-`GenaiOtelBridgeSourceGraphUnavailable` fires (`severity: critical`) when
-`genai_otel_bridge_source_graph_unavailable_total` increases in 15m for one of three graph values —
-unlike `window_truncated` above (some records dropped, the loop keeps progressing), each of these means
-a loop is producing **zero** data for its target:
+`GenaiOtelBridgeExportPipelineDataIncomplete` fires (`severity: critical`) when
+`genai_otel_bridge_source_data_incomplete_total` increases in 15m with `reason=export_failed` or
+`reason=export_stuck`. Both mean the export-job lifecycle cannot produce the target's data; check the
+export-job status and retry/backoff behaviour.
 
-- **`export_failed`** / **`export_stuck`** — the Portkey export-job lifecycle (the `logs_export` loop,
-  i.e. the logs plane) is failing or stuck. Check the export-job status/retry behaviour against the
-  Portkey API; the logs plane is down until this clears.
-- **`workspace_scope_mismatch`** — the configured API key's workspace does not match the loop's
-  `expected_workspace`. The `analytics`/`groups` loops deliberately refuse to emit ANY data rather than
-  risk cross-workspace leakage — check for a recent key rotation that swapped in a too-broad or
-  wrong-workspace key.
+Query: `sum by (loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck"}[15m])) > 0`.
 
-Query: `sum by (loop, graph) (increase(genai_otel_bridge_source_graph_unavailable_total{graph=~"export_failed|export_stuck|workspace_scope_mismatch"}[15m])) > 0`.
-The rule deliberately excludes capability-detection 404 graph skips and `trace_id_unparsed` (expected/
-quality signals, not failures) by naming exactly these three graph values rather than matching every
-`source_graph_unavailable_total` series.
+## Workspace-scope permission alert
+
+`GenaiOtelBridgeWorkspaceScopePermissionDenied` fires (`severity: critical`) when
+`genai_otel_bridge_source_capability_total{graph="workspace_scope",state="permission-denied"}`
+increases in 15m. The loop deliberately refuses to emit data until the configured credential and
+expected workspace scope agree; check a recent key rotation and the scope configuration.
+
+Query: `sum by (loop) (increase(genai_otel_bridge_source_capability_total{graph="workspace_scope",state="permission-denied"}[15m])) > 0`.
+
+Capability states `endpoint-absent` and `plan-unsupported` are valid contract values but are currently
+producerless, so they have no series. A single 404 cannot distinguish those outcomes; interpret steady
+versus intermittent observed capability increments at query time rather than assuming an alert can do so.
 
 ## Per-bucket gauge semantics — the most important thing to know
 
@@ -137,8 +140,9 @@ quality signals, not failures) by naming exactly these three graph values rather
 - **Use `sum_over_time(portkey_api_requests[5m])`** to sum across a window (adds per-bucket gauge values).
 - **Never use `rate()`/`increase()`** on these — they assume a monotonic counter and produce
   meaningless/negative values on gauges. `portkey:requests:sum_5m` / `portkey:error_ratio:5m` encode the
-  correct patterns. (NOTE: `genai_otel_bridge_source_graph_unavailable_total` IS a counter, so the alert's
-  `increase()` is correct there.)
+  correct patterns. (NOTE: `genai_otel_bridge_source_capability_total` and
+  `genai_otel_bridge_source_data_incomplete_total` are counters, so `rate()` and `increase()` are
+  correct there.)
 
 ## "No traffic" is not the same as "poller down"
 

@@ -86,6 +86,8 @@ Every hook's zero value is a no-op, so tests pass `Deps{}`. Add future cross-cut
 - `UpstreamObserver` is wired into the source's `httpx` client so every outbound call feeds the
   self-obs upstream-latency histogram. It is passed here, not imported, so `httpx` and
   `internal/selfobs` never import each other.
-- `OnBucketRevised`, `OnGraphSkipped` and `OnAuthError(loop, source)` are the injected self-metric
-  hooks. `OnAuthError` fires on a 401/403 so a credential failure is its own alertable signal - use
+- `OnBucketRevised`, `OnCapability`, `OnDataIncomplete` and `OnAuthError(loop, source)` are the
+  injected self-metric hooks. Capability `state` and incompleteness `reason` are closed types from
+  `capability.go`; call sites pass their constants, never vendor or config strings. `OnAuthError`
+  fires on a 401/403 so a credential failure is its own alertable signal - use
   `source.IsAuthStatus(code)` rather than re-spelling the codes.

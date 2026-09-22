@@ -2,7 +2,7 @@
 """Generate the genai-otel-bridge self-observability dashboard as a gcx v2 Dashboard manifest.
 
 Tracked generator (committed). Emits deploy/grafana/self-obs/dashboard-self-obs.yaml.
-Run:  make gen-dashboard   (or)   python3 deploy/grafana/self-obs/gen_dashboard.py
+Run:  just gen-dashboard   (or)   python3 deploy/grafana/self-obs/gen_dashboard.py
 
 v2 schema: dashboard.grafana.app/v2 with a TabsLayout (one tab per signal group) and
 AutoGridLayout inside each tab (responsive — no hand-placed x/y). Per-loop staleness is
@@ -200,8 +200,10 @@ add(ts(142, "Upstream error ratio by target", "genai-otel-bridge:upstream_error_
        "percentunit", [('genai-otel-bridge:upstream_error_ratio:5m', "{{target}}")], thresholds=steps((None, "green"), (0.2, "red"))))
 add(ts(143, "Auth errors /s (401/403)", "rate(genai_otel_bridge_auth_errors_total) by loop & source. Credential failure (wrong/expired key, missing scope) — distinct from slow/erroring endpoints. GenaiOtelBridgeAuthErrors fires on > 0.",
        "cps", [(f'sum by (loop, source) (rate(genai_otel_bridge_auth_errors_total{LOOP}[{RI}]))', "{{loop}} / {{source}}")]))
-add(ts(144, "Source graph unavailable /s (404 / window truncated)", "rate(genai_otel_bridge_source_graph_unavailable_total) by graph. Steady increments on a real graph => API permanently absent (permission/capability) or timing out. graph=window_truncated => records dropped at the page cap (GenaiOtelBridgeWindowTruncatedDroppingRecords).",
-       "cps", [(f'sum by (loop, graph) (rate(genai_otel_bridge_source_graph_unavailable_total{LOOP}[{RI}]))', "{{loop}} / {{graph}}")]))
+add(ts(144, "Source capability outcomes /s", "rate(genai_otel_bridge_source_capability_total) by loop, graph, and state. permission-denied means the capability cannot be used; GenaiOtelBridgeWorkspaceScopePermissionDenied covers workspace_scope. endpoint-absent and plan-unsupported are valid reserved states but currently producerless, so no series distinguishes them; a single 404 remains ambiguous and steady versus intermittent increments require query-time judgement.",
+       "cps", [(f'sum by (loop, graph, state) (rate(genai_otel_bridge_source_capability_total{LOOP}[{RI}]))', "{{loop}} / {{graph}} / {{state}}")]))
+add(ts(145, "Source data incompleteness /s", "rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason. window_truncated is a counted dropped-records gap; export_failed/export_stuck mean the export pipeline cannot produce data. GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.",
+       "cps", [(f'sum by (loop, reason) (rate(genai_otel_bridge_source_data_incomplete_total{LOOP}[{RI}]))', "{{loop}} / {{reason}}")]))
 
 # === Tab: Cardinality & governance ===========================================
 add(ts(150, "New label-value combinations /s by series (top 15)", "rate(genai_otel_bridge_new_label_values_total) by series. Each is a never-before-seen label combo — a cardinality early-warning. A sustained climb on one series = unbounded labels (GenaiOtelBridgeCardinalitySpike).",
@@ -260,7 +262,7 @@ tabs = [
         gi(f"panel-{i}") for i in range(130, 139)
     ], cols=3)),
     tab("Upstream source health", auto_grid([
-        gi(f"panel-{i}") for i in range(140, 145)
+        gi(f"panel-{i}") for i in range(140, 146)
     ], cols=2)),
     tab("Cardinality & governance", auto_grid([
         gi("panel-150"), gi("panel-151"), gi("panel-152"),

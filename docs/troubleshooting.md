@@ -73,25 +73,28 @@ the Mimir `out_of_order_time_window` are skipped with a counted gap
 
 ---
 
-## Source-graph 404s
+## Source capability and incomplete data
 
-**Symptom:** `genai_otel_bridge_source_graph_unavailable_total` is non-zero for a specific
-`graph` label.
+**Symptom:** `genai_otel_bridge_source_capability_total` or
+`genai_otel_bridge_source_data_incomplete_total` increases for a loop.
 
-**Cause:** a configured graph endpoint returned 404. For Portkey this typically means the
-graph is not available for the API key's plan, the workspace has no data for that graph, or
-the endpoint path changed.
+**Cause:** capability outcomes and data gaps are now distinct. For capability, inspect `graph` and
+`state`; `graph="workspace_scope",state="permission-denied"` means the configured credential and
+expected workspace scope disagree, so the loop refuses to emit. For incomplete data, inspect `reason`:
+`window_truncated` is a counted page-cap gap, while `export_failed` and `export_stuck` mean the export
+pipeline cannot produce the target's data.
 
-A single-graph 404 is logged and skipped (the loop continues emitting other graphs). If
-**all** configured graphs 404 in a single collect cycle, the loop errors loudly and does not
-advance its watermark — this indicates a configuration or permission problem.
+`endpoint-absent` and `plan-unsupported` are valid capability states but currently producerless, so no
+series distinguishes them. A single 404 cannot distinguish those outcomes; assess steady versus
+intermittent observed capability increments at query time. If all configured graphs fail in one collect
+cycle, the loop errors loudly and does not advance its watermark.
 
 **How to diagnose:**
 
-1. Check pod logs for `graph unavailable` messages.
-2. Confirm the graph name is in the supported list: `cost`, `errors`, `latency`, `requests`,
-   `tokens`, `users`.
-3. Verify the API key has access to the graph on the Portkey dashboard.
+1. Check pod logs for the reported capability outcome or incomplete-data reason.
+2. For `workspace_scope` permission denial, compare the credential's workspace scope with the configured expectation.
+3. For export failure or a stuck export, inspect the export-job status plus retry/backoff behaviour.
+4. For `window_truncated`, increase `settings.max_pages_per_window` or reduce `settings.window`.
 
 ---
 

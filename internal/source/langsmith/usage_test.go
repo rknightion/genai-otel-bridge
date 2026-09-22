@@ -191,8 +191,8 @@ func TestUsageCollectSpanCallSkipKeepsTraces(t *testing.T) {
 	f.statsCode = http.StatusInternalServerError
 	lp := mkUsageLoop(t, f, now, nil)
 	var skips int
-	lp.onGraphSkipped = func(loop, graph string) {
-		if loop == "usage" && graph == "span_stats" {
+	lp.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+		if loop == "usage" && reason == source.IncompleteSpanStatsUnavailable {
 			skips++
 		}
 	}

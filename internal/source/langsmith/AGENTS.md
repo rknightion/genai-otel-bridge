@@ -105,8 +105,8 @@ synchronous paginated POST.
   unlike the snapshot loops. `cost` is emitted as the raw scalar string - logs need no arithmetic.
 - **Failure honesty:** 429 to `ErrQuotaExceeded`; other non-200 to a retryable Collect error. A window
   over `max_pages_per_window` advances PAST with a loud counted gap
-  (`OnGraphSkipped("runs", "window_truncated")`) rather than stalling. The `max_backfill` floor skips
-  an unstorable old span loudly.
+  (`OnDataIncomplete("runs", IncompleteWindowTruncated)`) rather than stalling. The `max_backfill`
+  floor skips an unstorable old span loudly via `IncompleteBackfillSkipped`.
 - Whether to ever emit content is deferred pending the customer's requirements (`followup.md`). The
   loop is content-free by default; do not change that on your own judgement.
 

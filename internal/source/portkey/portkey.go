@@ -172,7 +172,7 @@ func newAnalyticsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps sou
 		// slack to actually see (and stop re-counting) the change before it ages out. Detection only —
 		// never re-emits. nil hook ⇒ history still tracks but no signal is raised (cheap, harmless).
 		onBucketRevised: deps.OnBucketRevised,
-		onGraphSkipped:  deps.OnGraphSkipped,
+		onCapability:    deps.OnCapability,
 		onAuthError:     deps.OnAuthError,
 		// Optional key-scope guardrail (analytics/groups are bound to the key's workspace, not request-
 		// targetable — followup §4). Empty ⇒ no check (backward compatible).
@@ -212,7 +212,7 @@ type analyticsLoop struct {
 	// happened across the handoff. Accepted blind spot (the metric is a drift indicator, not a
 	// correctness gate).
 	onBucketRevised func(loop string, age time.Duration)
-	onGraphSkipped  func(loop, graph string)
+	onCapability    func(loop, graph string, state source.CapabilityState)
 	onAuthError     func(loop, source string)
 	// expectedWorkspace, if set (settings.expected_workspace), asserts the key's analytics scope is exactly
 	// that workspace before emitting (a too-broad key would emit cross-workspace aggregates). scopeVerified
@@ -252,7 +252,7 @@ func (l *analyticsLoop) Key() model.CheckpointKey {
 func (l *analyticsLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
 	if l.expectedWorkspace != "" && !l.scopeVerified {
-		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, l.sourceInstance, now, l.onGraphSkipped, l.onAuthError)
+		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, l.sourceInstance, now, l.onCapability, l.onAuthError)
 		if err != nil {
 			return model.Batch{}, err // refuse to emit (mismatch) or retry (transient) — never silently advance
 		}
@@ -317,10 +317,10 @@ func (l *analyticsLoop) collectPass(ctx context.Context, p resolvedUseCase, star
 		}
 		if code == http.StatusNotFound {
 			slog.Warn("portkey graph unavailable (capability)", "graph", g, "source", l.sourceInstance)
-			if l.onGraphSkipped != nil {
+			if l.onCapability != nil {
 				// round3-#4: make the (otherwise silent) per-graph skip observable. Fires per skipped
 				// graph — including when ALL graphs 404 (which ALSO errors loudly below).
-				l.onGraphSkipped(l.Key().Loop, g)
+				l.onCapability(l.Key().Loop, g, source.CapabilityTransient404)
 			}
 			continue // capability detection (F5): derive from the rest
 		}

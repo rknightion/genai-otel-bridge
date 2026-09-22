@@ -67,12 +67,12 @@ type Deps struct {
 	// metrics.BucketRevisedAfterSettle{loop,age} (count + age histogram). nil ⇒ no detection.
 	// Mirrors the GuardConfig.OnNewLabelValue early-warning hook pattern.
 	OnBucketRevised func(loop string, age time.Duration)
-	// OnGraphSkipped, if set, is called when a source skips a configured sub-stream on a poll because it
-	// 404'd (capability detection / permission / absence) — by-design, the loop derives from the rest and
-	// advances, but the skip was previously SILENT (only a log). The composition root wires this to
-	// metrics.SourceGraphUnavailable{loop,graph} so a flapping-404 graph is observable and distinguishable
-	// from a permanently-absent one (round3-#4). nil ⇒ no signal. Same injected-hook pattern as above.
-	OnGraphSkipped func(loop, graph string)
+	// OnCapability, if set, records the closed capability state for a source graph. The composition root
+	// wires this to the source_capability_total self-metric with {loop,graph,state}; nil means no signal.
+	OnCapability func(loop, graph string, state CapabilityState)
+	// OnDataIncomplete, if set, records the closed reason for an incomplete source result. The composition
+	// root wires this to the source_data_incomplete_total self-metric with {loop,reason}; nil means no signal.
+	OnDataIncomplete func(loop string, reason IncompleteReason)
 	// OnAuthError, if set, is called when a loop's upstream API responds 401/403 — a credential
 	// problem (wrong/expired key, missing scope/permission), distinct from "the endpoint is slow". A
 	// 401/403 already surfaces as a retryable Collect error (window_lag rises — loud, never silent), but

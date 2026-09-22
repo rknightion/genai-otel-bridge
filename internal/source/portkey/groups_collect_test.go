@@ -123,7 +123,7 @@ func TestGroupsCollectAuthErrorFiresHook(t *testing.T) {
 // TestGroupsDedupCollapseIsObservable (#140): when distinct dimension values COLLAPSE to the same string
 // (here two rows whose ai_model is a NUMBER → parseGroupRows falls back to "" for both), the cross-page
 // dedup keeps only the first row and would otherwise SILENTLY discard the rest — reporting one arbitrary
-// row's total as the whole endpoint. The drop must now be counted/logged (OnGraphSkipped "<ep>_dup_dim"),
+// row's total as the whole endpoint. The drop must now be counted/logged as duplicate_dimension,
 // never silent, while the dedup itself is unchanged (still keeps-first, never sums/double-counts).
 func TestGroupsDedupCollapseIsObservable(t *testing.T) {
 	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
@@ -137,9 +137,11 @@ func TestGroupsDedupCollapseIsObservable(t *testing.T) {
 	}
 	srv := fakeGroups(t, map[string][]groupsResponse{"ai-models": {collapse}}, nil, nil)
 	defer srv.Close()
-	var skipped []string
+	var events [][2]string
 	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "emit_prompts": "false"}),
-		source.Deps{OnGraphSkipped: func(_, g string) { skipped = append(skipped, g) }}, now)
+		source.Deps{OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
+			events = append(events, [2]string{loop, string(reason)})
+		}}, now)
 	b, err := gl.Collect(context.Background(), model.Watermark{})
 	if err != nil {
 		t.Fatal(err)
@@ -147,8 +149,35 @@ func TestGroupsDedupCollapseIsObservable(t *testing.T) {
 	if got := countByName(b.Samples)["portkey_api_requests_by_model"]; got != 1 {
 		t.Fatalf("collapsed rows dedup to 1 (keep-first, no double-count); got %d", got)
 	}
-	if len(skipped) != 1 || skipped[0] != "ai-models_dup_dim" {
-		t.Fatalf("the silent collapse must fire exactly one ai-models_dup_dim skip signal, got %v", skipped)
+	want := [2]string{"groups", string(source.IncompleteDuplicateDimension)}
+	if len(events) != 1 || events[0] != want {
+		t.Fatalf("the silent collapse must fire exactly one %v signal, got %v", want, events)
+	}
+}
+
+func TestGroupsCollect404FiresCapabilityHook(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	srv := fakeGroups(t, map[string][]groupsResponse{
+		"ai-models": {modelRows("a")},
+	}, map[string]map[int]int{
+		"metadata/use_case": {0: http.StatusNotFound},
+	}, nil)
+	defer srv.Close()
+	var capabilities [][3]string
+	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "metadata_keys": "use_case"}),
+		source.Deps{OnCapability: func(loop, graph string, state source.CapabilityState) {
+			capabilities = append(capabilities, [3]string{loop, graph, string(state)})
+		}}, now)
+	b, err := gl.Collect(context.Background(), model.Watermark{})
+	if err != nil {
+		t.Fatalf("one endpoint 404 must not fail the whole snapshot: %v", err)
+	}
+	if countByName(b.Samples)["portkey_api_requests_by_model"] != 1 {
+		t.Fatalf("ai-models should emit independently of metadata 404")
+	}
+	want := [3]string{"groups", "metadata/use_case", string(source.CapabilityTransient404)}
+	if len(capabilities) != 1 || capabilities[0] != want {
+		t.Fatalf("OnCapability want one %v, got %v", want, capabilities)
 	}
 }
 
@@ -193,9 +222,8 @@ func TestGroupsCollectPartialPageIsAllOrNothing(t *testing.T) {
 		"ai-models": {1: http.StatusInternalServerError}, // …page1 500 ⇒ whole endpoint discarded
 	}, nil)
 	defer srv.Close()
-	var skipped []string
 	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "3", "metadata_keys": "use_case"}),
-		source.Deps{OnGraphSkipped: func(_, g string) { skipped = append(skipped, g) }}, now)
+		source.Deps{}, now)
 	b, err := gl.Collect(context.Background(), model.Watermark{})
 	if err != nil {
 		t.Fatalf("metadata succeeded so the loop must not error: %v", err)
@@ -207,9 +235,6 @@ func TestGroupsCollectPartialPageIsAllOrNothing(t *testing.T) {
 	if c["portkey_api_requests_by_metadata"] != 1 {
 		t.Fatalf("metadata endpoint should still emit; got %d", c["portkey_api_requests_by_metadata"])
 	}
-	if len(skipped) != 1 || skipped[0] != "ai-models" {
-		t.Fatalf("OnGraphSkipped want [ai-models], got %v", skipped)
-	}
 }
 
 func TestGroupsCollectPerEndpointIndependent(t *testing.T) {
@@ -220,18 +245,14 @@ func TestGroupsCollectPerEndpointIndependent(t *testing.T) {
 		"metadata/use_case": {0: http.StatusInternalServerError},
 	}, nil)
 	defer srv.Close()
-	var skipped []string
 	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "metadata_keys": "use_case"}),
-		source.Deps{OnGraphSkipped: func(_, g string) { skipped = append(skipped, g) }}, now)
+		source.Deps{}, now)
 	b, err := gl.Collect(context.Background(), model.Watermark{})
 	if err != nil {
 		t.Fatalf("one endpoint 5xx must not fail the whole snapshot: %v", err)
 	}
 	if countByName(b.Samples)["portkey_api_requests_by_model"] != 2 {
 		t.Fatalf("ai-models should emit independently of metadata failure")
-	}
-	if len(skipped) != 1 || skipped[0] != "metadata/use_case" {
-		t.Fatalf("skip hook want [metadata/use_case], got %v", skipped)
 	}
 }
 
@@ -256,9 +277,8 @@ func TestGroupsCollectQuotaPerEndpoint(t *testing.T) {
 		"metadata/use_case": {quota},
 	}, nil, nil)
 	defer srv.Close()
-	var skipped []string
 	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "metadata_keys": "use_case"}),
-		source.Deps{OnGraphSkipped: func(_, g string) { skipped = append(skipped, g) }}, now)
+		source.Deps{}, now)
 	b, err := gl.Collect(context.Background(), model.Watermark{})
 	if err != nil {
 		t.Fatalf("a per-endpoint quota must discard that endpoint, not error the loop: %v", err)
@@ -269,9 +289,6 @@ func TestGroupsCollectQuotaPerEndpoint(t *testing.T) {
 	if countByName(b.Samples)["portkey_api_requests_by_metadata"] != 0 {
 		t.Fatal("quota-exceeded metadata endpoint must emit nothing")
 	}
-	if len(skipped) != 1 || skipped[0] != "metadata/use_case" {
-		t.Fatalf("quota skip hook want [metadata/use_case], got %v", skipped)
-	}
 }
 
 func TestGroupsCollectEmptyEndpointIsHealthy(t *testing.T) {
@@ -281,18 +298,14 @@ func TestGroupsCollectEmptyEndpointIsHealthy(t *testing.T) {
 		"metadata/use_case": {{Object: "list", Total: 0, Data: nil}}, // untagged key ⇒ 200 total:0
 	}, nil, nil)
 	defer srv.Close()
-	var skipped []string
 	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "metadata_keys": "use_case"}),
-		source.Deps{OnGraphSkipped: func(_, g string) { skipped = append(skipped, g) }}, now)
+		source.Deps{}, now)
 	b, err := gl.Collect(context.Background(), model.Watermark{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if countByName(b.Samples)["portkey_api_requests_by_metadata"] != 0 {
 		t.Fatal("an empty (200 total:0) endpoint emits nothing")
-	}
-	if len(skipped) != 0 {
-		t.Fatalf("an empty endpoint is a healthy success, NOT a skip; got %v", skipped)
 	}
 }
 

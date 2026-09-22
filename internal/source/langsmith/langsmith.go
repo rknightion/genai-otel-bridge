@@ -149,7 +149,7 @@ func New(sc config.SourceConfig, deps source.Deps) (source.Source, error) {
 			return nil, err
 		}
 		lp.onAuthError = deps.OnAuthError
-		lp.onGraphSkipped = deps.OnGraphSkipped
+		lp.onDataIncomplete = deps.OnDataIncomplete
 		loops = append(loops, lp)
 	}
 	return &sessionsSource{loops: loops}, nil

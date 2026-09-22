@@ -217,7 +217,7 @@ func newRunsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps source.D
 		cadence:      cadence, window: rs.window, settle: rs.settle, maxBackfill: rs.maxBackfill,
 		pageSize: rs.pageSize, maxPagesPerWindow: rs.maxPagesPerWindow, maxResponseBytes: rs.maxResponseBytes,
 		sessionRefresh: rs.sessionRefresh, rootOnly: rs.rootOnly, runType: rs.runType,
-		policy: policy, onGraphSkipped: deps.OnGraphSkipped, onAuthError: deps.OnAuthError,
+		policy: policy, onDataIncomplete: deps.OnDataIncomplete, onAuthError: deps.OnAuthError,
 		now: func() time.Time { return time.Now().UTC() },
 	}, nil
 }

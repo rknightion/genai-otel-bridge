@@ -77,6 +77,62 @@ func TestEmitSpanSurvivesQueueTransfer(t *testing.T) {
 	}
 }
 
+func TestCommitSpanMarksFenceOutcome(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() { otel.SetTracerProvider(previous); _ = provider.Shutdown(context.Background()) })
+
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	for _, tc := range []struct {
+		name    string
+		fenced  bool
+		loadErr bool
+		want    string
+	}{
+		{name: "clean", want: "committed"},
+		{name: "fenced", fenced: true, want: "fenced"},
+		{name: "stale_load_error", fenced: true, loadErr: true, want: "error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder.Reset()
+			cp := newMemCP()
+			if tc.fenced {
+				if err := cp.Save(context.Background(), key, model.Watermark{Time: time.Unix(100, 0).UTC(), Epoch: 5}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var store checkpoint.Checkpointer = cp
+			if tc.loadErr {
+				store = loadErrorCP{Checkpointer: cp}
+			}
+			r := NewLoopRunner(fakeLoop{key: key}, &fakeEmitter{byTS: map[int64]error{}}, store, source.NewGuard(source.GuardConfig{}), 4, 1, NoopMetrics{})
+			r.commit(leaderCtx(), key, time.Unix(200, 0).UTC(), "", 1)
+
+			var commits []sdktrace.ReadOnlySpan
+			for _, span := range recorder.Ended() {
+				if span.Name() == "loop.commit" {
+					commits = append(commits, span)
+				}
+			}
+			if len(commits) != 1 {
+				t.Fatalf("loop.commit spans=%d want 1", len(commits))
+			}
+			var outcome string
+			for _, kv := range commits[0].Attributes() {
+				if string(kv.Key) == "outcome" {
+					outcome = kv.Value.AsString()
+					break
+				}
+			}
+			if outcome != tc.want {
+				t.Fatalf("loop.commit outcome=%q want %q", outcome, tc.want)
+			}
+		})
+	}
+}
+
 // --- test doubles ---
 type memCP struct {
 	mu sync.Mutex
@@ -84,6 +140,13 @@ type memCP struct {
 }
 
 func newMemCP() *memCP { return &memCP{w: map[string]model.Watermark{}} }
+
+type loadErrorCP struct{ checkpoint.Checkpointer }
+
+func (loadErrorCP) Load(context.Context, model.CheckpointKey) (model.Watermark, error) {
+	return model.Watermark{}, errors.New("injected load failure")
+}
+
 func (m *memCP) Load(_ context.Context, k model.CheckpointKey) (model.Watermark, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

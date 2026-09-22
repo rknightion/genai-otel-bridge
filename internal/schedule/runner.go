@@ -343,12 +343,15 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 	if ctx.Err() != nil {
 		return
 	}
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "loop.commit", trace.WithAttributes(attribute.String("loop", r.name)))
+	defer span.End()
 	w := model.Watermark{Time: t, Cursor: cursor, Epoch: epoch}
 	err := r.cp.Save(ctx, key, w)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err != nil {
 		if !errors.Is(err, checkpoint.ErrStaleWrite) {
+			span.SetAttributes(attribute.String("outcome", "error"))
 			r.saveFails++
 			r.m.EmitError(r.name, "checkpoint_save")
 			if r.saveFails >= checkpointFailThreshold && !r.degraded {
@@ -367,15 +370,20 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 		// progress while the loop looks healthy. Surface it loudly + counted, and re-sync the in-memory
 		// frontier to the durable truth either way so Since() never runs ahead of a rejected write.
 		if stored, lerr := r.cp.Load(ctx, key); lerr == nil {
+			span.SetAttributes(attribute.String("outcome", "stale"))
 			if stored.Time.Before(w.Time) {
+				span.SetAttributes(attribute.String("outcome", "fenced"))
 				r.m.EmitError(r.name, "checkpoint_fenced")
 				slog.Warn("checkpoint forward-write fenced (stale-epoch or concurrent leader); not advancing",
 					"loop", r.name, "attempted", w.Time, "durable", stored.Time, "epoch", epoch)
 			}
 			r.frontier, r.hasFront = stored, true
+		} else {
+			span.SetAttributes(attribute.String("outcome", "error"))
 		}
 		return
 	}
+	span.SetAttributes(attribute.String("outcome", "committed"))
 	r.saveFails = 0
 	if r.degraded { // [#120] zero the gauge on the SAME {loop,reason} series before clearing (no stuck-at-1)
 		r.m.LoopDegraded(r.name, r.degradeReason, false)

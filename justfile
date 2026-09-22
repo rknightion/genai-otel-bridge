@@ -333,8 +333,19 @@ _tools-e2e:
 _tools-licensing:
     set -euo pipefail
     mkdir -p {{ tools_dir }}
-    { test -x {{ tools_dir }}/go-licenses && {{ tools_dir }}/go-licenses --help >/dev/null 2>&1; } \
-      || GOBIN={{ tools_dir }} {{ go }} install github.com/google/go-licenses@{{ go_licenses_version }}
+    version="{{ go_licenses_version }}"
+    major="${version#v}"; major="${major%%.*}"
+    module="github.com/google/go-licenses"
+    if [ "$major" -ge 2 ]; then module="$module/v$major"; fi
+    installed_module=""
+    installed_version=""
+    if { test -x {{ tools_dir }}/go-licenses && {{ tools_dir }}/go-licenses --help >/dev/null 2>&1; }; then
+      installed_module="$({{ go }} version -m {{ tools_dir }}/go-licenses | awk '$1 == "path" { print $2; exit }')"
+      installed_version="$({{ go }} version -m {{ tools_dir }}/go-licenses | awk '$1 == "mod" { print $3; exit }')"
+    fi
+    if [ "$installed_module" != "$module" ] || [ "$installed_version" != "$version" ]; then
+      GOBIN={{ tools_dir }} {{ go }} install "$module@$version"
+    fi
 
 [private]
 [script('bash')]

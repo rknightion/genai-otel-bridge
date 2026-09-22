@@ -1,10 +1,11 @@
 ---
 id: GOB-0006
 title: 'source_capability{state} — 6-state attribution metric'
-status: To Do
-assignee: []
+status: Parked
+assignee:
+  - '@codex'
 created_date: '2026-08-14 16:11'
-updated_date: '2026-09-22 09:06'
+updated_date: '2026-09-22 12:09'
 labels:
   - followup-v2
   - self-obs
@@ -39,3 +40,15 @@ A new metric with a new label dimension is a cardinality decision: the state set
 - [ ] #1 just check
 - [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Wave 2 reserve lane admitted after the primary self-APM work landed, then stopped before edits. Pre-state inspection proved source_graph_unavailable_total carries non-capability events including window_truncated, sessions_truncated, backfill_skipped, span_stats, record-quality drops, export lifecycle failures and scope mismatch. Existing alert and recording-rule consumers depend on graph=window_truncated as a data-loss signal. None of the frozen six capability states truthfully represents truncation or partial-quality events, and the required whole-tree zero legacy-symbol grep also conflicts with immutable history and root-owned durable docs. No implementation or tests were run after this semantic conflict was found.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Parked without code changes. Resume only after Rob chooses the migration contract: preserve a separate bounded event metric for non-capability events, retain the legacy counter for those events while subsuming only capability/auth cases, expand the closed state vocabulary, or approve a complete mapping plus a scoped grep requirement. The recommended choices are a separate bounded event metric or retaining the legacy counter for non-capability events; then transfer source callback, app wiring, Grafana consumer and durable-document ownership before restarting.
+<!-- SECTION:FINAL_SUMMARY:END -->

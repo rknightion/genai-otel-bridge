@@ -4,6 +4,7 @@ title: 'Instrument the emit POST: loop.emit span and latency histogram'
 status: To Do
 assignee: []
 created_date: '2026-08-14 16:11'
+updated_date: '2026-09-22 09:08'
 labels:
   - followup-v2
   - self-obs
@@ -37,6 +38,27 @@ Related but separately tracked: the remaining span coverage (`loop.commit`, logs
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 make gate
-- [ ] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
+- [ ] #1 just check
+- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+FROZEN DECISION, taken 2026-09-22 during wave-1 goal authoring. Do not reopen inside a lane.
+
+**The bounded queue is `chan model.Batch` (`internal/schedule/runner.go:34,66`), and `model.Batch` is FROZEN.** The task description says the hard part is 'carrying the trace context through the bounded queue into the worker', and the obvious implementation — a context or SpanContext field on `model.Batch` — is a FROZEN-seam change. Per the wave operating model that is a design decision requiring an ARCHITECTURE.md ledger entry, decided before fan-out and never inside a lane. It is therefore decided here, and the answer is **do not touch `model.Batch`.**
+
+**Use a schedule-package-local envelope instead.** Change the channel's element type to an unexported
+struct private to `internal/schedule` that carries the batch alongside the propagation value, e.g.
+`chan queued` where `queued` wraps a `model.Batch` and a `trace.SpanContext`. `Enqueue`'s exported
+signature keeps taking `model.Batch` and lifts the span context off the passed `ctx` itself, so no
+caller changes and no seam moves. A `trace.SpanContext` is a value type and safe to copy across the
+queue; do not put a live `context.Context` in the envelope, because the tick context is cancelled
+when the tick returns and the worker would then hold a dead context.
+
+Rationale for freezing it rather than parking: the envelope is strictly inside one package with no
+exported surface, it satisfies AC#2 exactly as written, and the alternative is a FROZEN-seam change
+with implementation exposure across emit, source and app for no benefit. If the envelope turns out
+not to work, that is a stop condition — return it to the root, do not amend `model.Batch`.
+<!-- SECTION:NOTES:END -->

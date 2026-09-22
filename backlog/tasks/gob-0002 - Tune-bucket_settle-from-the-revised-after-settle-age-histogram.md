@@ -1,9 +1,10 @@
 ---
 id: GOB-0002
 title: Tune bucket_settle from the revised-after-settle age histogram
-status: To Do
+status: Parked
 assignee: []
 created_date: '2026-08-14 16:11'
+updated_date: '2026-09-22 09:07'
 labels:
   - followup-v1
   - durability
@@ -38,6 +39,33 @@ Config-only change; no code.
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 make gate
-- [ ] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
+- [ ] #1 just check
+- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+RESUME BOUNDARY (set 2026-09-22 during wave-1 goal authoring).
+
+**Blocked on a deployment, not on this repo.** Confirmed with Rob 2026-09-22: the bridge is not
+emitting anywhere. gob-0017 independently established that as of 2026-09-15 no series on the m7kni
+stack (stack 1217581, Mimir tenant 2359401) carry `job="genai-otel-bridge"`. AC#1 asks for p95 of
+`genai_otel_bridge_bucket_revised_after_settle_age_seconds` over several days of real data, so
+there is nothing to measure and no amount of local work substitutes.
+
+**The exact check that unparks this:** a deployed binary has been emitting for at least several
+days, and
+
+    histogram_quantile(0.95, sum(rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds_bucket[1d])) by (le))
+
+returns a value. Note that gob-0017 converts these instruments to native exponential histograms, so
+after it lands the query loses `by (le)` and reads the native series directly — re-derive the query
+from whatever gob-0017 shipped rather than copying the classical form above.
+
+**Already ruled out:** guessing from the 2026-06-24 fixed-window probe. It suggested settling at
+roughly 3m, which would imply the 10m default is generous, but the in-product revised count is
+bursty and `#105` closed on exactly the confusion of treating 3m as the default. A change made on
+that probe alone would reintroduce a closed defect. Do not raise or lower `bucket_settle` without
+the deployed measurement.
+<!-- SECTION:NOTES:END -->

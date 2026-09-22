@@ -4,6 +4,7 @@ title: Remove the stale WIRING TODO comments in the langsmith source
 status: To Do
 assignee: []
 created_date: '2026-08-14 16:12'
+updated_date: '2026-09-22 09:07'
 labels:
   - docs-drift
   - cleanup
@@ -30,13 +31,14 @@ Small, but it is the same doc-vs-code drift class that dominates the closed issu
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Both WIRING TODO comments are corrected to describe what the code actually does
-- [ ] #2 No public source file references a path under gitignored docs/superpowers/
-- [ ] #3 make gate green
+- [ ] #1 Both WIRING TODO comments at internal/source/langsmith/langsmith.go:51 and :74 are corrected to describe what the code actually does
+- [ ] #2 No tracked Go source references a path under gitignored docs/superpowers/ — the live set is internal/source/langsmith/langsmith.go, internal/source/langsmith/derive.go and internal/logging/logging.go
+- [ ] #3 Any docs/superpowers/ citation in ARCHITECTURE.md, docs/DESIGN.md or followup.md is reported to the root for the wiring pass rather than edited by this lane
+- [ ] #4 just check green
 <!-- AC:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 make gate
-- [ ] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
+- [ ] #1 just check
+- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->

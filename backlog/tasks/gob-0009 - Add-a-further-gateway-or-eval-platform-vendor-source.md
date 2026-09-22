@@ -4,6 +4,7 @@ title: Add a further gateway or eval-platform vendor source
 status: To Do
 assignee: []
 created_date: '2026-08-14 16:12'
+updated_date: '2026-09-22 09:06'
 labels:
   - followup-v3
   - new-vendor
@@ -33,6 +34,6 @@ This task is the standing placeholder. When a specific vendor is chosen, split i
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 make gate
-- [ ] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
+- [ ] #1 just check
+- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->

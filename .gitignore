@@ -68,3 +68,7 @@ docs/assets/project-icon-solid.svg
 docs/assets/social-card.png
 docs/assets/social-card.svg
 docs/fonts/
+
+# Fan-out campaign run artefacts (goal, launch and report files). Ignored as a DIRECTORY so a
+# new artefact type cannot leak by being named something a filename pattern did not anticipate.
+/codex/

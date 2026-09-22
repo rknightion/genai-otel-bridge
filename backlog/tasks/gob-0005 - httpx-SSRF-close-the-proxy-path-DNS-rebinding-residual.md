@@ -4,6 +4,7 @@ title: 'httpx SSRF: close the proxy-path DNS-rebinding residual'
 status: To Do
 assignee: []
 created_date: '2026-08-14 16:11'
+updated_date: '2026-09-22 09:06'
 labels:
   - followup-v2
   - security
@@ -36,6 +37,6 @@ Worth doing only if a deployment actually uses a proxy. Note `#128` for the adja
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 make gate
-- [ ] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
+- [ ] #1 just check
+- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->

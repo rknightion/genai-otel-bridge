@@ -3,7 +3,7 @@ id: doc-0003
 title: Wave operating model
 type: guide
 created_date: '2026-08-14 16:08'
-updated_date: '2026-08-14 16:10'
+updated_date: '2026-09-22 09:10'
 ---
 **This document restates nothing from the fan-out protocol doc.** Read that one for the campaign
 model — run contract, routing, authority, lane briefs, goal-file template, pre-flight. This one
@@ -106,14 +106,26 @@ backend's corrupt-value refusal had no test while the package doc claimed corrup
 **A lane changing one backend or one plane states in its notes what it checked in the sibling**, even
 if the answer is "sibling unaffected, here's why".
 
-### `make gate` is the bar, and it is deliberately equal to CI
+### `just check` is the bar, and it is deliberately equal to CI
 
-`make gate` = vet + test + lint + `forbidden-words` + `spdx-check` + `tf-validate` + `helm-lint` +
-`build ./...`. It exists to equal CI's hygiene leg, and `#109` is why that equality is a rule: `make
-ci` had been missing `tf-validate` while `make gate` was missing `helm-lint`, so the local "full CI
-mirror" targets did not mirror CI. **If you add a CI leg, add it to the matching make target in the
-same change.** Acceptance gates are separate and run on demand:
-`go test -tags acceptance ./internal/app/`.
+**The task surface moved from `make` to `just` in gob-0016. A brief, task or note still naming `make
+gate` is stale — the gate is `just check`.**
+
+`just check` is the pre-commit gate and every CI leg that runs with only the language toolchain
+installed, which is exactly ci.yml's `hygiene` job (`forbidden-words`, `spdx-check`, `helm-lint`,
+`tf-validate`) plus vet, test, lint and build. `just ci` is the sanctioned superset: `check` plus the
+two legs needing a Docker daemon or a service container (`e2e`, `test-dynamodb`). `#109` is why that
+equality is a rule — under the old Makefile, `make ci` had been missing `tf-validate` while `make
+gate` was missing `helm-lint`, so the local "full CI mirror" targets did not mirror CI. **If you add
+a CI leg, add it to the matching just recipe in the same change.** Acceptance gates are separate and
+run on demand: `just test-acceptance`.
+
+Run `just` with stdin from `/dev/null`. `publish` is `[confirm]` and pushes to a real registry, so
+never pass `--yes` or `JUST_YES=1`.
+
+Two things make a clean local run weaker than CI's, and both are silent: `tf-validate` self-skips
+when the IaC tools are absent, and `forbidden-words` scans only the built-in credential shapes when
+neither `$FORBIDDEN_WORDS_PATTERN` nor `scripts/forbidden-words.local` is present.
 
 `forbidden-words` scans `backlog/` and `archive/` — they are tracked and not in `PRIVATE_PATHS`. On
 a fork PR the real identifier list is absent and only credential shapes are scanned (`#108`), so a
@@ -131,11 +143,11 @@ tested", the lane verifies that the test would fail if the behaviour broke.**
 
 | Resource | Why exclusive |
 |---|---|
-| the k3d cluster (`make k3d-up` / `k3d-e2e` / `k3d-down`) | one named cluster per machine; two lanes racing it produce failures that look like product bugs |
+| the k3d cluster (`just k3d-up` / `just e2e` / `just k3d-down`) | one named cluster per machine; two lanes racing it produce failures that look like product bugs |
 | the EKS test environment (`test/eks/`) | a real cluster and real spend |
 | a live Portkey key | workspace scope is **key-bound**; Portkey ignores per-request workspace targeting on `/analytics/groups/*` (re-confirmed 2026-06-22, `followup.md` vX) |
 | a live LangSmith key | the rate budget is **tenant-wide**, roughly 10 req/10s, shared across every loop and every lane |
-| `.tools/` (`make tools`, `tools-e2e`) | pinned tooling installed into one directory; concurrent installs corrupt it |
+| `.tools/` (`just setup`) | pinned tooling installed into one directory; concurrent installs corrupt it |
 
 **No lane calls a live vendor API without the goal naming it as that lane's exclusive resource.** No
 test does it at all — `httptest.Server` fakes and injectable clocks (`SetLoopClockForTest`) are the
@@ -187,7 +199,7 @@ the wave was scoped wrong.
 - Untouched work is self-evidently still `To Do`. Do not annotate it.
 - Discovered work: a new task labelled `needs-triage`. This repo generates a lot of it — the closed
   set is overwhelmingly review findings that spawned other review findings.
-- **Commits go to `main` directly** (no feature branches, no PRs), `make gate` green first, staging
+- **Commits go to `main` directly** (no feature branches, no PRs), `just check` green first, staging
   **explicit paths** — never `git add -A` or `-a`, because concurrent lanes share the working tree.
   Renovate is the only exception: it opens PRs and self-automerges on green `ci-success`.
 - Cite closed pre-migration work as `#NNN` (the index doc), new work as `gob-NNNN`. Never renumber.

@@ -4,7 +4,7 @@ title: Portkey multi-workspace targeting and auto-discovery
 status: Parked
 assignee: []
 created_date: '2026-08-14 16:13'
-updated_date: '2026-08-14 16:13'
+updated_date: '2026-09-22 09:06'
 labels:
   - followup-vx
   - portkey
@@ -37,8 +37,8 @@ Migrated from `followup.md` §4 (vX stream — blocked on an external API surfac
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [ ] #1 make gate
-- [ ] #2 go test -tags acceptance ./internal/app/ (only if a §9 acceptance seam changed)
+- [ ] #1 just check
+- [ ] #2 just test-acceptance (only if a §9 acceptance seam changed)
 <!-- DOD:END -->
 
 ## Implementation Notes

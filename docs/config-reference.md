@@ -22,6 +22,12 @@ For a narrative walk-through, see [Configuration](./configuration.md).
 | `emit.self.otlp.*` | — | _(optional)_ | Same structure as `emit.telemetry.otlp`. When unset, self-observability signals use the product endpoint. |
 | `emit.self.metric_interval` | duration | `60s` | Self-obs PeriodicReader export period. Must be ≥ 60s (1 DPM constraint). |
 
+Self-observability histogram instruments use a code-owned base2 exponential aggregation view with
+`MaxSize: 160` and `MaxScale: 20`. The OTel-Go SDK also recognizes
+`OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION=base2_exponential_bucket_histogram` for its
+default histogram selector, but this service does not rely on deployment environment configuration:
+the explicit view remains authoritative.
+
 ---
 
 ## identity

@@ -3,7 +3,7 @@
 // Package logging builds the integrator's own operational-log handler. Logs are written to STDOUT
 // (by the caller) and scraped by the k8s-monitoring collector → Loki — they are NOT pushed via OTLP.
 // logfmt (slog's stdlib TextHandler) is the default: smaller lines and a cheaper Loki parser than
-// JSON for these flat key=value logs (see docs/superpowers/specs/logfmt-spike.md, Path A).
+// JSON for these flat key=value logs.
 package logging
 
 import (

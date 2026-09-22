@@ -3,7 +3,7 @@
 // Package langsmith is the eval-platform source: the sessions loop derives per-session aggregate
 // gauges (run counts, latency/cost/token aggregates, numeric feedback scores) from LangSmith's
 // `GET /sessions?include_stats=true` endpoint. Aggregate-now (rolling snapshot), NOT time-bucketed —
-// see docs/superpowers/specs/langsmith-poc.md. The runs/run-index → Loki logs loop is out of scope
+// the runs/run-index → Loki logs loop is out of scope
 // (content-leak release gate). Vendor specifics stay in this package (decoupling hard rule).
 package langsmith
 

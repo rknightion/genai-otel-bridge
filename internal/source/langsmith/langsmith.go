@@ -48,7 +48,7 @@ type Config struct {
 	AllowPrivate   bool
 	UserAgent      string
 
-	// LangSmith-specific (defaults applied below; coordinator exposes these via root config — WIRING TODO).
+	// LangSmith-specific settings (defaults are applied below; each loop's settings block can override them).
 	StatsWindow       time.Duration // stats_start_time = now - StatsWindow (rolling aggregate window)
 	UseApproxStats    bool          // approximate (cheaper) backend stats
 	SessionFilter     string        // LangSmith `filter` expression — bounds which sessions (cardinality)
@@ -71,7 +71,7 @@ func Register(reg *source.Registry) { reg.Register("langsmith", New) }
 // New is the registry constructor: it builds whichever loops are enabled (`sessions`, `runs`), SHARING
 // one httpx client (one rate limiter) across them so both stay within LangSmith's tenant-wide ~10 req/10s
 // budget. The generic config.SourceConfig (+ each loop's LoopConfig.Settings) maps into the package-local
-// configs; LangSmith-specific knobs are defaulted here (WIRING TODO: docs/superpowers/specs/langsmith-poc.md).
+// configs; LangSmith-specific defaults are applied here and each loop's settings block can override them.
 func New(sc config.SourceConfig, deps source.Deps) (source.Source, error) {
 	sessCfg, hasS := sc.Loops["sessions"]
 	runsCfg, hasR := sc.Loops["runs"]

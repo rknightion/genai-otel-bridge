@@ -3,7 +3,7 @@ id: doc-0003
 title: Wave operating model
 type: guide
 created_date: '2026-08-14 16:08'
-updated_date: '2026-09-22 09:10'
+updated_date: '2026-09-22 15:00'
 ---
 **This document restates nothing from the fan-out protocol doc.** Read that one for the campaign
 model — run contract, routing, authority, lane briefs, goal-file template, pre-flight. This one
@@ -163,7 +163,8 @@ which a wave assigns to exactly one lane or defers to a wiring pass:
 - `internal/source/*/signals.go` + `labels.go` — `SeriesNames` and `ValidateOwnership` are the only
   cross-loop series-collision gate (`#63`, `#104`). Two lanes editing these independently is how a
   collision ships.
-- `Makefile` + `.github/workflows/ci.yml` — the gate matrix, per `#109`.
+- `justfile` + `.github/workflows/ci.yml` — the gate matrix, per `#109`. `just check` and the CI leg
+  matrix must change together, so one lane owns both.
 - `ARCHITECTURE.md`, `docs/DESIGN.md`, `followup.md` — the durable design record, appended by the
   wiring pass, not by every lane.
 

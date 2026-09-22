@@ -3,11 +3,11 @@ id: GOB-0018
 title: >-
   Fix the go-licenses module path so just notices and the publish notices job
   stop failing
-status: Parked
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-09-22 09:08'
-updated_date: '2026-09-22 10:12'
+updated_date: '2026-09-22 10:24'
 labels:
   - ci
   - release
@@ -38,7 +38,7 @@ This blocks more than releases: LICENSING.md makes `just notices` the mechanism 
 - [x] #2 The install path matches the pinned major (github.com/google/go-licenses/v2 for a v2.x pin)
 - [x] #3 scripts/notices.sh is verified against go-licenses v2's actual CLI surface rather than assumed unchanged; v2 is a major release and its flags may have moved
 - [x] #4 A future Renovate major bump cannot silently break this again: either the path is derived from the pinned version, or the coupling is stated where the pin lives so a bump that needs a path change fails loudly instead of at release time
-- [ ] #5 The previously failing publish / notices job passes at the tested SHA, cited by run ID
+- [x] #5 The previously failing publish / notices job passes at the tested SHA, cited by run ID
 <!-- AC:END -->
 
 ## Definition of Done
@@ -59,10 +59,14 @@ Wave 1 L1: repair the go-licenses v2 install coupling, validate its CLI, and reg
 
 <!-- SECTION:NOTES:BEGIN -->
 No application acceptance seam changed, so the conditional acceptance-test item is not applicable. AC5 requires hosted workflow proof and remains deliberately unchecked.
+
+Hosted proof: auto-rc run 35715635428 at ff247962a69399407541c9cb9f8898208f428f34 completed publish / notices successfully on 2026-09-22. The skipped wait jobs were control-flow skips and are not counted as passes.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
 Repaired the go-licenses v2 invocation and cache coupling in 3451473571206df2bb4a51da088973f9bef7f805. just notices now generates THIRD_PARTY_NOTICES.md for 107 modules. Parked until the exact final SHA completes hosted CI and its publish/notices path is observed. Resume at .github/workflows/publish.yml:91-119 and .github/workflows/auto-rc.yml:21-48; do not promote local notice generation into hosted proof.
+
+Hosted AC5 is now satisfied: auto-rc run 35715635428 at ff247962a69399407541c9cb9f8898208f428f34 completed publish / notices successfully. The task is Done.
 <!-- SECTION:FINAL_SUMMARY:END -->

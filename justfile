@@ -1,7 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # renovate: datasource=github-releases depName=golangci/golangci-lint versioning=semver
-golangci_lint_version := env('GOLANGCI_LINT_VERSION', 'v2.13.2')
+golangci_lint_version := env('GOLANGCI_LINT_VERSION', 'v2.14.0')
 # renovate: datasource=github-tags depName=kubernetes-sigs/controller-runtime versioning=loose
 setup_envtest_version := env('SETUP_ENVTEST_VERSION', 'release-0.23')
 # renovate: datasource=github-releases depName=kubernetes/kubernetes versioning=semver

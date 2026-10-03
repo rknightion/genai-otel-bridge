@@ -89,7 +89,7 @@ step.
 
 Open work lives in Backlog.md under `backlog/`, task prefix `gob`. Work closed before the move off
 GitHub Issues is indexed in the "Closed GitHub issues" doc and cited by its original `#NNN`, not by a
-task ID. Read the fan-out protocol doc before designing a wave, and the wave operating model doc for
+task ID. Read `~/repos/agent-docs/sources/loop/planner.md` before designing a wave, and the wave operating model doc for
 this project's own rules.
 
 - **Never pass `--notes` or `--plan` bare.** Both *silently replace* the whole section and exit 0, so

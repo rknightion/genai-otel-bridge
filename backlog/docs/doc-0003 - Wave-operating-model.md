@@ -5,7 +5,7 @@ type: guide
 created_date: '2026-08-14 16:08'
 updated_date: '2026-09-22 15:00'
 ---
-**This document restates nothing from the fan-out protocol doc.** Read that one for the campaign
+**This document restates nothing from the loop protocol.** Read `~/repos/agent-docs/sources/loop/contract.md` and `~/repos/agent-docs/sources/loop/planner.md` for the campaign
 model — run contract, routing, authority, lane briefs, goal-file template, pre-flight. This one
 carries only what is true of `genai-otel-bridge` and would be wrong pasted into another repo.
 

@@ -52,14 +52,10 @@ failure handling) before changing a seam.
 
 - **Conventional Commits.** Subjects drive the release-please `CHANGELOG.md`. Only `feat`, `fix` and
   breaking changes bump the version; `chore`, `style` and `test` are hidden from the changelog.
-- Stage explicit paths (`git add <path>`), never `-A` or `.`. Concurrent agents may share this
-  working tree; never stage, commit or revert work that is not yours.
 - No live network in tests. `httptest.Server` fakes for HTTP, injectable clocks
   (`SetLoopClockForTest`) for determinism.
 - **`*_review_test.go` files encode specific adversarial-review findings** (tagged `[ext-review-14]`,
   `CP-R3b`, `Cdx-C14`). They are regression guards for known attack and race scenarios; keep them.
-- The durable design record is `ARCHITECTURE.md` plus `docs/DESIGN.md` (tracked). Move anything
-  build-affecting out of scratch into those.
 - Config resolves `${ENV}` and `file:/path` refs at load time; `.env`, `*.local.yaml` and
   `*.secret.*` are gitignored.
 - `scripts/forbidden-words.sh` blocks deployment-specific identifiers anywhere in the tracked tree,
@@ -92,17 +88,6 @@ GitHub Issues is indexed in the "Closed GitHub issues" doc and cited by its orig
 task ID. Read `~/repos/agent-docs/sources/loop/planner.md` before designing a wave, and the wave operating model doc for
 this project's own rules.
 
-- **Never pass `--notes` or `--plan` bare.** Both *silently replace* the whole section and exit 0, so
-  another session's writes vanish with no warning. Use `--append-notes` and `--append-plan`.
-- **`backlog/config.yml` is the one file to hand-edit.** List-valued keys cannot be set through
-  `backlog config set`, and the tool directs you to the file. Every other task, draft, doc, decision
-  and milestone file is CLI-only: section boundaries are HTML-comment markers, and breaking one
-  *silently drops* the section at exit 0 with no repair command (`backlog doctor` only fixes
-  duplicate task IDs).
-- **Finalize in one call** so an interrupted session cannot leave finished work looking unfinished:
-  `backlog task edit gob-0007 --check-ac 1 --check-ac 2 -s Done`.
-- **Never let two agents edit the same task.** The lost-write race is fixed for the edit funnel only,
-  not for reorder, draft saves, the TUI path, `doc update` or decision updates.
 - Do not build a workflow on **decisions**: half-built upstream, with no `edit`/`view`/`update`, no
   supersede and no MCP surface. Durable reference goes in docs; tasks are the unit.
 
@@ -110,8 +95,6 @@ this project's own rules.
 
 - `deploy/grafana/README.md` - read before querying the emitted metrics or changing an alert. Also
   carries GS1-GS4, the Grafana-staff stack-side prerequisites this repo cannot set.
-- `docs/DESIGN.md` - read before changing window, settle, backfill or reject semantics.
-- `CONTRIBUTING.md` - contributor workflow.
 
 <!-- BACKLOG.MD GUIDELINES START -->
 <!-- backlog.md-instructions-version: 1.50.1 -->

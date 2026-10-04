@@ -59,8 +59,6 @@ Only a configured sub-floor value is clamped up, and that clamp is logged.
   standby (never judged on heartbeat - it is not running the scheduler) and for a leader with a fresh
   beat; a leader past the stale threshold is 503. `Beat()` records an *attempt*, so a leader inside an
   intended emit-retry backoff stays healthy (threshold = max cadence + retry budget + margin, CP-C5).
-- **`SetMemoryLimit(fraction, containerLimitBytes)`** sets `GOMEMLIMIT` so GC applies backpressure
-  before a cgroup OOM-kill. No-op if either input is <= 0.
 - **pull-mode pprof registers on a private mux**, never `DefaultServeMux`, on its own listener
   (`pull.addr`, default `:6060`, deliberately not the health port). `pprof.Index` on the
   `/debug/pprof/` prefix dispatches `/heap`, `/goroutine` and friends - they are not separate

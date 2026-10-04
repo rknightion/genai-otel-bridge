@@ -3,12 +3,7 @@
 Wiring only: parse flags, set the memory limit, load config, build real OTLP/k8s/selfobs
 dependencies, run under the coordinator, handle SIGTERM. Logic belongs in `internal/app`.
 
-## Flag defaults that are not guessable
-
-`-config` `/etc/genai-otel-bridge/config.yaml`, `-health-addr` `:8080`, `-namespace`
-`$POD_NAMESPACE`, `-identity` `$POD_NAME`, `-checkpoint-file`
-`/var/lib/genai-otel-bridge/checkpoints.yaml` (used only by `ha.checkpoint=file`; override for local
-runs), `-container-mem-bytes` (numerator for `GOMEMLIMIT`).
+`-checkpoint-file` is used only by `ha.checkpoint=file`; override it for local runs.
 
 On ECS, `-identity` falls back to the Task ARN read from `$ECS_CONTAINER_METADATA_URI_V4/task`
 (`ecs.go`).
@@ -24,7 +19,6 @@ backend. Keep that ordering when adding to `main`.
 - `-validate-config` - loads and schema/semantic-checks `-config` via `app.ValidateConfigFile`,
   which placeholders unset `${ENV}` refs (endpoints get an https placeholder) so no secrets are
   needed. Prints `validate-config: OK/FAIL`. For pre-deploy or external-overlay validation.
-- `-version` - prints the ldflags-stamped `version.String()`.
 - `-cleanup` (with `-cleanup-retain-checkpoint`) - the chart's `post-delete` uninstall hook. Deletes
   the app-created Lease and, unless retained, the checkpoint ConfigMap via `internal/cleanup.Run`.
   Needs only `-namespace`. Idempotent (NotFound counts as success).
@@ -52,12 +46,7 @@ access to its own lease or checkpoint. Fixed names; the chart is single-instance
   take over for the gap. `app.Run` therefore returns only on root-ctx cancellation (SIGTERM or
   rollout, clean exit 0) or a genuine construction error, which is fatal plus `os.Exit(1)`.
 - `selfobs.SetMemoryLimit(0.9, *memLimit)` runs **before** config load. No-op when the limit is <= 0.
-- **Self-observability identity** falls back to the telemetry endpoint when `cfg.Emit.Self` is nil,
-  appends `-meta` to the service namespace, and uses POD_NAME as the instance so leader overlap is
-  diagnosable per replica.
-- **Self-profiling is opt-in and default-off.** `selfobs.StartProfiling` is wired after the
-  self-metrics provider and **before** the coordinator, so it runs on the standby too. A start
-  failure is fatal: never run silently un-profiled.
+- **Self-observability** falls back to the telemetry endpoint when `cfg.Emit.Self` is nil; identity and self-profiling are in `internal/selfobs/AGENTS.md`.
 - **Liveness threshold** is derived, not a literal:
   `max(schedule.DegradedBackoff, slowest enabled cadence) + emitRetryBudget(2m) + livenessMargin(4m)`.
   A leader in retry or backpressure survives; a wedged scheduler does not. `bucket_settle` drives the

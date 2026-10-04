@@ -73,7 +73,7 @@ synchronous paginated POST.
   in-flight progress; without it the first window (at `Time == zero`) loops forever.
 - **Delivery is AT-LEAST-ONCE**, not the metric plane's exactly-once. A mid-window leader change
   resumes at `cur.Next`; an emit-then-checkpoint failure may re-emit a page. Loki tolerates dups.
-- **Scope is REQUIRED because `runs/query` 400s without one**, and the tenant has 100+ projects so an
+- **Scope is REQUIRED because `runs/query` 400s without one**, and the tenant has many projects so an
   unscoped pull is a firehose. `settings.session_ids` (static csv) wins, else filter-bounded
   auto-discovery via `GET /sessions` plus `settings.session_filter`, capped at `max_sessions` and
   cached in memory (`session_refresh` TTL, reset on failover). Fail-fast if NEITHER is set, and a

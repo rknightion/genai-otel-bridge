@@ -16,8 +16,7 @@ inline; other 5xx including 500/501 do not, and the window is re-pulled next cad
 `Retry-After` is honoured, and a value exceeding the remaining budget returns immediately instead of
 burning attempts on guaranteed 429s.
 
-Any 2xx is success. Grafana Cloud answers 200 on `/v1/metrics` but 204 on `/v1/logs`; accepting only
-200 once misclassified every successful logs POST as retryable and the logs loop never advanced.
+Any 2xx is success. Grafana Cloud answers 200 on `/v1/metrics` but 204 on `/v1/logs`.
 
 ## Determinism is a correctness precondition, not tidiness
 

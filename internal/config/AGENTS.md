@@ -95,8 +95,7 @@ error. Use `<env ref>` placeholder prose in example blocks, never live syntax.
 - `max_dpm` 1 - 0 would mean "emit nothing". It caps **both** planes: `emit.CoalesceDPM` collapses
   each (series, 60s) group last-write-wins on the product plane, and the self-obs reader interval is
   clamped to `60s / max_dpm`.
-- `per_metric_cardinality_budget` 10000 - this is a **per-metric** cap (distinct label sets per metric
-  name, not global); 0 would mean unlimited in the guard. Negative is rejected.
+- `per_metric_cardinality_budget` 10000; negative is rejected. The cap semantics are in `internal/source/AGENTS.md`.
 - `max_stream_label_keys` 15, the Grafana Cloud Loki `max_label_names_per_series` default (Grafana
   staff can raise it per tenant, in which case raise this knob to match). `internal/app` re-applies
   the default at point of use because struct-built test configs bypass `Load`. The metrics plane is
@@ -107,7 +106,7 @@ error. Use `<env ref>` placeholder prose in example blocks, never live syntax.
   runner's depth-1 clamp (about a minute of buffering instead of the documented hours) and
   `max_batch_bytes` disables the emitter's proactive over-cap split, leaving only the reactive 413
   path. The runner and emitter clamps stay as defence-in-depth for struct-built configs.
-- `bucket_settle` 10m, live-measured. 3m was insufficient.
+- `bucket_settle` 10m.
 - `max_backfill` 90m, sized to the Grafana Cloud Mimir `out_of_order_time_window` of 2h with margin
   for clock skew and catch-up walk. **Unrelated to the 55m `maxWindow` granularity clamp**, which is
   enforced separately.

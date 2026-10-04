@@ -144,10 +144,6 @@ gateway `/v1/logs` on the same base and auth as metrics, landing in Loki.
 - **The end-to-end content gate lives in `internal/app`:** `TestLogsExportContentLeakConformanceGate`.
   A strip change that only passes this package's tests has not been checked.
 
-Read `reference/logs-export.md` before changing the download path, the strip, or the failure
-handling: it holds the SSRF and credential-redaction rules, the chunker and Range-resume mechanics,
-the self-metric skip reasons, and the parked-window behaviour.
-
 ## Config surfacing
 
 Knobs are package-local `settings` maps - no `internal/config` change. A malformed known key fails

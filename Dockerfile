@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 # Pin the builder to the BUILD platform and cross-compile (Go, CGO_ENABLED=0,
 # GOARCH=$TARGETARCH) — avoids QEMU-emulating the non-native arch build.
-FROM --platform=$BUILDPLATFORM mirror.gcr.io/library/golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS builder
+FROM --platform=$BUILDPLATFORM mirror.gcr.io/library/golang:1.27.1-bookworm@sha256:6e725de5c0593b829d80b04f169d4fe119b32c612744c79e3311acf14b738e7f AS builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

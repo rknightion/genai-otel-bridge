@@ -85,8 +85,9 @@ step.
 
 Open work lives in Backlog.md under `backlog/`, task prefix `gob`. Work closed before the move off
 GitHub Issues is indexed in the "Closed GitHub issues" doc and cited by its original `#NNN`, not by a
-task ID. Read `~/repos/agent-docs/sources/loop/planner.md` before designing a wave, and the wave operating model doc for
-this project's own rules.
+task ID.
+
+Loops: the protocol lives in `~/repos/agent-docs/sources/loop/` (this board's "Loop protocol pointer" doc points there); this repository's loop facts are in `LOOP.md`.
 
 - Do not build a workflow on **decisions**: half-built upstream, with no `edit`/`view`/`update`, no
   supersede and no MCP surface. Durable reference goes in docs; tasks are the unit.

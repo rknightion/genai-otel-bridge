@@ -25,8 +25,9 @@ up() {
     # Ask the daemon for the bridge gateway (|| true so set -e doesn't abort here).
     local gw; gw="$(docker network inspect bridge --format '{{ (index .IPAM.Config 0).Gateway }}' 2>/dev/null || true)"
     [ -n "$gw" ] || { echo "E2E_DOOD set but could not determine the docker bridge gateway" >&2; exit 1; }
-    echo "E2E_DOOD: publishing k3s API on host bridge gateway ${gw}:6445"
-    create_extra+=(--api-port "${gw}:6445")
+    local port="${E2E_API_PORT:-6445}"
+    echo "E2E_DOOD: publishing k3s API on host bridge gateway ${gw}:${port}"
+    create_extra+=(--api-port "${gw}:${port}")
   fi
   # ${arr[@]+"${arr[@]}"} guards the empty-array expansion: stock macOS bash 3.2 treats "${arr[@]}"
   # of an empty array as an unbound variable under `set -u` and aborts. No-op on bash 5 (CI).

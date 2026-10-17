@@ -1,0 +1,10 @@
+# Remote gate runner contract (m7kni/gate-runner): see that repo's README.
+# Keep the pinned tools the recipes build into .tools across runs in a slot.
+persist: [.tools]
+env:
+  # The gate's Docker daemon is the host's (docker-outside-of-docker with a containerd image store):
+  # the k3d e2e flattens multi-arch images and reaches the k3d API the way hosted CI does.
+  E2E_DOOD: "1"
+  # Gates in other slots share that daemon: give each slot its own k3d cluster and API port.
+  E2E_CLUSTER: "gob-e2e-s${GR_SLOT}"
+  E2E_API_PORT: "6${GR_SLOT}45"

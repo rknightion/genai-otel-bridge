@@ -48,6 +48,10 @@ failure handling) before changing a seam.
   renaming a leg never touches branch rules. Renovate PRs self-automerge, majors included, once
   `ci-success` is green.
 
+Off the Mac, when the remote gate runner is installed (`which gaterun`): `gaterun -- just ci` (or
+`just check`), paced across lanes with `gaterun-slot <lane> -- gaterun -- just ci`; `.gaterunner.yaml`
+is its contract. Run one test or package locally.
+
 ## Conventions
 
 - **Conventional Commits.** Subjects drive the release-please `CHANGELOG.md`. Only `feat`, `fix` and

@@ -79,6 +79,7 @@ step.
   inside the shared `container-publish.yml` strips it, so image tags are
   `ghcr.io/rknightion/genai-otel-bridge:X.Y.Z` (plus `:X.Y`, `:X`, `:latest`). Use the unprefixed
   form in `--set image=...` and registry references.
+- **Runtime trust:** all Dockerfiles use pinned distroless Debian 13 bases for the eMudhra trust-store update. Keep production, Kaniko and e2e helper runtimes aligned.
 - **Third-party notices and SBOMs are release artifacts, deliberately outside `just check`.**
   `just notices` regenerates from the real import graph and churns on every dependency bump, so
   gating on it would break Renovate automerge. SBOMs come from syft inside `container-publish.yml`,

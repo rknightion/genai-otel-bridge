@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [4.0.1](https://github.com/rknightion/genai-otel-bridge/compare/v4.0.0...v4.0.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **deps:** update go modules (non-major) ([#303](https://github.com/rknightion/genai-otel-bridge/issues/303)) ([182bb41](https://github.com/rknightion/genai-otel-bridge/commit/182bb417a8dbf53abfceb298cd8f5795d1564514))
+
 ## [4.0.0](https://github.com/rknightion/genai-otel-bridge/compare/v3.0.1...v4.0.0) (2026-10-21)
 
 

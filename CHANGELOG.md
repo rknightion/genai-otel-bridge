@@ -1,6 +1,19 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [4.0.1](https://github.com/rknightion/genai-otel-bridge/compare/v4.0.0...v4.0.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **deps:** update go modules (non-major) ([#303](https://github.com/rknightion/genai-otel-bridge/issues/303)) ([182bb41](https://github.com/rknightion/genai-otel-bridge/commit/182bb417a8dbf53abfceb298cd8f5795d1564514))
+
+
+### Build & CI
+
+* **auto-rc:** only cut RCs for pushes from this repository ([1047b0c](https://github.com/rknightion/genai-otel-bridge/commit/1047b0c48143f8e8765342987b44a39e1740af1b))
+* clear the zizmor findings that fail fork pull requests ([6da4fe1](https://github.com/rknightion/genai-otel-bridge/commit/6da4fe189955b583f3e39861c72778553deee0bf))
+
 ## [4.0.0](https://github.com/rknightion/genai-otel-bridge/compare/v3.0.1...v4.0.0) (2026-10-21)
 
 

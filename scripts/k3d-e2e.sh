@@ -32,19 +32,13 @@ up() {
   # ${arr[@]+"${arr[@]}"} guards the empty-array expansion: stock macOS bash 3.2 treats "${arr[@]}"
   # of an empty array as an unbound variable under `set -u` and aborts. No-op on bash 5 (CI).
   k3d cluster create "$CLUSTER" --servers 1 --agents 2 --image "$K3S_IMAGE" ${create_extra[@]+"${create_extra[@]}"} --wait --timeout 120s
-  # busybox (inv-3 zombie-freeze ephemeral container) is multi-arch. With the host's
-  # containerd image store the pulled manifest is an OCI index that `docker save` —
-  # and hence `k3d image import` — can't export: it omits the other-arch blobs, which
-  # fails the *whole* combined import (taking the app image down with it). Flatten it to
-  # a single host-arch manifest under DooD CI. A classic image store stores single-arch
-  # already, so a plain pull is fine there.
-  if [ -n "${E2E_DOOD:-}" ]; then
-    docker build -q -t "$BUSYBOX_IMAGE" - >/dev/null <<EOF
+  # busybox (inv-3 zombie-freeze ephemeral container) is multi-arch. A containerd-backed
+  # Docker store can save its OCI index without the other-platform blobs, so the combined
+  # k3d import fails before the app can run. Hosted Docker can use this store too; DooD
+  # placement does not identify the image format. Flatten the utility image for both paths.
+  docker build -q -t "$BUSYBOX_IMAGE" - >/dev/null <<EOF
 FROM $BUSYBOX_IMAGE
 EOF
-  else
-    docker pull "$BUSYBOX_IMAGE" >/dev/null
-  fi
   # 3-node import (simple + robust for a few small images; revisit a --registry-create if it gets slow).
   k3d image import "$IMAGE" "$E2E_HELPER_IMAGE" "$BUSYBOX_IMAGE" -c "$CLUSTER"
   export KUBECONFIG; KUBECONFIG="$(k3d kubeconfig write "$CLUSTER")"

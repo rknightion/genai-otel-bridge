@@ -3,11 +3,11 @@
 ## `github-issues-2026-08-14.json`
 
 **The complete record of this repo's GitHub Issues, captured on 2026-08-14 when the project moved
-to Backlog.md.** All 118 of this repo's own issues were deleted from GitHub on that date — the 117
+to Backlog.md; the board has since moved to GitHub issues.** All 118 of this repo's own issues were deleted from GitHub on that date — the 117
 closed ones and the single open one — so `gh issue view <N>` 404s for every number except `#2`.
-This file is the record, not a convenience copy. The Backlog doc *"Closed GitHub issues (pre-Backlog
-history index)"* indexes the closed set; `#165` is not in that table because it was open work, and
-its record is this archive plus task `GOB-0001`.
+This file is the record, not a convenience copy. The board document *"Closed GitHub issues (pre-Backlog
+history index)"*, kept under `.github/tracker/history/`, indexes the closed set; `#165` is not in that table because it was open work, and
+its record is this archive plus the issue `GOB-0001` became (`just issue GOB-0001`).
 
 Read a single issue:
 

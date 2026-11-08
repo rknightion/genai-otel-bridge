@@ -38,11 +38,11 @@ scripts/forbidden-words.local
 # Scratch: specs, plans, brainstorming drafts — persist on disk, never enter git history
 docs/superpowers/
 
-# Claude Code repo-local config. `settings.json` and `hooks/` ARE tracked — they enforce the
-# Backlog.md rules (bare --notes/--plan silently replaces a section; hand-edited task markdown
-# loses one at exit 0) for anyone working in this repo. Everything else under .claude/ is
-# per-machine state: worktrees, scheduler locks, settings.local.json.
-.claude/
+# Claude Code repo-local config and scratch: scheduler locks, transient checkouts and
+# settings.local.json stay local. `.claude/skills/` is tracked: it holds the links to the
+# contributor skills in `.agents/skills/`.
+.claude/*
+!.claude/skills/
 
 # OS / editor
 .DS_Store

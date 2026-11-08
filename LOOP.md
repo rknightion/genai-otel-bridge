@@ -5,10 +5,25 @@ ci-required: ci-success
 release-on-push: yes
 deploy-on-push: no
 grafana-stack: none
+tracker: github
+landing: pr
 
 Public repository: `scripts/forbidden-words.sh` blocks deployment-specific identifiers anywhere in
-the tracked tree, `backlog/` included. Write the shape, not the instance. Run `just` with stdin from
-`/dev/null`. `just ci` adds the two Docker or service-container legs (`e2e`, `test-dynamodb`).
+the tracked tree, `.github/tracker/history/` included. Write the shape, not the instance. Run `just`
+with stdin from `/dev/null`. `just ci` adds the two Docker or service-container legs (`e2e`, `test-dynamodb`).
+
+The tracker working model is `~/repos/agent-docs/docs/github-tracker.md` (maintainers only).
+
+## Queue
+
+- The queue is `just tracker queue`: open issues at Project Status Ready on the rknightion Project.
+- A charter selects work by labels (`type:task`, `type:bug`, `type:feature`, `needs-owner`,
+  `needs-triage`) and Project fields (Status, Priority, Effort, Lane). Never queue a `needs-owner` or
+  `needs-triage` issue.
+- Only the root writes issues and the Project, through `just tracker`. A lane returns the status and
+  the AC ticks it wants.
+- A queue row names the issue as `#N`. A legacy board id (`GOB-0001`) resolves with `just issue <ID>`;
+  `.github/tracker/id-map.json` is the map.
 
 ## Credentials
 
@@ -67,4 +82,6 @@ the tracked tree, `backlog/` included. Write the shape, not the instance. Run `j
 Stop and return the question for: a FROZEN-seam change, deleting a review-guard assertion, a new
 emitted label key or series name (a cardinality decision), anything that could put vendor content
 on the wire, or a live vendor key you were not given. Decide everything else and record it in the
-task notes. Cite closed pre-migration work as `#NNN` and new work as `gob-NNNN`.
+task notes. Cite work as `#N`. A `#N` of 313 or lower
+is a pull request, #2 (the Renovate dashboard) or one of the 118 issues GitHub no longer has
+(`archive/README.md` holds them); a legacy board id (`GOB-0001`) resolves with `just issue <ID>`.

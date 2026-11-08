@@ -5,7 +5,6 @@
 #   bash scripts/cloud-environment-setup.sh
 set -euo pipefail
 
-BACKLOG_VERSION="1.50.1"
 JUST_VERSION="1.58.0"
 TOFU_VERSION="1.10.6"
 TFLINT_VERSION="0.59.1"
@@ -108,20 +107,12 @@ if ! command -v checkov >/dev/null 2>&1 || ! checkov --version | grep -Fqx "$CHE
   pipx install --force "checkov==$CHECKOV_VERSION"
 fi
 
-# Backlog.md is part of the development workflow, not an application dependency.
-# Install it globally for the selected Node runtime and persist npm's bin directory.
-npm install --global "backlog.md@$BACKLOG_VERSION"
-npm_bin="$(dirname "$(command -v backlog)")"
-npm_path_line="export PATH=\"$npm_bin:\$PATH\""
-grep -Fqx "$npm_path_line" "$HOME/.bashrc" || printf '%s\n' "$npm_path_line" >> "$HOME/.bashrc"
-
 # Fetch everything needed by offline-by-default agent phases. The justfile owns the
 # versions and checksum verification for golangci-lint, envtest, Helm, k3d, and kubectl.
 just setup </dev/null
 
 tofu -chdir=deploy/ecs/terraform init -backend=false -input=false >/dev/null
 
-backlog --version
 just --version
 tofu version | sed -n '1p'
 tflint --version | sed -n '1p'

@@ -66,7 +66,7 @@ is its contract. Run one test or package locally.
 - Config resolves `${ENV}` and `file:/path` refs at load time; `.env`, `*.local.yaml` and
   `*.secret.*` are gitignored.
 - `scripts/forbidden-words.sh` blocks deployment-specific identifiers anywhere in the tracked tree,
-  **`backlog/` included**. The repo is public: write the shape, not the instance
+  including `.github/tracker/history/`. The repo is public: write the shape, not the instance
   (`<vendor>/<workspace>/<loop>`, "the tenant's second workspace"). Counts, timings and structural
   findings are fine.
 
@@ -89,42 +89,26 @@ step.
   scanning the built image rather than the local binary. See `LICENSING.md`.
 - `scripts/publish.sh` is a local manual fallback, **not** the CI path.
 
-## Task tracking
+## Tracking work
 
-Open work lives in Backlog.md under `backlog/`, task prefix `gob`. Work closed before the move off
-GitHub Issues is indexed in the "Closed GitHub issues" doc and cited by its original `#NNN`, not by a
-task ID.
+Work is tracked in this repository's GitHub issues; they are the only queue. Do not add a checklist
+file such as `ROADMAP.md` beside them.
 
-Loops: the protocol lives in `~/repos/agent-docs/sources/loop/` (this board's "Loop protocol pointer" doc points there); this repository's loop facts are in `LOOP.md`.
-
-- Do not build a workflow on **decisions**: half-built upstream, with no `edit`/`view`/`update`, no
-  supersede and no MCP surface. Durable reference goes in docs; tasks are the unit.
+- A pull request body says how it relates to an issue, on a line of its own: `Closes #N` with the
+  `Acceptance evidence` table from `.github/pull_request_template.md` (one row for each acceptance
+  criterion of that issue), `Refs #N` when it only relates to one, or `Task: none, <reason>`.
+- A pull request that changes `.github/workflows/` or `.github/actions/` carries no closing keyword:
+  write `Task: none, <reason>`, with `Refs #N` beside it if you like.
+- Contributors never need the project board or the tracker tooling; a maintainer handles both.
+- Issues and pull requests are public, so they carry no real identifiers: no email addresses,
+  handles, account or tenant ids, host names, addresses or credentials. Write the shape, not the
+  instance.
+- Older commits, docs and tests cite legacy board ids such as `GOB-0001`. `just issue <ID>` prints
+  the issue each one became; `.github/tracker/id-map.json` is the map. A bare `#N` of 313 or lower
+  is a pull request, #2 (the Renovate dashboard) or one of the early issues GitHub no longer has
+  (`archive/README.md`).
 
 ## Deeper references
 
 - `deploy/grafana/README.md` - read before querying the emitted metrics or changing an alert. Also
   carries GS1-GS4, the Grafana-staff stack-side prerequisites this repo cannot set.
-
-<!-- BACKLOG.MD GUIDELINES START -->
-<!-- backlog.md-instructions-version: 1.50.1 -->
-<CRITICAL_INSTRUCTION>
-
-## Backlog.md Workflow
-
-This project uses Backlog.md for task and project management.
-
-**For every user request in this project, run `backlog instructions overview` before answering or taking action.**
-
-Use the overview to decide whether to search, read, create, or update Backlog tasks.
-
-Before task lifecycle actions, read the matching detailed guide:
-- `backlog instructions task-creation` before creating or splitting tasks
-- `backlog instructions task-execution` before planning, changing status or assignee, adding a plan or implementation notes, or implementing task work
-- `backlog instructions task-finalization` before checking acceptance criteria, writing final summaries, or moving tasks to terminal statuses
-
-Use `backlog <command> --help` before running unfamiliar commands. Help shows options, fields, and examples.
-
-Do not edit Backlog task, draft, document, decision, or milestone markdown files directly. Use the `backlog` CLI so metadata, relationships, and history stay consistent.
-
-</CRITICAL_INSTRUCTION>
-<!-- BACKLOG.MD GUIDELINES END -->

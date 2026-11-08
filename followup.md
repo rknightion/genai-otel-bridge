@@ -6,13 +6,14 @@ streams immediately below; the detailed §-sections that follow are the referenc
 items already DONE/RESOLVED/BUILT).
 
 > **THIS FILE IS NO LONGER THE QUEUE — it is the reference behind the queue.** On **2026-08-14** every
-> open row below was migrated into the Backlog.md tracker as `GOB-0002` … `GOB-0013`. **What is left is
-> `backlog task list --plain`**, not this file. Two queues is how a deferred item gets worked twice or
+> open row below was migrated into the Backlog.md tracker as `GOB-0002` ... `GOB-0013`, and that board has
+> since moved to GitHub issues (`just issue GOB-0002` prints the issue). **What is left is the open
+> issues**, not this file. Two queues is how a deferred item gets worked twice or
 > never, so:
 >
-> - **Do not add new open work here.** New work is a task (`backlog task create`); if it needs a page of
->   context, that context comes here and the task points at the section.
-> - **Do not mark work done here.** Close the task; its final summary carries the SHA.
+> - **Do not add new open work here.** New work is an issue; if it needs a page of
+>   context, that context comes here and the issue points at the section.
+> - **Do not mark work done here.** Close the issue; its closing pull request carries the SHA.
 > - The §-sections keep their full value as the *reference* each task cites — the design analysis, the
 >   live-probe results, the boundary notes, and the DONE/RESOLVED history. That is why the file stays.
 >

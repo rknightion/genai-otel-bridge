@@ -1107,16 +1107,18 @@ this document: it is written into the issues.
 | 4 | The scope gate | Section 5.1 and its signals in section 8 | Unit 3b; Q6 passes |
 | 5a | The race detector on the acceptance recipe | Verification | Unit 3b |
 | 5b | The release gate and the isolation tests | Section 5.3, goals G2 and G5, the run-time cases of G3 | Units 4 and 5a |
-| 6a | The tenant config schema and its load rules | Section 2 (load phase), goal G9 | Unit 3a |
+| 6a | The tenant config schema and its load rules | Section 2 (load phase), goal G9 | Unit 3b |
 | 6b | Resolving, secrets and assembly for tenant rows | Sections 2 (resolve and assemble phases), 7 and 9, goal G8 | Units 5b and 6a; Q3 and Q5 pass |
 | 6c | The chart | Section 11 | Unit 6a |
-| 6d | Alert rules and the dashboard | The alerts of section 8 | Unit 4 |
+| 6d | Alert rules and the dashboard | The alerts of section 8 | Units 4 and 6b |
 | 6e | Switching the tenant shape on | Goals G1 and G7, the unreadable-secret case of G3, the evidence query of section 5.4, the documentation and the design record | Units 6b, 6c and 6d |
 
-Until unit 6e, the binary refuses to start with a tenant-shape config and says the shape is not
-enabled in this version. Units 6a to 6d are exercised by tests. Unit 6e removes the refusal. It is
-the only unit whose commit type is `feat`, so the changelog does not announce multi-tenancy before
-it works, and the formats goal G8 fixes are fixed by that unit's version.
+From unit 6a until unit 6e, the binary refuses to start with a tenant-shape config and says the
+shape is not enabled in this version, and the config check says the same. Before unit 6a a
+`tenants` key is an unknown key, which the loader already refuses. Units 6a to 6d are exercised
+by tests. Unit 6e removes the refusal. It is the only unit whose commit type is `feat`, so the
+changelog does not announce multi-tenancy before it works, and the formats goal G8 fixes are fixed
+by that unit's version.
 
 Units 2 to 5b change nothing in the legacy shape's emitted telemetry, checkpoint keys or
 self-metric label sets. Two things a legacy install can see do change: from unit 3a,

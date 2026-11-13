@@ -1,6 +1,32 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [4.1.0](https://github.com/rknightion/genai-otel-bridge/compare/v4.0.0...v4.1.0) (2026-11-13)
+
+
+### Features
+
+* **helm:** add extraEnvFrom to load env from additional Secrets or ConfigMaps ([#348](https://github.com/rknightion/genai-otel-bridge/issues/348)) ([fb4bd84](https://github.com/rknightion/genai-otel-bridge/commit/fb4bd84f2fba9dbf5517c1fe46f9f2b28c43334f))
+
+
+### Bug Fixes
+
+* **deps:** update go modules (non-major) ([#303](https://github.com/rknightion/genai-otel-bridge/issues/303)) ([182bb41](https://github.com/rknightion/genai-otel-bridge/commit/182bb417a8dbf53abfceb298cd8f5795d1564514))
+* flatten e2e utility image for containerd Docker ([c6d89be](https://github.com/rknightion/genai-otel-bridge/commit/c6d89be03ec4bcae30079db4bdb160b59488cbd9))
+
+
+### Documentation
+
+* add the multi-tenancy design ([#347](https://github.com/rknightion/genai-otel-bridge/issues/347)) ([2a63d63](https://github.com/rknightion/genai-otel-bridge/commit/2a63d63eaa2f4bfdbde7a6aa7b5fe2b8389bab36))
+
+
+### Build & CI
+
+* **auto-rc:** only cut RCs for pushes from this repository ([1047b0c](https://github.com/rknightion/genai-otel-bridge/commit/1047b0c48143f8e8765342987b44a39e1740af1b))
+* clear the zizmor findings that fail fork pull requests ([6da4fe1](https://github.com/rknightion/genai-otel-bridge/commit/6da4fe189955b583f3e39861c72778553deee0bf))
+* fail pull requests on zizmor findings through ci-success ([#345](https://github.com/rknightion/genai-otel-bridge/issues/345)) ([9be4570](https://github.com/rknightion/genai-otel-bridge/commit/9be45704493a467527ab3e8ccb870ae14eecb69e))
+* wire the GitHub issue tracker tools (just tracker, evidence and privacy checks) ([04471eb](https://github.com/rknightion/genai-otel-bridge/commit/04471ebcdd666d7b4b5e9aa35fa197164bbffadf))
+
 ## [4.0.0](https://github.com/rknightion/genai-otel-bridge/compare/v3.0.1...v4.0.0) (2026-10-21)
 
 

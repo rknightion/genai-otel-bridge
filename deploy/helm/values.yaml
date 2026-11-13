@@ -545,3 +545,8 @@ runtimeEnv:
   portkeyExpectedWorkspace: ""
   # LANGSMITH_BASE_URL — self-hosted LangSmith endpoint; MUST include /api/v1.
   langsmithBaseUrl: ""
+
+# Extra envFrom entries appended to the container after the genai-otel-bridge-secrets secretRef, for
+# env held in additional Secrets or ConfigMaps. Accepts standard secretRef/configMapRef items.
+# Example: extraEnvFrom: [{ secretRef: { name: my-extra-secret } }]
+extraEnvFrom: []

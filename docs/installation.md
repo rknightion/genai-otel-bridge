@@ -96,6 +96,8 @@ kubectl create secret generic genai-otel-bridge-secrets \
 
 Alternatively, use the chart's built-in [ExternalSecret](#externalsecrets) support to provision secrets from a cloud secrets manager.
 
+To load further env from Secrets or ConfigMaps managed by other tools, list them in `extraEnvFrom` as standard `envFrom` entries (`secretRef` or `configMapRef`); they are appended after `genai-otel-bridge-secrets`.
+
 ### 2. Deploy
 
 ```bash

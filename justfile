@@ -354,3 +354,18 @@ _tools-sbom:
     mkdir -p {{ tools_dir }}
     { test -x {{ tools_dir }}/syft && {{ tools_dir }}/syft version >/dev/null 2>&1; } \
       || GOBIN={{ tools_dir }} {{ go }} install github.com/anchore/syft/cmd/syft@{{ syft_version }}
+
+# GitHub issues and the rknightion Project; maintainers only (needs the tracker tools and credentials)
+[group('tracker')]
+[positional-arguments]
+tracker *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export TRACKER_REPO=rknightion/genai-otel-bridge TRACKER_PROJECT_OWNER=rknightion TRACKER_PROJECT=7
+    export TRACKER_ISSUE_IDENTITY=app TRACKER_PROJECT_IDENTITY=user
+    exec tracker-with-token "$@"
+
+# print the issue a legacy board id (GOB-0001) became
+[group('tracker')]
+issue id:
+    TRACKER_REPO=rknightion/genai-otel-bridge tracker legacy {{ quote(id) }}

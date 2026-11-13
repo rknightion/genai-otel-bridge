@@ -100,6 +100,9 @@ Requires Go 1.27+. Acceptance gates: `just test-acceptance`.
   data flow, HA, emit model, configuration, and the decision ledger.
 - **[docs/DESIGN.md](./docs/DESIGN.md)** — the detailed, build-facing design spec: scope, concrete
   contracts/schemas, failure handling (F1–F47), test plan, and review dispositions.
+- **[docs/designs/multi-tenancy.md](./docs/designs/multi-tenancy.md)** - the design for serving many
+  teams from one install: the tenant config shape, pipeline isolation, the scope assertion and the
+  order of work. Not built yet.
 - **[followup.md](./followup.md)** — deferred/future topics + the **out-of-scope-until-shape-known**
   register (data-sensitivity governance, emit backends, vendor SDKs, deployment modes, future sources).
 

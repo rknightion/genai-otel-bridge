@@ -1,0 +1,98 @@
+{
+ "held": {},
+ "issues": {
+  "GOB-0001": {
+   "number": 314,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/314"
+  },
+  "GOB-0002": {
+   "number": 315,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/315"
+  },
+  "GOB-0003": {
+   "number": 326,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/326"
+  },
+  "GOB-0004": {
+   "number": 327,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/327"
+  },
+  "GOB-0005": {
+   "number": 328,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/328"
+  },
+  "GOB-0006": {
+   "number": 329,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/329"
+  },
+  "GOB-0007": {
+   "number": 316,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/316"
+  },
+  "GOB-0008": {
+   "number": 317,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/317"
+  },
+  "GOB-0009": {
+   "number": 318,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/318"
+  },
+  "GOB-0010": {
+   "number": 319,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/319"
+  },
+  "GOB-0011": {
+   "number": 320,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/320"
+  },
+  "GOB-0012": {
+   "number": 330,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/330"
+  },
+  "GOB-0013": {
+   "number": 321,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/321"
+  },
+  "GOB-0014": {
+   "number": 331,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/331"
+  },
+  "GOB-0015": {
+   "number": 332,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/332"
+  },
+  "GOB-0016": {
+   "number": 333,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/333"
+  },
+  "GOB-0017": {
+   "number": 322,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/322"
+  },
+  "GOB-0018": {
+   "number": 334,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/334"
+  },
+  "GOB-0019": {
+   "number": 335,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/335"
+  },
+  "GOB-0020": {
+   "number": 323,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/323"
+  },
+  "GOB-0021": {
+   "number": 324,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/324"
+  },
+  "GOB-0022": {
+   "number": 325,
+   "url": "https://github.com/rknightion/genai-otel-bridge/issues/325"
+  }
+ },
+ "prefix": "GOB",
+ "repo": "rknightion/genai-otel-bridge",
+ "schema": 1,
+ "source_sha": "04471ebcdd666d7b4b5e9aa35fa197164bbffadf",
+ "synthetic": []
+}

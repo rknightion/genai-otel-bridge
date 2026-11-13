@@ -155,6 +155,9 @@ spec:
           envFrom:
             - secretRef:
                 name: genai-otel-bridge-secrets
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
 
           # Container-level hardening (Cdx-M10 / AR-H-tmp):
           #   readOnlyRootFilesystem: all writable paths are explicit volume mounts below.

@@ -125,7 +125,7 @@ kubectl get pods -l app=genai-otel-bridge
 kubectl logs -l app=genai-otel-bridge --tail=50
 ```
 
-The leader pod logs a `leader=true` line and begins polling. Standby replicas log `leader=false` and idle.
+The leader pod logs `leader elected; starting loops` and begins polling. Standby replicas log nothing at the default level and idle. `kubectl get lease genai-otel-bridge-leader -o jsonpath='{.spec.holderIdentity}'` names the current leader.
 
 ---
 

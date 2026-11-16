@@ -26,8 +26,10 @@ from three cooperating mechanisms:
 1. **`leaderCtx` cancellation** — when a replica loses the Lease, its leader context is
    cancelled, aborting in-flight collect and emit work.
 2. **Monotonic checkpoint fence** — the `CheckMonotonic` function rejects any watermark write
-   where `incoming.Time ≤ stored.Time` or `incoming.Epoch < stored.Epoch`. A demoted leader
-   cannot move the frontier backward or double-advance it.
+   where `incoming.Epoch < stored.Epoch`, where `incoming.Time < stored.Time`, or where the time
+   is unchanged and the cursor is too (an unchanged time with a new cursor is how the log loops
+   save progress inside a window). A demoted leader cannot move the frontier backward or
+   double-advance it.
 3. **Lease epoch** — the current `LeaseTransitions` count is threaded into the leader context
    as an epoch integer. Every checkpoint write carries the epoch; a stale-epoch write is
    rejected by `CheckMonotonic`.
@@ -61,12 +63,12 @@ new is persisted after SIGTERM — the grace window only bounds how long the pro
 SIGKILL, not a drain-to-completion period. The Helm chart sets `terminationGracePeriod: 300s`
 to comfortably exceed the emit-retry budget before the container is killed.
 
-**Leadership lost while running is different from a SIGTERM shutdown.** If the lease-based
-coordinator loses leadership (e.g. a renewal lapse) while the process's root context is still
-alive, `Run` returns a nil error, so the binary logs and exits **0** rather than crash-looping —
-it relies on the container orchestrator to restart it and rejoin the election. The DynamoDB
-coordinator (ECS) instead re-enters its own acquire loop in-process on leadership loss, without
-exiting.
+**Leadership lost while running is different from a SIGTERM shutdown.** If a coordinator loses
+leadership (for example a renewal lapse) while the process's root context is still alive, the
+process does not exit. Both the lease-based coordinator and the DynamoDB coordinator (ECS) stop
+the loops and campaign again in process; the lease-based one logs
+`leadership lost (renewal lapse); loops stopped` at warning level. The process exits only on
+SIGTERM or when a coordinator cannot be constructed.
 
 ---
 
@@ -172,7 +174,8 @@ ServiceAccount.
 ## Noop mode (single replica / dev)
 
 Set `coordinator: none` for a single-replica or dev deployment. The no-op coordinator always
-leads with epoch 1 and never contacts the Kubernetes API. Pair with `checkpoint: file`
+leads and never contacts the Kubernetes API. It leads with epoch 1, or with the epoch already
+stored in the checkpoint when that is higher (an HA deployment downgraded to `none`). Pair with `checkpoint: file`
 for fully local operation.
 
 ---

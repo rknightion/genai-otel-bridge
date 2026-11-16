@@ -198,9 +198,15 @@ serviceAccount:
   esoName: "genai-otel-bridge-eso"
 externalSecrets:
   enabled: true
-  grafanaConfigSecret: "my-grafana-config"
-  portkeySecret: "my-portkey-secret"
+  grafanaConfigSecret: "my-grafana-config"              # properties: otlp-url, otlp-username
+  grafanaSelfTokenSecret: "my-grafana-self-token"       # property: token (self-observability, always required)
+  grafanaProductTokenSecret: "my-grafana-product-token" # property: token (omit when product telemetry goes to an in-cluster collector)
+  portkeySecret: "my-portkey-secret"                    # property: api_key
+runtimeEnv:
+  env: "prod"                                           # fills the ${ENV} refs in the default config
 ```
+
+The chart refuses to render without `grafanaSelfTokenSecret`. The default config also reads the product `GC_OTLP_*` values, which are provisioned only when `grafanaProductTokenSecret` is set, and `${ENV}`, which comes from `runtimeEnv.env` because the ExternalSecret does not carry it.
 
 ### Uninstall cleanup
 

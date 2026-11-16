@@ -144,6 +144,7 @@ sources:
         cadence: 60s
         window: 50m
         bucket_settle: 10m
+        bootstrap_lookback: 50m
         max_backfill: 90m
         metric_prefix: portkey_api
         graphs: [requests, cost, tokens, latency, errors]

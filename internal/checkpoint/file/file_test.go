@@ -133,3 +133,43 @@ func TestFileUnreadableRefusesByDefault(t *testing.T) {
 		t.Fatalf("ignoreInvalid=true should bootstrap with a warning, got %v", err)
 	}
 }
+
+// A watermark whose Time yaml cannot round-trip must be refused at Save (as the configmap and dynamodb
+// backends do), not written: the next New would otherwise report the whole file corrupt.
+func TestFileSaveRejectsUnencodableTime(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "wm.yaml")
+	s, err := New(p, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	w := model.Watermark{Time: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), Epoch: 1}
+	if err := s.Save(context.Background(), key, w); !errors.Is(err, checkpoint.ErrUnencodable) {
+		t.Fatalf("Save of a year-10000 watermark: err=%v, want ErrUnencodable", err)
+	}
+	if _, err := New(p, false); err != nil {
+		t.Fatalf("the store must still load after a refused Save: %v", err)
+	}
+}
+
+// A file holding only a null document is an empty store, not a nil map that panics on the first Save.
+func TestFileNullDocumentIsEmptyStore(t *testing.T) {
+	for _, body := range []string{"null\n", "~\n", "---\n"} {
+		p := filepath.Join(t.TempDir(), "wm.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := New(p, false)
+		if err != nil {
+			t.Fatalf("%q: New: %v", body, err)
+		}
+		key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+		want := model.Watermark{Time: time.Unix(100, 0).UTC(), Epoch: 1}
+		if err := s.Save(context.Background(), key, want); err != nil {
+			t.Fatalf("%q: Save: %v", body, err)
+		}
+		if got, err := s.Load(context.Background(), key); err != nil || !got.Time.Equal(want.Time) {
+			t.Fatalf("%q: Load after Save: got=%+v err=%v", body, got, err)
+		}
+	}
+}

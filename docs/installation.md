@@ -43,6 +43,11 @@ emit:
 identity:
   service_namespace: genai-otel-bridge
   deployment_environment: ${ENV}
+ha:
+  coordinator: none                       # one local process; the Helm chart uses lease + configmap
+  checkpoint: file
+queue:
+  emit_workers: 1
 sources:
   - type: portkey
     enabled: true
@@ -55,6 +60,7 @@ sources:
         cadence: 60s
         window: 50m
         bucket_settle: 10m
+        bootstrap_lookback: 50m
         max_backfill: 90m
         metric_prefix: portkey_api
         graphs: [requests, cost, tokens, latency, errors]
@@ -70,7 +76,7 @@ GC_INSTANCE_ID=123456 \
 GC_OTLP_TOKEN=... \
 ENV=dev \
 PORTKEY_API_KEY=... \
-  bin/genai-otel-bridge --config config.yaml
+  bin/genai-otel-bridge --config config.yaml --checkpoint-file ./checkpoints.yaml
 ```
 
 The binary validates the config at startup and exits immediately on missing required fields or invalid values.
@@ -119,7 +125,7 @@ kubectl get pods -l app=genai-otel-bridge
 kubectl logs -l app=genai-otel-bridge --tail=50
 ```
 
-The leader pod logs a `leader=true` line and begins polling. Standby replicas log `leader=false` and idle.
+The leader pod logs `leader elected; starting loops` and begins polling. Standby replicas log nothing at the default level and idle. `kubectl get lease genai-otel-bridge-leader -o jsonpath='{.spec.holderIdentity}'` names the current leader.
 
 ---
 
@@ -192,13 +198,19 @@ serviceAccount:
   esoName: "genai-otel-bridge-eso"
 externalSecrets:
   enabled: true
-  grafanaConfigSecret: "my-grafana-config"
-  portkeySecret: "my-portkey-secret"
+  grafanaConfigSecret: "my-grafana-config"              # properties: otlp-url, otlp-username
+  grafanaSelfTokenSecret: "my-grafana-self-token"       # property: token (self-observability, always required)
+  grafanaProductTokenSecret: "my-grafana-product-token" # property: token (omit when product telemetry goes to an in-cluster collector)
+  portkeySecret: "my-portkey-secret"                    # property: api_key
+runtimeEnv:
+  env: "prod"                                           # fills the ${ENV} refs in the default config
 ```
+
+The chart refuses to render without `grafanaSelfTokenSecret`. The default config also reads the product `GC_OTLP_*` values, which are provisioned only when `grafanaProductTokenSecret` is set, and `${ENV}`, which comes from `runtimeEnv.env` because the ExternalSecret does not carry it.
 
 ### Uninstall cleanup
 
-By default the chart registers a `post-delete` hook that removes the leader Lease and checkpoint ConfigMap when you run `helm uninstall`. Set `cleanup.retainCheckpoint: true` to keep the checkpoint so a later reinstall resumes the watermark instead of bootstrapping from scratch.
+By default the chart registers a `post-delete` hook that removes the leader Lease and checkpoint ConfigMap when you run `helm uninstall`. Set `cleanup.retainCheckpoint: true` to keep both (the Lease carries the leader epoch the checkpoint was written under) so a later reinstall resumes the watermark instead of bootstrapping from scratch.
 
 ---
 

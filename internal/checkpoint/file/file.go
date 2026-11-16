@@ -50,6 +50,11 @@ func New(path string, ignoreInvalid bool) (*Store, error) {
 		}
 		return nil, fmt.Errorf("checkpoint/file: corrupt %s (refusing start): %w", path, err)
 	}
+	if s.data == nil {
+		// A document that is only `null`, `~` or `---` unmarshals to a nil map; the first Save would
+		// then panic on the map write. It holds no watermark, so it is an empty store.
+		s.data = map[string]record{}
+	}
 	return s, nil
 }
 
@@ -64,6 +69,11 @@ func (s *Store) Load(_ context.Context, key model.CheckpointKey) (model.Watermar
 }
 
 func (s *Store) Save(_ context.Context, key model.CheckpointKey, w model.Watermark) error {
+	// Same guard as the configmap and dynamodb backends: a Time yaml cannot parse back would make the
+	// next New refuse the whole file, for every loop.
+	if err := checkpoint.CheckEncodable(w); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := key.String()

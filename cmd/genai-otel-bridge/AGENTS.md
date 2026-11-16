@@ -20,8 +20,9 @@ backend. Keep that ordering when adding to `main`.
   which placeholders unset `${ENV}` refs (endpoints get an https placeholder) so no secrets are
   needed. Prints `validate-config: OK/FAIL`. For pre-deploy or external-overlay validation.
 - `-cleanup` (with `-cleanup-retain-checkpoint`) - the chart's `post-delete` uninstall hook. Deletes
-  the app-created Lease and, unless retained, the checkpoint ConfigMap via `internal/cleanup.Run`.
-  Needs only `-namespace`. Idempotent (NotFound counts as success).
+  the app-created Lease and the checkpoint ConfigMap via `internal/cleanup.Run`; with the retain flag
+  it deletes neither, because the Lease carries the epoch fence the retained checkpoint was written
+  under. Needs only `-namespace`. Idempotent (NotFound counts as success).
 
 ## Shared HA-object names
 

@@ -125,7 +125,7 @@ func (l *runsLoop) IndexedKeys() []string {
 }
 
 // Key fingerprints the emitted-log SCHEMA (the indexed-attr key set) so a change to what we promote
-// bootstraps a fresh watermark (F37). Logs declare no metric series → no SeriesDeclarer.
+// bootstraps a fresh watermark (F37). Logs declare no metric series → SeriesNames is empty (#63).
 func (l *runsLoop) Key() model.CheckpointKey {
 	return model.CheckpointKey{
 		SourceInstance:    l.sourceInstance,

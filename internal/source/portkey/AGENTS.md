@@ -58,7 +58,8 @@ sample or record.
 - analytics keeps a **per-slug `revisionHistory`** so a late arrival for one key cannot inflate
   another's revision counter.
 - **`logs_export` DOES fan out**, one loop per use-case, which is ownership-safe because
-  `logsExportLoop` is not a `SeriesDeclarer`. `Key()` folds the slug into the naming component so each
+  `logsExportLoop` declares an empty series set (it is a `SeriesDeclarer` that owns no metric name, so
+  adding a series to it would make the fan-out collide). `Key()` folds the slug into the naming component so each
   instance owns a distinct cursor watermark. There the slug is a RECORD attribute
   (`RecordAttributes["api_key_use_case"]`, queryable as `| api_key_use_case="..."`), so it needs no
   GS1 stream-label promotion.

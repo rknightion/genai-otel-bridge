@@ -77,8 +77,8 @@ func New(cfg config.SourceConfig, deps source.Deps) (source.Source, error) {
 		loops = append(loops, lp)
 	}
 	if enL {
-		// Fan-out: one logsExportLoop instance per use-case (ownership-safe — logs is NOT a
-		// SeriesDeclarer, so distinct cursors carry no duplicate-series risk). The legacy unlabelled
+		// Fan-out: one logsExportLoop instance per use-case (ownership-safe — the loop declares an
+		// EMPTY series set, so distinct cursors carry no duplicate-series risk). The legacy unlabelled
 		// path (no api_key_use_cases configured) runs a single instance with an empty resolvedUseCase.
 		logsPasses := ucs
 		if len(logsPasses) == 0 {

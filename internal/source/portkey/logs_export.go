@@ -179,12 +179,12 @@ func (l *logsExportLoop) IndexedKeys() []string {
 }
 
 // Key fingerprints the loop's emitted-log SCHEMA (the indexed attribute key set) so a change to what we
-// promote bootstraps a fresh watermark (F37). Logs declare no metric series, so the loop intentionally
-// does NOT implement SeriesDeclarer (nothing to ownership-check against the metric plane).
+// promote bootstraps a fresh watermark (F37). Logs declare no metric series: SeriesNames returns an
+// empty set (#63), so there is nothing to ownership-check against the metric plane.
 //
 // Fan-out instances (one per use-case) fold the slug into the naming component so they each own a
-// distinct per-cursor watermark — ownership-safe because logs is NOT a SeriesDeclarer (no duplicate-
-// series risk). The legacy unlabelled path (useCase=="") leaves naming=="logs_export" (unchanged key).
+// distinct per-cursor watermark — ownership-safe because the loop declares an EMPTY series set (no
+// duplicate-series risk). The legacy unlabelled path (useCase=="") leaves naming=="logs_export" (unchanged key).
 func (l *logsExportLoop) Key() model.CheckpointKey {
 	naming := "logs_export"
 	if l.useCase != "" {

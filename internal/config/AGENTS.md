@@ -85,8 +85,9 @@ error. Use `<env ref>` placeholder prose in example blocks, never live syntax.
 - `source_instance` may not contain `/`: it is the `CheckpointKey` delimiter, and it namespaces the
   watermark, so keep it stable across deployments.
 - **`queue.emit_workers` must be 1** - per-loop single-flight emit.
-- Window and cadence math: `cadence >= minCadence`, `window <= maxWindow`, and `window` must cover
-  `cadence*(1+2*jitterFrac) + bucket_settle` and be `<= max_backfill`. The three constants are at the
+- Window and cadence math: `cadence >= minCadence`, `window <= maxWindow`, `window` must cover
+  `cadence*(1+2*jitterFrac) + bucket_settle`, and `bootstrap_lookback` must be `<= max_backfill` when
+  `max_backfill` is set. Nothing relates `window` to `max_backfill`. The three constants are at the
   top of `config.go`.
 - A source `base_url` must be https unless `http.allow_private=true` (the in-VPC exception).
 
@@ -107,9 +108,12 @@ error. Use `<env ref>` placeholder prose in example blocks, never live syntax.
   `max_batch_bytes` disables the emitter's proactive over-cap split, leaving only the reactive 413
   path. The runner and emitter clamps stay as defence-in-depth for struct-built configs.
 - `bucket_settle` 10m.
-- `max_backfill` 90m, sized to the Grafana Cloud Mimir `out_of_order_time_window` of 2h with margin
-  for clock skew and catch-up walk. **Unrelated to the 55m `maxWindow` granularity clamp**, which is
-  enforced separately.
+
+`max_backfill` (90m) and `bootstrap_lookback` (50m) are **chart defaults only** (`helm:"default=..."`
+render tags): `Load` leaves an omitted value at 0, so a time-bucketed source must reject 0 in its
+constructor, as `portkey.New` does. The 90m is sized to the Grafana Cloud Mimir
+`out_of_order_time_window` of 2h with margin for clock skew and catch-up walk. **Unrelated to the 55m
+`maxWindow` granularity clamp**, which is enforced separately.
 
 ## Other keys
 

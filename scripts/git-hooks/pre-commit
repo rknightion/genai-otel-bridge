@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pre-commit: run the forbidden-words gate on STAGED files (instant local feedback).
-# Install via `make install-hooks`. Self-skips when the gate script is absent.
+# Install via `just install-hooks`. Self-skips when the gate script is absent.
 set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 [ -f "$root/scripts/forbidden-words.sh" ] || exit 0   # gate absent (e.g. an external clone) — nothing to do

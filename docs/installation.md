@@ -210,7 +210,7 @@ The chart refuses to render without `grafanaSelfTokenSecret`. The default config
 
 ### Uninstall cleanup
 
-By default the chart registers a `post-delete` hook that removes the leader Lease and checkpoint ConfigMap when you run `helm uninstall`. Set `cleanup.retainCheckpoint: true` to keep the checkpoint so a later reinstall resumes the watermark instead of bootstrapping from scratch.
+By default the chart registers a `post-delete` hook that removes the leader Lease and checkpoint ConfigMap when you run `helm uninstall`. Set `cleanup.retainCheckpoint: true` to keep both (the Lease carries the leader epoch the checkpoint was written under) so a later reinstall resumes the watermark instead of bootstrapping from scratch.
 
 ---
 

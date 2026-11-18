@@ -20,9 +20,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # The `just check` gate, fanned out across parallel jobs so a slow leg (race, envtest) no longer
-  # serialises behind the others. Each leg is an independent required check; branch protection
-  # requires only the `ci-success` aggregator below, so adding/renaming a leg never touches protection.
+  # Keep slow gate legs parallel. Build, vet and acceptance share a runner, and acceptance still
+  # reports separately if build or vet fails. Branch protection requires only ci-success.
   gate:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -30,7 +29,7 @@ jobs:
       fail-fast: false   # one failing leg shouldn't cancel the others — we want every failure reported
       matrix:
         include:
-          - name: build-vet
+          - name: build-vet and acceptance
             run: just build typecheck
           - name: lint
             run: just lint
@@ -38,8 +37,6 @@ jobs:
             run: just test
           - name: race
             run: just test-race
-          - name: acceptance
-            run: just test-acceptance
           - name: envtest
             run: just test-envtest
           - name: hygiene
@@ -54,6 +51,7 @@ jobs:
           # zizmor: ignore[cache-poisoning] - test-only job, does not publish artifacts; cache disabled only on publish
           cache: true
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        id: setup-just
         with:
           just-version: '1.59.0'
       # IaC toolchain for the `tf-validate` hygiene step: OpenTofu (tofu-native), tflint (correctness),
@@ -71,6 +69,10 @@ jobs:
         env:
           # term list for the forbidden-words hygiene guard (kept out of the repo; see scripts/forbidden-words.sh)
           FORBIDDEN_WORDS_PATTERN: ${{ secrets.FORBIDDEN_WORDS_PATTERN }}
+      # Keep acceptance independent of build and vet failures after setup has succeeded.
+      - name: Acceptance tests
+        if: ${{ !cancelled() && matrix.name == 'build-vet and acceptance' && steps.setup-just.outcome == 'success' }}
+        run: just test-acceptance
 
   e2e:
     runs-on: ubuntu-latest

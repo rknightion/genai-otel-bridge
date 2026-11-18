@@ -8,7 +8,8 @@ This Go service polls AI-platform operational APIs and emits bounded product met
 
 - Fetch only operational data. Prompts, completions and message bodies must stay out of requests and emissions. Check every label, log field and metadata field through `internal/source/guard.go` and the denylist in `internal/app/`. An empty label allowlist denies all labels.
 - Preserve emit-once-after-settle, byte-identical OTLP encoding and monotonic, lease-epoch-fenced checkpoints. Keep polling single-flight, queues bounded and discarded data counted. Known per-record rejects advance with a counted gap. Terminal request failures preserve the watermark and degrade the loop.
-- `model` and the `Source` and `Loop` interfaces are frozen seams. Update `ARCHITECTURE.md` for deliberate contract changes. Keep configuration defaults and validation aligned across the Go loader, Helm, ECS and EKS examples.
+- `model` and the `Source` and `Loop` interfaces are frozen seams. Record contract changes in the root architecture document's component interfaces section.
+  Keep configuration defaults and validation aligned across the Go loader, Helm, ECS and EKS examples.
 
 ## Where to look hardest
 

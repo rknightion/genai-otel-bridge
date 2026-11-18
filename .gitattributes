@@ -1,0 +1,7 @@
+# Release Please outputs.
+/.release-please-manifest.json linguist-generated=true
+/CHANGELOG.md linguist-generated=true
+
+# Reproducible dashboard and dependency-reviewed Go checksums.
+/deploy/grafana/self-obs/dashboard-self-obs.yaml linguist-generated=true
+/go.sum linguist-generated=true

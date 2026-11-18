@@ -1,0 +1,16 @@
+{
+  "image": "ghcr.io/rknightion/cursor-cloud-base:1@sha256:ea97a0c79849151e4c823ec9d42f9692fdda68d93e17d6dfe653a4e4bcee17d6",
+  "user": "ubuntu",
+  "install": "bash .cursor/just.sh cloud-bootstrap </dev/null",
+  "egressMode": "network_settings_only",
+  "egressAllowlist": [
+    "dl.k8s.io",
+    "get.helm.sh",
+    "github.com",
+    "proxy.golang.org",
+    "raw.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "storage.googleapis.com",
+    "sum.golang.org"
+  ]
+}

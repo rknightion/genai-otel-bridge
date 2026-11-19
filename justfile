@@ -39,6 +39,11 @@ setup: _tools _tools-e2e
     {{ go }} mod download
     {{ tools_dir }}/setup-envtest use {{ envtest_k8s_version }} --bin-dir {{ tools_dir }}/envtest >/dev/null
 
+# Prepare the source gate toolchain and compile the service and integration test binaries.
+cloud-bootstrap: setup _tools-gitleaks
+    {{ go }} build ./...
+    scratch="$(mktemp -d)"; trap 'rm -rf "$scratch"' EXIT; {{ go }} test -c -tags acceptance -o "$scratch/acceptance.test" ./internal/app/; {{ go }} test -c -tags envtest -o "$scratch/envtest.test" ./test/integration/...
+
 # The pre-commit gate: every CI leg that runs with only the language toolchain installed.
 [group('check')]
 check: fmt-check build typecheck lint gen-check test test-race test-acceptance test-envtest coverage secret-scan forbidden-words spdx-check helm-lint tf-validate
@@ -118,8 +123,12 @@ coverage:
 # Scan the whole Git history for credential shapes and forbidden identifiers.
 [group('check')]
 [no-exit-message]
+secret-scan: _tools-gitleaks
+    {{ tools_dir }}/gitleaks detect --source . --redact --no-banner
+
+[private]
 [script('bash')]
-secret-scan:
+_tools-gitleaks:
     set -euo pipefail
     mkdir -p {{ tools_dir }}
     if ! { test -x {{ tools_dir }}/gitleaks && {{ tools_dir }}/gitleaks version >/dev/null 2>&1; }; then
@@ -134,7 +143,6 @@ secret-scan:
       tar -xzf "$tmp/$asset" -C "$tmp" gitleaks
       install -m 0755 "$tmp/gitleaks" {{ tools_dir }}/gitleaks
     fi
-    {{ tools_dir }}/gitleaks detect --source . --redact --no-banner
 
 # Scan the tracked tree for credential shapes and forbidden identifiers.
 [group('check')]

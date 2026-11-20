@@ -81,7 +81,7 @@ jobs:
       id-token: write
       attestations: write
       security-events: write
-    uses: rknightion/.github/.github/workflows/container-publish.yml@3aee36ed9f327d9238e387c7af7da9ec5369a263 # v1.25.31
+    uses: rknightion/.github/.github/workflows/container-publish.yml@4c666344d276c46c07ba94bc45dd30deee22929d # v1.30.11
     with:
       release-tag: ${{ inputs.release_tag }}
       helm-chart-path: deploy/helm
@@ -95,7 +95,7 @@ jobs:
       contents: write
     steps:
       - name: Harden the runner (audit egress)
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - name: Checkout repository
@@ -104,7 +104,7 @@ jobs:
           ref: ${{ inputs.release_tag }}
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false

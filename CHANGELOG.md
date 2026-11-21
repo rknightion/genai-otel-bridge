@@ -1,6 +1,23 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [4.1.1](https://github.com/rknightion/genai-otel-bridge/compare/v4.1.0...v4.1.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* **deps:** update go modules (non-major) ([#308](https://github.com/rknightion/genai-otel-bridge/issues/308)) ([cbba28a](https://github.com/rknightion/genai-otel-bridge/commit/cbba28a7559399d4e1ccc355ed55e995b25ab55e))
+* **deps:** update go modules (non-major) ([#427](https://github.com/rknightion/genai-otel-bridge/issues/427)) ([e037cfc](https://github.com/rknightion/genai-otel-bridge/commit/e037cfcc72fe6b25d853a05efc4dbb6cdd70c244))
+* **deps:** update kubernetes libraries to v0.37.2 ([#311](https://github.com/rknightion/genai-otel-bridge/issues/311)) ([e4eceb4](https://github.com/rknightion/genai-otel-bridge/commit/e4eceb4d6348b0aee370873beee47c4ba3154366))
+* **deps:** update module github.com/grafana/pyroscope-go to v1.5.0 ([#428](https://github.com/rknightion/genai-otel-bridge/issues/428)) ([1b64639](https://github.com/rknightion/genai-otel-bridge/commit/1b64639531a2bc9a04560f26e57829426258b523))
+* **deps:** update module sigs.k8s.io/controller-runtime to v0.25.3 ([#423](https://github.com/rknightion/genai-otel-bridge/issues/423)) ([1ac2ffd](https://github.com/rknightion/genai-otel-bridge/commit/1ac2ffd18ef60ec798a4ab99a0a7461be606f915))
+* file checkpoint guards and doc statements the tree contradicts ([#349](https://github.com/rknightion/genai-otel-bridge/issues/349)) ([5836f55](https://github.com/rknightion/genai-otel-bridge/commit/5836f55add6fb66f5146185d03c7df4a1af42592))
+
+
+### Build & CI
+
+* share build and acceptance setup ([7b9f546](https://github.com/rknightion/genai-otel-bridge/commit/7b9f546d8672ee11f19e52e838a71382b3c77bd4))
+
 ## [4.1.0](https://github.com/rknightion/genai-otel-bridge/compare/v4.0.0...v4.1.0) (2026-11-13)
 
 

@@ -21,7 +21,7 @@ jobs:
     permissions:
       contents: read
       packages: write # delete package versions
-    uses: rknightion/.github/.github/workflows/ghcr-cleanup.yml@e92cde766e7caa5abd308000d17df8f0ca17290d # v1.30.33
+    uses: rknightion/.github/.github/workflows/ghcr-cleanup.yml@77faed457d4f87675fec4024e2cd526fe964d7c9 # v1.30.36
     with:
       packages: "genai-otel-bridge,charts/genai-otel-bridge"
       # Scheduled runs prune for real; a manual dispatch defaults to dry-run.

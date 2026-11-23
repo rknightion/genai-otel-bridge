@@ -66,9 +66,9 @@
       "groupName": "go toolchain (docker base)"
     },
     {
-      "description": "Hold kubernetes/kubernetes v1.37.1: setup-envtest has no kube-apiserver/etcd archive for it (kubernetes-sigs/controller-tools envtest-releases.yaml stops at v1.37.0), so the envtest job cannot download assets. Lift once an archive for a newer 1.37.x is published.",
+      "description": "Hold kubernetes/kubernetes v1.37.1 and v1.37.2: setup-envtest has no kube-apiserver/etcd archive for them (kubernetes-sigs/controller-tools envtest-releases.yaml stops at v1.37.0), so the envtest job cannot download assets. Lift once an archive for a newer 1.37.x is published.",
       "matchDepNames": ["kubernetes/kubernetes"],
-      "allowedVersions": "!/^v?1\\.37\\.1$/"
+      "allowedVersions": "!/^v?1\\.37\\.[12]$/"
     },
     {
       "description": "CI actions (Forgejo/GitHub) grouped — they're all major-pinned tags.",

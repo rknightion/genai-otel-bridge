@@ -193,12 +193,3 @@ file such as `ROADMAP.md` beside them.
 
 - `deploy/grafana/README.md` - read before querying the emitted metrics or changing an alert. Also
   carries GS1-GS4, the Grafana-staff stack-side prerequisites this repo cannot set.
-
-## Cursor Cloud specific instructions
-
-- The Build runs `just cloud-bootstrap` through the wrapper that selects the Go version from `go.mod`.
-- Run `bash .cursor/just.sh fmt-check typecheck </dev/null` for fast feedback and
-  `bash .cursor/just.sh check </dev/null` for the source gate.
-- The source gate uses local test fixtures. Hosted CI adds the DynamoDB and k3d legs, the complete
-  identifier sweep, and the IaC toolchain. Running the service against live APIs requires configured
-  vendor inputs and a telemetry destination.

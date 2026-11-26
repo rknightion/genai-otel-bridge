@@ -23,7 +23,20 @@ import (
 var (
 	ErrQuotaExceeded         = errors.New("source: quota exceeded")
 	ErrGranularityUnexpected = errors.New("source: unexpected bucket granularity")
+	// ErrAuth marks a 401/403 credential failure. A source wraps it (errors.Is) into the retryable Collect
+	// error so the scheduler stretches the wait like a quota failure instead of retrying a bad key at full
+	// cadence [#537]. Unlike ErrQuotaExceeded it is still a counted Collect error, not a discarded tick.
+	ErrAuth = errors.New("source: authentication failed")
 )
+
+// WrapAuth returns err joined with ErrAuth when code is a 401/403 (see IsAuthStatus), else err unchanged.
+// It keeps err's own text and chain, so existing error assertions still match.
+func WrapAuth(code int, err error) error {
+	if IsAuthStatus(code) {
+		return fmt.Errorf("%w: %w", err, ErrAuth)
+	}
+	return err
+}
 
 // Source is one vendor integration. FROZEN.
 type Source interface {

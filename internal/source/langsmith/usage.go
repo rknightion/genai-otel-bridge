@@ -159,7 +159,7 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 			if source.IsAuthStatus(code) && l.onAuthError != nil {
 				l.onAuthError("usage", l.sourceInstance)
 			}
-			return model.Batch{}, fmt.Errorf("langsmith usage: sessions status %d", code)
+			return model.Batch{}, source.WrapAuth(code, fmt.Errorf("langsmith usage: sessions status %d", code))
 		}
 		added := 0
 		for _, s := range page {

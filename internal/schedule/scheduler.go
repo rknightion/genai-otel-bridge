@@ -119,6 +119,7 @@ type tickOutcome struct {
 	more      bool // the loop is still draining: a windowed backlog, or a cursor mid-window [#374] (catch-up)
 	collected bool // Collect returned without error (the source answered)
 	quota     bool // Collect returned source.ErrQuotaExceeded
+	auth      bool // Collect failed with an error wrapping source.ErrAuth (401/403) [#537]
 }
 
 // maxQuotaStreak bounds the consecutive-quota counter. Any streak this long already pins the wait at
@@ -130,12 +131,12 @@ const maxQuotaStreak = 32
 // the wiring in tickLoop is a single call that tests can drive with real tick outcomes.
 type tickState struct {
 	burst       int // consecutive accelerated (catch-up) ticks in the current cadence period
-	quotaStreak int // consecutive ticks whose Collect returned ErrQuotaExceeded; reset by a good Collect
+	quotaStreak int // consecutive ticks whose Collect returned ErrQuotaExceeded or an auth error [#537]; reset by a good Collect
 }
 
 func (st *tickState) next(degraded bool, out tickOutcome, maxCatchup int, cadence time.Duration) (wait time.Duration, jit bool) {
 	switch {
-	case out.quota:
+	case out.quota || out.auth:
 		if st.quotaStreak < maxQuotaStreak {
 			st.quotaStreak++
 		}
@@ -152,7 +153,7 @@ func (st *tickState) next(degraded bool, out tickOutcome, maxCatchup int, cadenc
 //   - degraded ⇒ DegradedBackoff (no hammering), burst reset (CP-C8).
 //   - backlog (more) and under the per-period cap ⇒ catchupInterval, burst++ (drain up to maxCatchup
 //     windows per cadence period — Cdx-C13/F44; maxCatchup=1 ⇒ burst<0 ⇒ never accelerates = v1 behaviour).
-//   - quota streak > 0 ⇒ quotaBackoff (cadence doubled per consecutive quota tick, capped at
+//   - quota or auth streak > 0 ⇒ quotaBackoff (cadence doubled per consecutive tick, capped at
 //     DegradedBackoff, never below cadence; jittered), burst reset [#370]. A quota tick never reports a
 //     backlog, and the source is throttling us, so the stretched wait wins over catch-up.
 //   - else ⇒ cadence (jittered), burst reset (steady state or end-of-burst breather).
@@ -277,13 +278,16 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 		span.SetAttributes(attribute.String("outcome", "cancelled"))
 		return tickOutcome{}
 	case err != nil:
+		// An auth failure (401/403, source.ErrAuth) is still a counted collect error, but the tick loop
+		// stretches the wait like a quota streak so a bad key does not spend the request budget [#537].
+		auth := errors.Is(err, source.ErrAuth)
 		s.m.EmitError(id, "collect")
 		if s.lim.Allow("collect:" + name) {
 			slog.Warn("collect failed", "loop", name, "err", err)
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "collect")
-		return tickOutcome{}
+		return tickOutcome{auth: auth}
 	}
 	// [CP-C2] Enqueue even an EMPTY batch: Collect sets Watermark.Time = the polled settled cutoff
 	// (`until`), and ProcessBatch's full-completion path commits it, advancing the frontier over a

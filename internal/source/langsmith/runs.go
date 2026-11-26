@@ -221,7 +221,7 @@ func (l *runsLoop) Collect(ctx context.Context, since model.Watermark) (model.Ba
 		if source.IsAuthStatus(status) && l.onAuthError != nil {
 			l.onAuthError("runs", l.sourceInstance) // followup §9: credential failure = own signal
 		}
-		return model.Batch{}, fmt.Errorf("langsmith runs: status %d%s", status, errBodySuffix(errBody))
+		return model.Batch{}, source.WrapAuth(status, fmt.Errorf("langsmith runs: status %d%s", status, errBodySuffix(errBody)))
 	}
 
 	logs := make([]model.LogRecord, 0, len(runs))

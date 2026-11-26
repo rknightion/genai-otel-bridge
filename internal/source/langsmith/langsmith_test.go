@@ -5,6 +5,7 @@ package langsmith
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -283,6 +284,8 @@ func TestSessionsAuthErrorFiresHook(t *testing.T) {
 	lp.now = func() time.Time { return now }
 	if _, err := lp.Collect(context.Background(), model.Watermark{}); err == nil {
 		t.Fatal("a 401 must surface as a retryable error")
+	} else if !errors.Is(err, source.ErrAuth) {
+		t.Fatalf("a 401 must wrap source.ErrAuth [#537], got %v", err)
 	}
 	if len(auth) != 1 || auth[0] != [2]string{"sessions", "ls-test"} {
 		t.Fatalf("OnAuthError want one (sessions,ls-test), got %v", auth)

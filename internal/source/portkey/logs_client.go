@@ -126,6 +126,11 @@ type statusError struct {
 	snippet      string
 }
 
+// Is lets errors.Is(err, source.ErrAuth) see a 401/403 lifecycle failure [#537].
+func (e *statusError) Is(target error) bool {
+	return target == source.ErrAuth && source.IsAuthStatus(e.code)
+}
+
 func (e *statusError) Error() string {
 	return fmt.Sprintf("portkey logs_export: %s %s status %d%s", e.method, e.path, e.code, errBodySuffix(e.snippet))
 }

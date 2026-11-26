@@ -19,6 +19,9 @@ syft_version := env('SYFT_VERSION', 'v1.57.2')
 # renovate: datasource=github-releases depName=gitleaks/gitleaks versioning=semver extractVersion=^v(?<version>.*)$
 gitleaks_version := env('GITLEAKS_VERSION', '8.30.1')
 
+# renovate: datasource=pypi depName=pyyaml versioning=pep440
+pyyaml_version := env('PYYAML_VERSION', '6.0.4')
+
 image := env('IMAGE', 'genai-otel-bridge:dev')
 e2e_helper_image := env('E2E_HELPER_IMAGE', 'genai-otel-bridge-e2e-helper:dev')
 
@@ -71,12 +74,13 @@ fmt-check:
 typecheck:
     {{ go }} vet ./...
 
-# Run golangci-lint for plain and acceptance-tagged builds.
+# Run golangci-lint for plain, acceptance-tagged and envtest/e2e-tagged builds.
 [group('check')]
 [no-exit-message]
 lint: _tools
     {{ tools_dir }}/golangci-lint run
     {{ tools_dir }}/golangci-lint run --build-tags acceptance
+    {{ tools_dir }}/golangci-lint run --build-tags "acceptance envtest e2e"
 
 # Run the default Go suite; an optional filter maps to go test -run.
 [group('check')]
@@ -194,22 +198,23 @@ tf-validate:
 e2e: helm-package image-local _tools-e2e
     IMAGE={{ image }} E2E_HELPER_IMAGE={{ e2e_helper_image }} K3S_IMAGE={{ k3s_image }} bash scripts/k3d-e2e.sh all
 
-# Regenerate Helm, ECS, and telemetry documentation artifacts.
+# Regenerate Helm, ECS, telemetry documentation and the self-observability dashboard.
 [group('gen')]
-gen:
+gen: _tools-pyyaml
     {{ go }} run ./internal/config/gen
     {{ go }} run ./internal/docs/gen
+    {{ tools_dir }}/pyenv/bin/python deploy/grafana/self-obs/gen_dashboard.py
 
 # Regenerate artifacts and fail when their committed output drifts.
 [group('gen')]
 [no-exit-message]
 gen-check: gen
-    @git diff --exit-code -- deploy/helm/values.yaml deploy/ecs/terraform/config.example.yaml docs/telemetry.md || { echo "generated files are stale — run 'just gen' and commit"; exit 1; }
+    @git diff --exit-code -- deploy/helm/values.yaml deploy/ecs/terraform/config.example.yaml docs/telemetry.md deploy/grafana/self-obs/dashboard-self-obs.yaml || { echo "generated files are stale — run 'just gen' and commit"; exit 1; }
 
 # Regenerate the self-observability Grafana dashboard manifest.
 [group('gen')]
-gen-dashboard:
-    python3 deploy/grafana/self-obs/gen_dashboard.py
+gen-dashboard: _tools-pyyaml
+    {{ tools_dir }}/pyenv/bin/python deploy/grafana/self-obs/gen_dashboard.py
 
 # Compile every package and write the version-stamped service binary.
 [group('build')]
@@ -307,6 +312,16 @@ _tools:
     setup_envtest_module_version="$({{ go }} list -m -json sigs.k8s.io/controller-runtime/tools/setup-envtest@{{ setup_envtest_version }} | awk -F '"' '$2 == "Version" { print $4; exit }')"
     if ! { test -x {{ tools_dir }}/setup-envtest && {{ go }} version -m {{ tools_dir }}/setup-envtest | awk '$1 == "mod" { print $3; exit }' | grep -Fqx "$setup_envtest_module_version"; }; then
       GOBIN={{ tools_dir }} {{ go }} install sigs.k8s.io/controller-runtime/tools/setup-envtest@{{ setup_envtest_version }}
+    fi
+
+[private]
+[script('bash')]
+_tools-pyyaml:
+    set -euo pipefail
+    mkdir -p {{ tools_dir }}
+    if ! { test -x {{ tools_dir }}/pyenv/bin/python && {{ tools_dir }}/pyenv/bin/python -c 'import sys, yaml; sys.exit(0 if yaml.__version__ == "{{ pyyaml_version }}" else 1)' 2>/dev/null; }; then
+      python3 -m venv --clear {{ tools_dir }}/pyenv
+      {{ tools_dir }}/pyenv/bin/python -m pip install --quiet --disable-pip-version-check 'pyyaml=={{ pyyaml_version }}'
     fi
 
 [private]

@@ -177,6 +177,9 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 	if capped {
 		slog.Warn("langsmith usage sessions truncated at MaxSessions cap",
 			"source", l.sourceInstance, "max_sessions", l.maxSessions)
+		if l.onDataIncomplete != nil {
+			l.onDataIncomplete("usage", source.IncompleteSessionsTruncated)
+		}
 	}
 
 	var spans map[string]int

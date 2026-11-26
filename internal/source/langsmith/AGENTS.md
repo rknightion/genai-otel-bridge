@@ -53,7 +53,7 @@ The `runs` loop is the exception: it is a forward-only windowed log pull (see be
   null and `""`. Response timestamps are naive (no timezone); the snapshot loops never parse them.
 - **null is not 0.** Nullable stats are `*float64`/`*int`: nil means skip, `0` means emit a real zero.
 - **Pagination is offset/limit with a plain JSON array, no cursor.** Stop on a short page, on the
-  `max_sessions` cap (logged, never silent), OR on a no-progress page - that last arm defends against
+  `max_sessions` cap (counted and logged), OR on a no-progress page - that last arm defends against
   an offset-ignoring server and is what stops the loop hanging.
 - **Error taxonomy:** 429 to `source.ErrQuotaExceeded` (discard, back off, F34); 401/403/5xx/timeout
   to a retryable Collect error (no advance, loud `window_lag`). A 404 on the sole endpoint is a real

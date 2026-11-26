@@ -268,3 +268,28 @@ func TestUsageCollectNeverLeaksContent(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageMaxSessionsTruncationCounted(t *testing.T) {
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		max  int
+		want []string
+	}{
+		{"capped", 1, []string{"usage:sessions_truncated"}},
+		{"below cap", 1000, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeUsageServer(t, usageFixture())
+			lp := mkUsageLoop(t, f, now, func(c *usageConfig) { c.MaxSessions = tc.max; c.EmitSpanCounts = false })
+			var events []string
+			lp.onDataIncomplete = func(loop string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
+			if _, err := lp.Collect(context.Background(), model.Watermark{}); err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != len(tc.want) || (len(tc.want) == 1 && events[0] != tc.want[0]) {
+				t.Fatalf("signals = %v, want %v", events, tc.want)
+			}
+		})
+	}
+}

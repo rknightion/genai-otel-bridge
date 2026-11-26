@@ -122,6 +122,7 @@ func New(sc config.SourceConfig, deps source.Deps) (source.Source, error) {
 			return nil, err
 		}
 		lp.onAuthError = deps.OnAuthError // followup §9: 401/403 → own alertable signal
+		lp.onDataIncomplete = deps.OnDataIncomplete
 		loops = append(loops, lp)
 	}
 	if enR {
@@ -188,6 +189,7 @@ func newSource(cfg Config, deps source.Deps) (source.Source, error) {
 		return nil, err
 	}
 	lp.onAuthError = deps.OnAuthError // followup §9: 401/403 → own alertable signal
+	lp.onDataIncomplete = deps.OnDataIncomplete
 	return &sessionsSource{loops: []source.Loop{lp}}, nil
 }
 
@@ -252,6 +254,7 @@ type sessionsLoop struct {
 	pageLimit, maxSessions    int
 	deriveCfg                 deriveConfig
 	onAuthError               func(loop, source string)
+	onDataIncomplete          func(loop string, reason source.IncompleteReason)
 	now                       func() time.Time
 	// lastStamp is the sample timestamp of the last successful derive. Collect is single-flight, so no lock.
 	lastStamp time.Time
@@ -339,10 +342,13 @@ func (l *sessionsLoop) Collect(ctx context.Context, since model.Watermark) (mode
 		}
 	}
 	if capped {
-		// Never silent: a bounded-coverage truncation is logged so a too-small MaxSessions vs a growing
-		// session population is observable (operationally honest).
+		// Never silent: a bounded-coverage truncation is counted (data-incomplete) and logged so a too-small
+		// MaxSessions vs a growing session population is observable (operationally honest).
 		slog.Warn("langsmith sessions truncated at MaxSessions cap",
 			"source", l.sourceInstance, "max_sessions", l.maxSessions)
+		if l.onDataIncomplete != nil {
+			l.onDataIncomplete("sessions", source.IncompleteSessionsTruncated)
+		}
 	}
 
 	samples := derive(sessions, l.deriveCfg, now)

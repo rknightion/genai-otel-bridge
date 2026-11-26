@@ -174,10 +174,15 @@ func TestCollectMaxSessionsCapBounds(t *testing.T) {
 	cfg := testConfig(srv)
 	cfg.MaxSessions = 1 // cap below the population
 	lp := mkLoop(t, cfg, now)
+	var events []string
+	lp.onDataIncomplete = func(loop string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
 
 	b, err := lp.Collect(context.Background(), model.Watermark{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0] != "sessions:sessions_truncated" {
+		t.Fatalf("truncation at max_sessions must fire one sessions_truncated signal, got %v", events)
 	}
 	// server orders by start_time desc ⇒ session 1 first; cap=1 ⇒ only session 1 emitted.
 	if _, ok := runSampleValue(b.Samples, "langsmith_runs", "22222222-2222-2222-2222-222222222222"); ok {
@@ -185,6 +190,22 @@ func TestCollectMaxSessionsCapBounds(t *testing.T) {
 	}
 	if _, ok := runSampleValue(b.Samples, "langsmith_runs", "11111111-1111-1111-1111-111111111111"); !ok {
 		t.Fatal("session 1 missing under MaxSessions=1")
+	}
+}
+
+// Below the cap no data-incomplete signal fires.
+func TestCollectBelowMaxSessionsFiresNoSignal(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	srv := fakeLangSmith(t, loadFixture(t, "sessions_with_stats.json"))
+	defer srv.Close()
+	lp := mkLoop(t, testConfig(srv), now)
+	var events []string
+	lp.onDataIncomplete = func(loop string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
+	if _, err := lp.Collect(context.Background(), model.Watermark{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("no truncation, yet signals fired: %v", events)
 	}
 }
 

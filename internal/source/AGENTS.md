@@ -47,6 +47,26 @@ cap on distinct label-sets per metric name, not a global cap; total cardinality 
 higher. The real ceiling is the downstream Mimir / Adaptive Metrics limit (DESIGN §7 GS2/GS3, Cdx-M3),
 so validate the configured value against the target stack.
 
+**The budget counts ACTIVE label sets, not every label set ever seen (#383).** Each admitted signature
+keeps its last-seen time (read from `GuardConfig.Now`, nil meaning `time.Now`, so tests inject a fake
+clock). A known signature is always admitted and refreshed. A new one is admitted while fewer than budget
+signatures are held; when the set is full, signatures idle for `seenIdleWindow` (a fixed hour, not a
+config knob) are evicted first, and only then is the new one dropped. The same rule applies to the logs
+budget keyed on `"logs:" + CheckpointKey.String()`.
+
+- Memory stays bounded: a signature is inserted only while the set holds fewer than budget entries, so
+  each metric name or logs loop holds at most budget signatures and their times.
+- Eviction runs only when the set is full and a new label set arrives, and is skipped until the oldest
+  survivor of the previous sweep can have expired, so the O(budget) sweep is not paid per sample.
+- A set under budget is never swept, so a label set returning after a long idle spell is still "known"
+  there and does not fire `OnNewLabelValue` again. After an eviction it is new again and fires it.
+  `OnNewLabelValue` still fires on every new admission and on every over-budget drop.
+- The hour must exceed every loop's poll cadence by a margin (default cadence 60s). A loop polling less
+  often than hourly sees its label sets expire between polls: the budget then counts one poll's label
+  sets, which is still the active count.
+- State is in-process only: a restart or a new leader starts empty, which with active semantics only
+  re-admits what is still live.
+
 **A budget of 0 means UNLIMITED in the guard**, not "block everything". `internal/config` therefore
 defaults an unset `per_metric_cardinality_budget` to 10000 and never passes 0 through. Keep that
 mapping if you add another path into `GuardConfig`.

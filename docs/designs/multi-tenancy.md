@@ -1,7 +1,8 @@
 # Multi-tenancy for genai-otel-bridge
 
-*   **Status:** Draft. Work after the test harness depends on open questions Q1 and Q2.
-*   **Date:** 2026-11-12
+*   **Status:** Draft. Work after the test harness depends on open questions Q1 and Q2; later
+    units also depend on Q3, Q5, Q6 and Q9.
+*   **Date:** 2026-11-26. Revised for the rule that one API key serves exactly one workspace.
 
 ## Overview
 
@@ -10,10 +11,12 @@ OTLP, the OpenTelemetry protocol. Today one process serves one team: it has one 
 one identity, one governance budget and one set of checkpoints. A team that wants telemetry from
 its LLM gateway gets its own install.
 
-This design lets one install serve many teams. A central observability team runs it. Each team
-hands over an API key for its workspace in Portkey, an LLM gateway, and that workspace's telemetry
-is sent to that team's own OTLP destination under that team's own credentials. Portkey is the
-first source. The expected size is 10 to 20 teams at launch and about 250 later.
+This design lets one install serve many teams. A central observability team runs it. Each team hands
+over an API key for its workspace in Portkey, an LLM gateway, and names that workspace. That
+workspace's telemetry is sent to that team's own OTLP destination under that team's own credentials.
+One API key serves exactly one workspace. A key that can read several workspaces (a Portkey
+organisation key) is accepted, but only for the one workspace its configuration names. Portkey is
+the first source. The expected size is 10 to 20 teams at launch and about 250 later.
 
 This document specifies the launch: one leader-elected install that runs many isolated pipelines.
 It does not specify shards (a second install with a different list of tenants). It checks only
@@ -70,11 +73,18 @@ words. Vendor words such as "workspace" appear only inside a source package.
     controller that manages installs) is always written out in full.
 *   **Tenant.** The unit an operator adds or removes, usually one team. It has an id that is not
     meant to change. It owns its destinations and targets, and cannot refer to another tenant's.
-*   **Target.** One source API key plus one scope id.
-*   **Scope id.** The name of the one thing the API key is expected to see. Core treats it as an
-    opaque string. For Portkey it is the workspace slug. Core does not filter by it and, in this
-    version, the Portkey package sends no scope parameter: the API key alone decides what a
-    request returns. The scope id is what the scope assertion compares against.
+*   **Target.** One source API key plus one scope. An API key serves one target only.
+*   **Scope.** The one thing a target's API key reads, given by two strings: a name and an id.
+    Core treats both as opaque and does not filter by them. For Portkey the name is the workspace
+    slug and the id is the workspace id: the analytics API takes the slug and the log export takes
+    the id. The Portkey package sends the slug on every analytics request. A workspace key ignores
+    it, because Portkey binds that key to one workspace. An organisation key reads the workspace
+    the slug names. The scope name is what the scope assertion compares against.
+*    **Key fingerprint.** The SHA-256 of an API key value, taken from the exact header value the
+    source sends, after the loader trims the secret file. A trailing newline in one file and not
+    another therefore gives the same fingerprint. It is computed in memory when the key is read,
+    compared there, and written only inside a remembered scope match (section 7). It is never
+    logged, emitted or shown in the plan table.
 *   **Destination.** One OTLP endpoint with the instance id and token it expects as Basic-auth
     user and password. For Grafana Cloud the instance id is the stack's instance id.
 *   **Stack.** The backend a destination points at, such as a Grafana Cloud stack. Two
@@ -104,14 +114,16 @@ A central team cannot run today's binary for many teams without one install per 
     guard's budget is shared.
 *   **Putting many teams in one process creates a new failure: one team's data delivered to
     another team's stack.** Nothing in the binary guards against it, because until now it could not
-    happen. The most likely cause is not mis-wiring inside the binary. It is an API key that sees
-    something other than what the config says: the wrong key pasted for a tenant, or a key with
-    wider access than expected.
+    happen. The most likely cause is not mis-wiring inside the binary. It is an API key that reads
+    something other than what the config says: the wrong key pasted for a tenant, one key
+    configured for two tenants, or an organisation key whose workspace selector is wrong or not
+    honoured.
 
-The solution is to make the pipeline the unit of isolation. Each pipeline is assembled in one
-place from one row of a resolved plan, and carries its own guard, emitter, self-metric labels and
-checkpoint keys. After every collect a pipeline checks what its API key can see, and queues the
-batch only if the check passes. The existing single-team config keeps working unchanged.
+The solution is to make the pipeline the unit of isolation. Each pipeline is assembled in one place
+from one row of a resolved plan, and carries its own guard, emitter, self-metric labels and
+checkpoint keys. A key may serve only one pipeline. Before it collects, a pipeline checks that its
+API key reads its configured workspace, and it repeats the check on a timer. The existing
+single-team config keeps working unchanged.
 
 ## Goals
 
@@ -120,16 +132,16 @@ Each goal states how it is checked.
 *   **G1. One install serves many tenants, each to its own destination with its own credentials.**
     Test: the k3d end-to-end test runs three tenants and each fake stack receives only its own
     tenant's records.
-*   **G2. Four controls guard against one tenant's data reaching another tenant's destination.**
-    They are: a scope assertion at the source that fails closed, one place
+*    **G2. Five controls guard against one tenant's data reaching another tenant's destination.**
+    They are: a scope assertion at the source that fails closed, one API key per target, one place
     where a pipeline is assembled, a release gate that is shown to fail on seeded faults, and
     run-time evidence an operator can query. Section 5.1 and the Risks section state what they do
     not catch. Check: the release gate in section 5.3 passes, including its seeded faults.
 *   **G3. One pipeline's run-time failure does not stop or delay any other pipeline.** Tests: with
     one destination returning 503 for 10 minutes, every other pipeline's `window_lag` stays within
     settle plus two cadences. A pipeline with a revoked API key or a scope mismatch does not
-    advance, a tenant with an unreadable secret is not built, and in each case every other
-    pipeline runs.
+    advance, a tenant with an unreadable secret is not built, two tenants given the same API key
+    are both not built, and in each case every other pipeline runs.
 *   **G4. Every pipeline is individually alertable.** Lag, skips and degraded state carry the
     pipeline's id. Test: two pipelines with the same loop name produce two distinct `window_lag`
     series.
@@ -154,14 +166,19 @@ Each goal states how it is checked.
 
 *   **LangSmith in the tenant shape.** The tenant config must not rule it out, but this design
     does not specify it.
-*   **API keys that are meant to cover several scopes.** One target has one scope.
+*   **One API key serving several targets.** A key serves exactly one target, and so one scope.
+    An organisation key, which can read several workspaces, is accepted for the one scope its
+    target names. Pointing it at a second scope is a second key.
 *   **Log records in the tenant shape.** A loop that emits log records is rejected until question
     Q7 shows an API key cannot export another scope's logs.
 *   **Per-API-key use-case labels in the tenant shape.** The legacy `api_key_use_cases` setting is
     not offered on a target in this version.
 *   **Discovery of scopes.** No pipeline is created from a listing.
 *   **Fan-out from one collection to several destinations.** A second destination for the same
-    scope is a second target, which makes its own requests and keeps its own watermark.
+    scope is a second target in the same tenant, with a second API key for that workspace. It
+    makes its own requests and keeps its own watermark. Reusing the first key is a duplicate and
+    blocks the tenant (section 5.5).
+*   **Two tenants reading one workspace.** A scope belongs to one tenant (section 2).
 *   **Pattern matching on targets, and routing by anything finer than a scope.**
 *   **Adding or removing pipelines while the process runs.** Config is read once. A change is a
     rollout.
@@ -180,18 +197,19 @@ Each goal states how it is checked.
 
 ## Open Questions
 
-The implementation is staged as six numbered changes, listed under "Order of work" at the end of
-this document. Change 1 is a tests-only harness. Each question has a pass criterion and the
-change or event it must be answered before.
+The implementation is staged as units, listed under "Order of work" at the end of this
+document. Unit 1 is a tests-only harness. Each question has a pass criterion and the unit or event
+it must be answered before. Questions are listed in the order they are needed.
 
 | Id | Question | Pass | Needed before |
 | --- | --- | --- | --- |
-| Q1 | What is Portkey's request budget, and is it per API key, per organisation or per client IP address? The repository records "about 10 requests per 10 seconds" for Portkey in one place and for LangSmith in another. This design makes 9 requests per tenant per minute at a 60-second cadence (5 graph requests, 2 group requests, 2 assertions) and 10 per tenant just after a restart. | The investigation reports the largest tenant count the budget supports at a 60-second and at a 5-minute cadence, including the requests after a restart. The count at a 5-minute cadence is at least 20. If only that count reaches 20, the launch default cadence becomes 5 minutes. If the budget is shared across API keys and supports fewer than 20 at a 5-minute cadence, this design is stopped and reassessed: no number of installs raises a shared budget. | Change 2 |
-| Q2 | Would Portkey's own OpenTelemetry export replace polling? It would only if all four hold: (a) it is available on the deployment in use; (b) it carries cost, tokens, latency and errors per workspace; (c) it carries no prompt or completion content; (d) it loses no more than the lookback of 90 minutes when the receiver is down. | Polling stays: at least one of the four does not hold. If all four hold, this design is stopped and reassessed. | Change 2 |
-| Q6 | Does Portkey's workspace dimension show everything its data endpoints show? The property needed is: for every graph or group response received at a time t1 over any range inside a loop's lookback, every workspace that contributed to it appears, with a non-empty slug, on the first page of a workspace-dimension response over the seven days ending at any later time t2. Also: is a workspace slug unique across organisations, or only inside one? | The property holds in repeated trials, for a workspace key and for an organisation key, with new traffic injected into a second workspace and both endpoints polled every few seconds, and when the key is being rate-limited. If it does not hold, the tenant shape does not ship. | Change 4 |
-| Q3 | What are the memory and CPU of a leader and a standby with 1, 20 and 50 pipelines, each at its full cardinality budget? | The leader's working set at 20 pipelines fits the chart's memory limit with half to spare. | Change 6 |
-| Q5 | What checkpoint save rate does one install sustain at 50, 150 and 300 loops, against a real Kubernetes API server, and are lease renewals delayed by checkpoint traffic? | 50 loops each save a checkpoint once per 60-second cadence for 30 minutes, no loop's tick starts late, and no lease renewal is delayed. If saves are the limit, the first response is Alternative L, not a partitioned store. If renewals are delayed, the lease gets its own Kubernetes client. | Change 6 |
-| Q4 | On each destination's stack, do the three identity attributes become metric labels, and is the pipeline attribute kept and searchable? | Yes for both. | Each tenant's onboarding |
+| Q1 | What is Portkey's request budget, and is it per API key, per organisation or per client IP address? The repository records "about 10 requests per 10 seconds" for Portkey in one place and for LangSmith in another. This design makes 7 requests per tenant per minute at a 60-second cadence (5 graph requests and 2 group requests) plus one scope assertion every ten minutes. Just after a restart each tenant makes 8: one assertion, then the 7. An organisation key serves one target only, so a per-key budget is never shared between tenants. | The investigation reports the largest tenant count the budget supports at a 60-second and at a 5-minute cadence, including the requests after a restart and during catch-up after a 30-minute pause of every tenant, when each loop reads back several windows. The count at a 5-minute cadence is at least 20. If only that count reaches 20, the launch default cadence becomes 5 minutes. If the budget is shared across API keys and supports fewer than 20 at a 5-minute cadence, this design is stopped and reassessed: no number of installs raises a shared budget. | Unit 2 |
+| Q2 | Would Portkey's own OpenTelemetry export replace polling? It would only if all four hold: (a) it is available on the deployment in use; (b) it carries cost, tokens, latency and errors per workspace; (c) it carries no prompt or completion content; (d) it loses no more than the lookback of 90 minutes when the receiver is down. | Polling stays: at least one of the four does not hold. If all four hold, this design is stopped and reassessed. | Unit 2 |
+| Q6 | Does every analytics endpoint the Portkey package calls honour `workspace_slug` for an organisation key? The endpoints are the five graphs, the model and metadata groups, the prompt dimension and the workspace grouping the assertion reads (`/analytics/groups/workspace`, which Portkey does not document). Portkey documents that an organisation key with no slug reads its default workspace. Also: can an organisation key be limited to the `analytics.view` scope? | With an organisation key over two workspaces that both have traffic, each endpoint given workspace A's slug returns the same rows as a workspace key for A over the same range, and a slug that names no workspace returns an error or no rows, never another workspace's rows. If it does not hold for every endpoint, organisation keys are not supported and the operator documentation says so. Q6 is run again for each version that changes the Portkey package. | Unit 6e |
+| Q9 | What does a workspace key return when sent a slug for another workspace, and does any analytics response carry a workspace id as well as its slug? | Answered for the first part on 2026-11-26 against a live workspace key: the slug is ignored. The graph, model-group and workspace-grouping endpoints returned 200 and the same rows with no slug, the right slug, a slug naming no workspace, `include_all_workspaces` and `exclude_workspace_slugs` naming its own workspace. So a wrong slug cannot serve as a check that works without traffic. The workspace grouping returns a slug and no id. Open: whether a slug is unique across organisations, and whether Portkey issues more than one workspace key per workspace (needed for a second destination). Pass for the open part: the answer is recorded. If slugs are unique only inside an organisation, the residual case in section 5.1 is accepted in Risks. | Unit 6e |
+| Q3 | What are the memory and CPU of a leader and a standby with 1, 20 and 50 pipelines, each at its full cardinality budget? | The leader's working set at 20 pipelines fits the chart's memory limit with half to spare. | Unit 6b |
+| Q5 | What checkpoint save rate does one install sustain at 50, 150 and 300 loops, against a real Kubernetes API server, and are lease renewals delayed by checkpoint traffic? | 50 loops each save a checkpoint once per 60-second cadence for 30 minutes, no loop's tick starts late, and no lease renewal is delayed. If saves are the limit, the first response is Alternative L, not a partitioned store. If renewals are delayed, the lease gets its own Kubernetes client. | Unit 6b |
+| Q4 | On each destination's stack, do the three identity attributes become metric labels, and is the pipeline attribute kept and searchable? Section 6 assumes both from Grafana Cloud's documented behaviour; this checks each stack. | Yes for both. | Each tenant's onboarding |
 | Q7 | Can a workspace API key export another workspace's logs, and does an export record carry its workspace? | A foreign workspace id is refused, or records carry a workspace the package can check. | Log records in the tenant shape |
 | Q8 | Does the launch run a hot standby? A standby takes the lease about 15 seconds after the leader stops. It does not add correctness, because recovery is from checkpoints either way. It doubles the pod count. | A decision by the author. The design works with one replica or two. | Launch |
 
@@ -199,17 +217,20 @@ change or event it must be answered before.
 
 ### CUJ 1: Add a tenant
 
-*   **Given**: a running install with several tenants, and a new team's workspace API key and
-    OTLP destination credentials stored as a Kubernetes Secret.
+*   **Given**: a running install with several tenants, and a new team's API key, its workspace's
+    slug and id, and OTLP destination credentials. The key and the token are stored as a
+    Kubernetes Secret.
 *   **When**: the operator adds the tenant to the chart values, runs the config check, and rolls
     the install.
-*   **Then**: the config check prints the plan table, which shows where every target is sent, so
+*    **Then**: the config check prints the plan table, which shows where every target is sent, so
     the change can be reviewed as a diff. After the rollout the new tenant's pipeline asserts its
     scope. If the workspace has had traffic in the last seven days the assertion passes, and its
     metrics appear in its stack once the first buckets are older than settle, about ten minutes
     later. If it has had none, the pipeline reports "unverified", emits nothing, and starts by
-    itself on the next tick after traffic arrives. Every other pipeline pauses for one or two
-    leadership handovers and resumes from its checkpoints with no counted skips.
+    itself on the next tick after traffic arrives. Once it has matched, the match is remembered for
+    that key and workspace, so a later idle spell or restart does not stop it. Every other pipeline
+    pauses for one or two leadership handovers and resumes from its checkpoints with no counted
+    skips.
 
 ### CUJ 2: A target's API key is revoked
 
@@ -217,8 +238,9 @@ change or event it must be answered before.
 *   **When**: that pipeline's next request to the vendor returns 401 or 403.
 *   **Then**: that pipeline's loops stop advancing. An auth-error signal carrying the tenant and
     pipeline ids fires. No other pipeline's lag changes. When the operator replaces the key in the
-    Secret and restarts the pods, the pipeline resumes from its watermark and reads back up to
-    its lookback.
+    Secret and restarts the pods, the new key has a new fingerprint and is asserted afresh. Once
+    it matches, which needs traffic in the workspace in the last seven days, the pipeline resumes
+    from its watermark and reads back up to its lookback.
 
 ### CUJ 3: A tenant's destination is down
 
@@ -257,6 +279,15 @@ states what it does not catch.
     each pipeline emitted. Product telemetry in a stack carries the id of the pipeline that sent
     it, so a stack can be searched for another tenant's pipeline id.
 
+### CUJ 7: One API key is configured for two targets
+
+*   **Given**: two targets, in one tenant or in two, whose secret files hold the same API key.
+*   **When**: a pod starts and reads the tenants' secrets.
+*   **Then**: neither target's tenant is built. `tenant_blocked` with reason `duplicate_key` is 1
+    for each, the tenant-blocked alert pages, and a log line names both pipeline ids and never
+    the key. Every other tenant runs. The config check cannot find this, because it never reads
+    secrets.
+
 ## Technical Plan (Architecture)
 
 ### 1. Shape of the change
@@ -276,7 +307,7 @@ resolve ----> plan: one row per target
 for each row: assemble one pipeline       <-- the only place a loop meets an emitter
         |
         +-- source (vendor package)   own HTTP client, own rate limiter
-        +-- scope gate                asked by the scheduler before and after each collect
+        +-- scope gate                asked by the scheduler before each collect
         +-- guard                     own allow-list, deny map and cardinality budget
         +-- emitter                   own destination credentials, own identity
         +-- telemetry hooks           tenant and pipeline on every self-metric
@@ -298,7 +329,7 @@ What does change in existing code:
     pairing of a plan row with its credentials and identity is in the composition root, where the
     release gate can reach it.
 *   The scheduler's per-loop record gains that loop's telemetry hooks, its pipeline id and its
-    pipeline's scope gate. The scheduler asks the gate before and after each collect.
+    pipeline's scope gate. The scheduler asks the gate before each collect.
 *   The loop runner's constructor gains one argument carrying the pipeline id for log lines.
 *   Every place that walks the legacy `sources` list (the startup summary, the liveness
     threshold, the content opt-in collection) reads the plan.
@@ -321,7 +352,7 @@ emit:
 
 defaults:
   portkey:                            # keyed by source type
-    loops:                            # used by a target for each loop name it does not set itself
+    loops:                            # every target of this source type uses these blocks
       analytics:
         enabled: true
         cadence: 60s
@@ -353,17 +384,22 @@ tenants:                              # map keyed by tenant id
           base_url: https://api.portkey.ai/v1
           auth: { header: x-portkey-api-key, value_file: source-key }
           rate_limit: { rps: 1, burst: 3 }
-        scope: example-workspace-slug
+        scope:                        # required; the one workspace this key reads
+          name: example-workspace-slug
+          id: example-workspace-id
         destination: main
         # identity: {...}             # omit to use the tenant's identity
-        # loops: {...}                # omit to use defaults.<type>.loops
+        # a target has no loops block: every target uses defaults.<type>.loops
 ```
 
 The `governance`, `queue`, `ha`, `log` and `selfobs` blocks keep their meaning and apply to the
-whole install. There is no per-tenant form of them in this version: the cardinality budget, the
-label-key opt-in list and the rate cap are the same for every tenant.
+whole install. There is no per-tenant form of them in this version: the cardinality budget and
+the label-key opt-in list are the same for every tenant. Each target's source has its own rate
+limiter, set by `source.rate_limit`.
 
-Rules. Each is fatal. The phase that checks each one is in section 3.
+Rules. A load or resolve rule that fails stops the process. An assemble rule that fails stops the
+process, except the two that block one tenant: an unreadable secret and a duplicate key (section
+9). Section 3 says which phase checks each rule.
 
 *   Tenant ids and the names of destinations and targets match
     `[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?`. A rename is not blocked. A renamed tenant or target
@@ -373,16 +409,21 @@ Rules. Each is fatal. The phase that checks each one is in section 3.
     when values files are layered and merges a map.
 *   A target names one destination inside its own tenant. There is no syntax for referring to
     another tenant's objects, no pattern and no precedence.
-*   `scope` is required for every target.
+*   `scope` is required for every target, with both `name` and `id`. A target must not set the
+    legacy `settings.expected_workspace`; the scope replaces it.
+*   No two targets, in one tenant or in two, may use the same source API key. This is checked
+    when the pod reads the secrets (section 5.5), not by the config check.
+*   No scope name and no scope id may appear in two tenants. One tenant may name one scope in
+    two targets, with two keys, to send it to two destinations. This rule is what stops an
+    organisation key from being pointed at another tenant's workspace: the scope assertion cannot
+    catch that, because an organisation key reads whatever workspace it is sent (section 5.1).
 *   A tenant's `identity` is required, with both fields. It does not fall back to the install's
     top-level `identity`.
 *   A target with an `identity` block uses that block, whole, in place of the tenant's.
-*   A target that sets a block for a loop name uses that block, whole, in place of the block of
-    that name in `defaults.<type>.loops`. A loop name the target does not set uses its block from
-    `defaults.<type>.loops`. No field is inherited from one block into another. Every loop block,
-    wherever it is written, must be complete: after the loader applies the defaults it applies to
-    a legacy loop block today (settle), it must pass the validation a legacy loop block passes.
-    The same holds for a tenant source and the legacy defaults for its rate limit.
+*   A target has no `loops` block. Every target uses the blocks in `defaults.<type>.loops`. Each
+    of those blocks must be complete: after the loader applies the defaults it applies to a legacy
+    loop block today (settle), it must pass the validation a legacy loop block passes. The same
+    holds for a tenant source and the legacy defaults for its rate limit.
 *   The tenant `source` block has its own schema: `type`, `base_url`, `auth`, `rate_limit` and
     the existing optional HTTP settings. It has no `enabled`, `source_instance` or `loops` key.
     The existing rules that a source URL and an OTLP endpoint must be https apply. A destination
@@ -410,11 +451,12 @@ Rules. Each is fatal. The phase that checks each one is in section 3.
 ### 3. The resolved plan and the three phases
 
 A new package turns a loaded config into a plan: a sorted list of rows, one per target. A row holds
-the tenant id, the target name, the source settings, the scope id, the destination, the identity,
+the tenant id, the target name, the source settings, the scope, the destination, the identity,
 the loop configs and the pipeline id.
 
 *   The **plan table** is the plan rendered as text with no secrets: tenant, target, source type,
-    source URL, scope, destination name, endpoint, instance id, identity and enabled loops.
+    source URL, scope name and id, pipeline id, destination name, endpoint, instance id, identity
+    and enabled loops.
 *   The **plan hash** is the SHA-256 of the plan table. In the tenant shape every field in the
     table is a literal, and CI and the running leader use the same image, so both render the same
     text. In the legacy shape a field may be an `${ENV}` reference, which the config check
@@ -427,29 +469,33 @@ the loop configs and the pipeline id.
 The legacy shape resolves to one row per enabled `sources` entry, in config order. Every legacy
 row has the same destination (`emit.telemetry`) and the same identity (the top-level `identity`),
 an empty tenant id, an empty pipeline id and no scope. The plan table shows its
-`source_instance` in the pipeline column.
+`source_instance` (the existing per-source key that names its checkpoints) in the pipeline id
+column.
 
 Rules are checked in three phases:
 
 | Phase | Where | Checks |
 | --- | --- | --- |
 | Load | Config package | Shape, ids and names, required keys, complete loop blocks, the https rules, the form of the secret file names, no references under `tenants` or `defaults`, `ha` values. |
-| Resolve | Plan package | References between a target and its destination, the two stack-sharing rules, the self-telemetry rule. |
-| Assemble | Composition root | Rules that need a built source and its loops: scope assertion support, no loop that emits log records, no two loops in a group declaring one metric name (section 4). |
+| Resolve | Plan package | References between a target and its destination, the two stack-sharing rules, the self-telemetry rule, no scope in two tenants. |
+| Assemble | Composition root | Rules that need the secrets or a built source and its loops: no two targets with the same API key (section 5.5; blocks the tenants, does not stop the process), scope assertion support, no vendor loop named `scope-match`, no loop that emits log records, no two loops in a group declaring one metric name (section 4). |
 
 The config check runs the load and resolve phases and never reads a tenant's secret files. The
-assemble-phase rules are found when a pod starts. That is safe because the chart requires a new
-pod to become ready before an old one is removed (section 11): a pod that fails to assemble never
-becomes ready, and the old pods keep running.
+assemble-phase rules are found when a pod starts. The chart requires a new pod to become ready
+before an old one is removed (section 11), so a pod that fails to assemble never becomes ready
+and the old pods keep running. That holds only while no old pod restarts: the config is one
+ConfigMap updated in place, so an old pod that restarts during a stopped rollout reads the new
+config and fails too (see Risks).
 
 ### 4. Pipeline assembly
 
 The composition root assembles pipelines from the plan in three passes.
 
-1.  **Build sources.** For each tenant, read its secret files through a reader the caller
-    supplies. For each row, ask the telemetry factory for the row's telemetry hooks, build the
-    source hooks from them, and build the source through the existing registry. A source takes
-    its hooks when it is built, so the hooks must exist first.
+1.   **Build sources.** For each tenant, read its secret files through a reader the caller supplies,
+    and compute the key fingerprint of each target's API key. Block every tenant that has a target
+    whose fingerprint another target also has (section 5.5). For each row, ask the telemetry factory
+    for the row's telemetry hooks, build the source hooks from them, and build the source through
+    the existing registry. A source takes its hooks when it is built, so the hooks must exist first.
 2.  **Build guards.** Group the rows that share a stack and an identity. For each group, build
     one guard from the loops of that group's sources, and run the existing series-ownership check
     on them. In the tenant shape the guard reports through the telemetry hooks of the group's one
@@ -464,8 +510,8 @@ police.
 
 A plan row carries the existing source config struct, filled in by the plan package: the source
 settings, the loop blocks, a source instance (`mt.<tenant>.<target>` in the tenant shape) and the
-scope id. The scope id is a new field on that struct which a config file cannot set. Pass 1 adds
-the secret values to a copy of the row. The plan table never shows them.
+scope name and id. The scope is a new field on that struct which a legacy config file cannot set.
+Pass 1 adds the secret values to a copy of the row. The plan table never shows them.
 
 What each level owns:
 
@@ -490,112 +536,168 @@ different stacks. The legacy shape is one group, so its check is the same as tod
 
 #### 5.1 Scope assertion at the source
 
-The most likely wrong delivery is an API key that sees something other than what the config says.
-A check on the binary's wiring cannot catch it, because the wiring is right and the data is wrong.
+The most likely wrong delivery is an API key that reads something other than what the config
+says. A check on the binary's wiring cannot catch it, because the wiring is right and the data is
+wrong.
 
 A source may implement one optional capability:
 
 ```go
-// ScopeAsserter is implemented by a Source that can report what its API key can see.
-// Matched means: every record the source's loops could have returned, from any collect
-// that finished before this call, over any range inside their lookback, belongs to the
-// configured scope.
+// ScopeAsserter is implemented by a Source that can report what its API key reads.
+// Matched means: the source's assertion request, sent as its loops send theirs, returned only
+// the configured scope, from traffic in the source's assertion window.
 type ScopeAsserter interface {
     AssertScope(ctx context.Context) (ScopeResult, error)
 }
 // ScopeResult is Matched, Mismatch or Unverifiable. An error means the call failed.
 ```
 
-The Portkey package implements it with a call it already makes for its existing optional check: it
-reads the workspace dimension of the analytics API over the last seven days.
+**What the Portkey package sends.** When a row has a scope, the Portkey package adds
+`workspace_slug=<scope name>` to every analytics and groups request, the assertion's included.
+Two kinds of key reach it:
 
-*   `Matched`: exactly one workspace was returned and its slug is the configured scope id.
+*   A **workspace key**. Portkey binds it to one workspace and ignores the slug. This was checked
+    live on 2026-11-26 (Q9): a slug naming another workspace, or none, changed nothing. The
+    assertion is what catches a workspace key pasted under the wrong target.
+*   An **organisation key**. Portkey documents that it reads the workspace the slug names and,
+    with no slug, its organisation's default workspace. Because every request carries the slug,
+    the default-workspace fallback cannot be reached. Whether every endpoint honours the slug is
+    question Q6.
+
+The package does not need to know which kind it holds: the same requests are correct for both.
+A legacy row has no scope, so a legacy install sends exactly the requests it sends today.
+
+The Portkey package implements the assertion with a call it already makes for its existing
+optional check: it reads the workspace grouping of the analytics API over the last seven days,
+with the slug.
+
+*   `Matched`: exactly one workspace was returned and its slug is the configured scope name.
 *   `Mismatch`: another workspace, more than one, or a row with no workspace.
 *   `Unverifiable`: no workspace had traffic in that window.
 *   A failed call: any non-200 status, a response the vendor marks as quota-limited, a response
     that cannot be decoded, or a workspace value that cannot be read. None of these is ever
     treated as a result.
 
-When a scope id is set, the Portkey package also refuses at start a loop whose lookback is longer
+When a scope is set, the Portkey package also refuses at start a loop whose lookback is longer
 than six days, which leaves a day's margin inside that window, and refuses the legacy
 `settings.expected_workspace` setting.
 
-The policy is one object per pipeline, the **scope gate**. It lives in the source package beside
+**The scope gate.** The policy is one object per pipeline. It lives in the source package beside
 the capability, as the guard does. It holds one state for the pipeline, in memory: no result,
-matched, unverified or mismatched. It makes one assertion call at a time. The scheduler resets
-every gate once each time a replica becomes leader, before any loop starts, and again when the
-replica stops leading. So a new leader starts with no result, and a replica that is not leading
-reports none. The scheduler asks the gate at two points in every tick of every loop in the
-pipeline.
+matched, unverified or mismatched. It makes one assertion call at a time. The re-assertion
+interval is a constant, 10 minutes. It is not a config key.
 
-**Before the collect**, after the scheduler's existing check that the loop has no batch in
-flight. If the state is matched, the tick goes on. If it is unverified or mismatched and the gate
-called the assertion less than a minute ago, the state stands. Otherwise the gate calls the
-assertion.
+*   **When a replica becomes leader**, before any loop starts, the scheduler resets every gate and
+    each gate reads its pipeline's remembered match (section 7) through a checkpoint handle given
+    to it at assembly. If one exists and its digest equals the digest of the current key
+    fingerprint, scope name and scope id, the gate starts in matched, with its first re-assertion
+    due at a random time inside the first interval. Spreading the re-assertions this way keeps a
+    restart from sending every tenant's assertion at once. Otherwise, or if the read fails, the
+    gate starts with no result.
+*   **When a replica stops leading**, every gate is reset to no result. A replica that is not
+    leading reports no result.
 
-**After the collect, before the batch is queued.** The gate calls the assertion again, every time.
-A batch is queued only if this call returns `Matched`. The one exception is a batch that carries
-nothing and does not move the watermark. It needs no call and is queued as it is today.
+A mismatch is not remembered across a change of leader. A mismatched pipeline starts with no
+result on the next leader, asserts again and reaches mismatched again if the cause remains. Both
+states emit nothing, so nothing leaks in between.
 
-What happens for each outcome, at either point:
+The scheduler asks the gate once in every tick of every loop in the pipeline, **before the
+collect**, after its existing check that the loop has no batch in flight:
 
-*   `Matched`: the state is matched and the tick goes on.
-*   `Mismatch`: the state is mismatched. Any collected batch is dropped. The scheduler puts that
-    loop into the existing degraded state, so it is ticked every ten minutes instead of at its
-    cadence. Each of the pipeline's loops goes degraded on its own next tick. Only a later
-    `Matched` result ends a mismatch; an `Unverifiable` result does not. That happens when the
-    API key is corrected and the pods restarted, or when the other workspace's traffic has aged
-    out of the seven days. The loop then collects again, and its next successful checkpoint save
-    clears its degraded state, as it does today.
-*   `Unverifiable`, when not mismatched: the state is unverified. Any collected batch is dropped.
-    Nothing is queued, no watermark moves and no error is counted. The loop keeps its cadence, so
-    the gate asserts again on the next tick, at most once a minute.
-*   A failed call: the state does not change. Any collected batch is dropped. The tick is handled
-    like a failed collect today: lag is recorded, the error is counted and logged against the loop
-    whose tick made the call, and the loop retries at its cadence with nothing advanced. The
-    assertion reports a 401 or 403 as a distinct kind of error, and the scheduler then raises the
-    auth-error signal for that loop. The assertion does not raise it itself.
+*   Matched, and the re-assertion is not yet due: the tick goes on with no call.
+*   Matched, and the re-assertion is due: the gate calls the assertion.
+*   No result: the gate calls the assertion.
+*   Unverified or mismatched: if the gate called the assertion less than a minute ago, the state
+    stands and the tick ends. Otherwise the gate calls it.
 
-When the gate ends a tick before the collect because the pipeline is unverified or mismatched,
-the scheduler records no lag and counts no unreadable time for that tick. When the pipeline
-resumes, the time that has become older than its lookback is counted once as unreadable, under
-the existing skip reason, as it is after any outage.
+There is no assertion after the collect. A batch collected in a matched state is queued as it is
+today.
+
+What happens for each outcome:
+
+*   `Matched`: the state is matched, the next re-assertion is due one interval later, and the
+    tick goes on. If the pipeline has no remembered match for the current digest, the gate writes
+    one (section 7). A write that fails or is refused leaves the in-memory state as it is, because
+    that state comes from a fresh assertion, and the write is tried again at the next `Matched`.
+*   `Mismatch`: the state is mismatched and the gate writes the remembered match empty. The tick
+    ends before the collect. The scheduler puts that loop into the existing degraded state, so it
+    is ticked every ten minutes instead of at its cadence. Each of the pipeline's loops goes
+    degraded on its own next tick. Only a later `Matched` result ends a mismatch; an
+    `Unverifiable` result does not. For a workspace key, that `Matched` comes when the key is
+    corrected and the pods restarted. For a key that saw several workspaces, it can also come
+    when the other workspaces' traffic has aged out of the seven days. The loop then collects
+    again, and its next successful checkpoint save clears its degraded state, as it does today.
+*   `Unverifiable` when matched: the state stays matched. A key that has read only this scope
+    still does when the scope goes quiet, so an idle workspace goes on emitting its zero-valued
+    samples.
+*   `Unverifiable` otherwise: the state is unverified. The tick ends before the collect. Nothing is
+    queued, no watermark moves and no error is counted. The loop keeps its cadence, so the gate
+    asserts again on a later tick, at most once a minute.
+*   A failed call when matched: the state stays matched and the tick goes on, for up to two
+    intervals (20 minutes) after the pipeline's last successful assertion, or after the replica
+    became leader for a remembered match. The re-assertion is due again on the next tick, at most
+    once a minute. Past that grace the failed call is handled as in the next case. A real
+    `Mismatch` ends the grace at once.
+*   A failed call otherwise: the state does not change and the tick ends before the collect. It is
+    handled like a failed collect today: lag is recorded, the error is counted and logged against
+    the loop whose tick made the call, and the loop retries at its cadence with nothing advanced.
+
+Every failed call counts `scope_assertion_total` with result `error`. The assertion reports a 401
+or 403 as a distinct kind of error, and the scheduler then raises the auth-error signal for that
+loop. The assertion does not raise it itself.
+
+The grace exists because a matched workspace key cannot have changed workspace: a short outage of
+the one endpoint the assertion reads should not stop data. Its cost is that an organisation key
+whose slug handling broke during those 20 minutes keeps collecting, which the assertion could not
+have seen anyway (Q6).
+
+When the gate ends a tick because the pipeline is unverified or mismatched, the scheduler records
+no lag and counts no unreadable time for that tick. When the pipeline resumes, the time that has
+become older than its lookback is counted once as unreadable, under the existing skip reason, as
+it is after any outage.
+
+**Why one check before the collect is enough.** The first draft of this design asserted again
+after every collect (Alternative O). That caught a key that could read a second workspace whose
+traffic arrived between the check and the collect. Under the one-key rule such a key is either a
+workspace key, which Portkey binds to one workspace, or an organisation key sent one workspace's
+slug on every request. Neither reads a second workspace unless Portkey stops honouring the slug,
+and an assertion after the collect would not catch that either: it reads only the workspace
+grouping, not the graph and group endpoints that carry the data. That case is Q6's.
 
 **What this proves and what it rests on.**
 
-*   A key for the wrong single workspace, with traffic in the last seven days, is caught before
+*   A workspace key for the wrong workspace, with traffic in the last seven days, is caught before
     anything is collected. This does not depend on timing.
-*   A key with wider access is a different case. A batch that contains a second workspace's data
-    is dropped only if the assertion made after that collect lists the second workspace. That is
-    the property in question Q6. It is an observed behaviour of the vendor's API, not a documented
-    one, and nothing in the binary can detect it ceasing to hold. The tenant shape does not ship
-    unless Q6 passes, and Q6 is run again for each version that changes the Portkey package.
-*   Two cases return `Matched` when they should not. A wider key whose other workspaces have had
-    no traffic for seven days returns `Matched` until one of them gets traffic, and is then
-    caught subject to the point above. A key from another Portkey organisation whose workspace
-    has the same slug returns `Matched`, if slugs are unique only inside an organisation.
-*   The main defence against a wider key is not this check. It is that a team issues a key bound
-    to one workspace (see Risks).
+*   A remembered match is only reused for the same key, scope name and scope id. A key that
+    belongs to another workspace has a different fingerprint and so never inherits one.
+*   An organisation key is correct only if every endpoint used honours the slug (Q6). The
+    assertion sees the workspace grouping only. Nothing in the binary detects another endpoint
+    ceasing to honour it between runs of Q6.
+*   One case returns `Matched` when it should not: a key from another Portkey organisation whose
+    workspace has the same slug, if slugs are unique only inside an organisation (Q9). The
+    workspace grouping returns no id to compare.
+*   The main defence is still how teams issue keys: a workspace key, limited to reading analytics
+    (see Risks).
 
-**Cost.** Each collect is followed by one more request. A tenant with the two default loops at a
-60-second cadence makes 9 requests a minute in place of 7. A failed assertion discards a
-completed collect, so those requests are made again on the next tick. A waiting pipeline makes at
-most one request a minute.
+**Cost.** One assertion per pipeline per re-assertion interval. After a change of leader, a
+pipeline with no remembered match asserts on its first tick; one with a remembered match
+asserts once inside the first interval, at a random time. A tenant with the two default loops at a
+60-second cadence makes 7 requests a minute and one assertion every ten minutes. A waiting
+pipeline makes at most one request a minute.
 
 **What the operator documentation states.**
 
 *   A tenant onboarded before its workspace has traffic emits nothing until traffic arrives.
-*   A tenant whose workspace has had no traffic for seven days becomes unverified and stops
-    emitting, including the zero-valued samples it emitted while idle. When traffic returns, the
-    pipeline reads back at most its lookback. Earlier time is counted as skipped. That time held
-    only zeros.
+*   After its first match, a tenant goes on emitting through idle spells and restarts until its
+    key or its scope changes. A rotated key has a new fingerprint, so it is checked afresh and
+    emits nothing until its workspace has traffic.
 *   Until a mismatch ends nothing is emitted for that pipeline, and data older than the lookback
     when it ends is lost and counted. The mismatch alert pages, so this loss is not silent.
 
 In the tenant shape the gate is mandatory. The legacy shape keeps its existing optional per-loop
 check (`settings.expected_workspace`), untouched, because G6 requires the legacy path not to
 change. Two mechanisms therefore exist in the code. At most one is active for any pipeline: a
-legacy row has no scope id and so no gate, and a row with a scope id refuses the legacy setting.
+legacy row has no scope and so no gate, and a row with a scope refuses the legacy setting.
 
 #### 5.2 One place of assembly
 
@@ -617,10 +719,13 @@ logs.
 *   Every destination uses the **same endpoint URL** and differs only in instance id and token. A
     test that gives each tenant its own fake server would pass a bug that sends the right URL with
     the wrong credential.
-*   A fake source returns a distinct marker for each API key and scope. A fake OTLP receiver
-    records payloads by credential. The check is: every payload received under a credential
-    carries only that tenant's marker and that tenant's pipeline id.
-*   The check must hold through each of these: a payload large enough to be split before sending;
+*   A fake source returns a distinct marker for each API key and scope, and records the
+    `workspace_slug` of every request. A fake OTLP receiver records payloads by credential.
+*   **The delivery check:** every payload received under a credential carries only that tenant's
+    marker and that tenant's pipeline id.
+*   **The slug check:** every request a tenant-shape source sends carries its own target's scope
+    name.
+*   Both checks must hold through each of these: a payload large enough to be split before sending;
     a payload the receiver refuses as too large, which is split and resent; a retried send; a
     change of leader; a restart with the plan rows supplied in a different order (and, once the
     tenant config exists, with the tenants listed in a different order in the config file); and a
@@ -629,8 +734,10 @@ logs.
     a request carrying the self-telemetry identity.
 *   Seeded faults: the same check runs against pipelines that are deliberately mis-assembled
     through a test-only path (two pipelines' emitters swapped, two API keys swapped, a source
-    that returns another scope's marker). The test asserts that the check reports each one. A
-    check that cannot fail proves nothing.
+    that returns another scope's marker, a source that omits the slug and is answered with a
+    default scope's marker), and one config with the same API key in two tenants, which must leave
+    both unbuilt. The test asserts that the checks report each one. A check that cannot fail
+    proves nothing.
 
 The tenant shape does not ship while this test fails.
 
@@ -645,6 +752,24 @@ A test exercises this code against a fake. It cannot show what the live vendor r
     `scope_state` shows each pipeline's current state.
 *   The operator documentation gives the query a stack's owner can run to look for a pipeline id
     that is not theirs.
+
+#### 5.5 One API key per target
+
+The rule that one key serves one workspace is enforced, not assumed. When a pod reads the
+tenants' secrets (assembly pass 1), it computes each target's key fingerprint. Every target whose
+fingerprint another target also has is a duplicate, whether the two are in one tenant or in two.
+
+*   The tenant of every duplicate target is not built. A tenant with one duplicate target loses
+    all its targets, because a key the operator configured twice is a mistake whose correct half
+    is unknown.
+*   `tenant_blocked` with reason `duplicate_key` is 1 for each such tenant, and the tenant-blocked
+    alert pages.
+*   One log line per duplicate set names the pipeline ids that share a key. It never names the
+    key or its fingerprint.
+*   Every other tenant is built and runs. If every tenant is blocked the process does not start.
+
+The config check never reads secrets, so it cannot find a duplicate. A legacy install is not
+checked: it serves one team, and G6 keeps its startup unchanged.
 
 ### 6. Identity on the wire
 
@@ -693,6 +818,20 @@ string.
 **Record format, store and Kubernetes client.** Unchanged. One ConfigMap, the existing one, by its
 existing name. Question Q5 decides whether the lease needs its own client.
 
+**Remembered scope match.** Each pipeline has one more checkpoint key: its source instance, the
+reserved loop name `scope-match` and the fingerprint field `v1`. No vendor loop may use that
+name; assembly refuses one that does. Its record is an ordinary watermark saved through the
+existing store, so it is fenced by leader number like any other:
+
+*   `Time` is when the gate recorded the match, so it only moves forward.
+*   `Cursor` is the SHA-256, in hex, of the key fingerprint, the scope name and the scope id,
+    joined with a separator neither can contain. An empty `Cursor` means no match is remembered.
+*   It is written when the assertion returns `Matched` and the stored digest differs from the
+    current one, and written empty when it returns `Mismatch`. A pipeline at steady state writes
+    it once, not every interval.
+*   The digest cannot be turned back into the key. Anyone who can read the checkpoint ConfigMap
+    can test a guessed key against it, but an API key is a long random string.
+
 **Orphaned keys.** The store has no delete and refuses writes above 900 KiB, which is roughly
 3,600 keys. A renamed tenant or target leaves its old keys behind. A tenant id that is removed and
 later added again picks up its old watermark, and the time since that is older than the lookback
@@ -723,11 +862,15 @@ is counted as skipped. An offline prune is future work.
         `mismatched`. The current state is 1 and the others 0. With no result, all are 0, which
         is what a replica that is not leading reports. Rules take the maximum across replicas.
     *   `scope_assertion_total`: a counter whose `result` is `matched`, `mismatch`,
-        `unverifiable` or `error`. It moves each time the gate calls the assertion: after every
-        collect that produces a batch, and at least every ten minutes for a pipeline that is
-        unverified or mismatched.
+        `unverifiable` or `error`. It moves each time the gate calls the assertion: when a
+        pipeline with no remembered match starts, at least once per re-assertion interval for a
+        matched pipeline, and at least every ten minutes for one that is unverified or
+        mismatched.
     *   `tenant_blocked`: a gauge with the labels `tenant` and `reason` and no `pipeline`. It is
-        1 for a blocked tenant and 0 for every other tenant.
+        1 for a blocked tenant and 0 for every other tenant. Its reasons are `secret_unreadable`
+        and `duplicate_key`. Every replica reports it from its own read of the secrets, since a
+        standby may become leader with that view. Replicas started at different times can
+        disagree; the alert takes the maximum across replicas, so a block on either pages.
 *   Liveness stays one heartbeat for the install. Its threshold is derived from the plan.
 
 **Alerts and dashboards.** The behaviours below are the acceptance criteria. The rule expressions
@@ -738,12 +881,11 @@ are written and tested in the change that edits the rule files.
     This covers the alerts for a stale poller, failing emits, auth errors, data loss, queue
     backpressure, buckets revised after settle and a cardinality spike, and the five recording
     rules built on the time of the last success.
-*   The stale-poller alert and the two baseline rules judge only pipelines whose state is
-    matched, and their baselines leave out time a pipeline spent in another state. Series with no
-    `tenant` label are judged as today.
-*   The leader-absent alert fires when no loop has succeeded for a time. An install whose tenants
-    are all idle after a restart has no successes. The alert therefore also treats any increase
-    in `scope_assertion_total`, whatever its result, as a sign that a leader is running.
+*   The stale-poller alert judges only pipelines whose state is matched. Series with no `tenant`
+    label are judged as today.
+*   The leader-absent alert is unchanged. A new install whose tenants have never matched records
+    no success and fires it; the onboarding documentation says so. Once a pipeline has matched it
+    emits through idle spells, so this does not recur after restarts.
 *   New alerts: scope mismatched for 5 minutes (pages); tenant blocked for 5 minutes (pages);
     scope assertion returning only errors for 30 minutes (warning), which covers a pipeline
     stuck with no result; and unverified for 24 hours (low severity).
@@ -759,9 +901,11 @@ Every signal in a "Run" row carries `tenant` and `pipeline`.
 | A broken assemble-phase rule | Assemble | The process does not start. | The same. The config check does not find it. |
 | A tenant's secret file is missing or unreadable | Assemble | That tenant's pipelines are not built. Every other tenant starts. If every tenant is blocked, the process does not start. | `tenant_blocked` with reason `secret_unreadable` |
 | 401 or 403 from the vendor, on a collect or on the scope assertion | Run | That loop does not advance and retries at its cadence, as today. | `auth_errors_total` |
-| The scope assertion call fails for another reason | Run | Any collected batch is dropped. The loop retries at its cadence. | `emit_errors_total` with kind `collect`; `scope_assertion_total` with result `error` |
-| Scope mismatch | Run | Batch dropped. Each loop is retried every ten minutes until a `Matched` result. | `scope_state`; `loop_degraded` with reason `scope_mismatch` |
-| Scope unverifiable | Run | Batch dropped, no watermark moves. Asserted again on each tick, at most once a minute. | `scope_state` |
+| The scope assertion call fails for another reason | Run | The tick ends before the collect. The loop retries at its cadence. | `emit_errors_total` with kind `collect`; `scope_assertion_total` with result `error` |
+| Scope mismatch | Run | Nothing collected; the remembered match is cleared. Each loop is retried every ten minutes until a `Matched` result. | `scope_state`; `loop_degraded` with reason `scope_mismatch` |
+| Scope unverifiable, never matched | Run | Nothing collected, no watermark moves. Asserted again on a later tick, at most once a minute. | `scope_state` |
+| Scope unverifiable, already matched | Run | The pipeline stays matched and keeps emitting. | `scope_assertion_total` with result `unverifiable` |
+| Two targets share an API key | Assemble | Both tenants are not built. Every other tenant starts. | `tenant_blocked` with reason `duplicate_key` |
 | Destination rejects or is slow | Run | That pipeline's loops retry or degrade, as today. | `emit_errors_total`, `loop_degraded`, `emit_partial_success_rejected_total` |
 
 A blocked tenant has no loops, so it has no lag series. The `tenant_blocked` alert must page
@@ -790,10 +934,11 @@ ConfigMap written by the current version.
 
 Converting a running legacy install to the tenant shape is a migration, not an upgrade:
 
-*   Its checkpoint keys change, so every loop starts from its first-run lookback and sends the
+*   Its checkpoint keys change, so every loop starts from its `bootstrap_lookback` and sends the
     last settled buckets again. With an unchanged identity the backend treats them as repeats.
     With a new identity they are new series.
-*   An idle workspace changes from "emits zeros" to "emits nothing".
+*   An idle workspace emits nothing until its first match under the new keys, then emits zeros
+    through idle spells as before.
 *   It is two steps: the new image first, with the legacy shape, then the tenant-shape config. An
     old-image pod that restarts onto a tenant-shape config would exit on the config keys it does
     not know. `helm rollback` to a revision before the tenant shape stops every tenant's
@@ -822,7 +967,8 @@ Converting a running legacy install to the tenant shape is a migration, not an u
 A rollout pauses every pipeline for one or two leadership handovers. One handover takes about 20
 to 30 seconds: the lease duration (15 seconds), the retry period (2 seconds) and a first collect.
 Every pipeline then resumes from its checkpoints. A rollout also discards every pipeline's
-assertion result, so each asserts again before its first collect, and clears the in-memory record
+in-memory assertion result. A pipeline with a remembered match resumes matched; any other asserts
+again before its first collect. A rollout also clears the in-memory record
 the `analytics` loop keeps to detect buckets revised after settle.
 
 ### 12. What shards will need
@@ -845,7 +991,10 @@ The checkpoint key contains no shard name, so a later shard design does not rewr
 
 | Risk | Mitigation | What remains |
 | --- | --- | --- |
-| An API key with wider access than its scope delivers another team's data. | Teams issue a key bound to one workspace and limited to reading analytics. The scope assertion after every collect. The pipeline attribute as evidence. | The assertion sees traffic, not permissions, and for a wider key it rests on a vendor behaviour that is observed, not documented (Q6). Q6 is run again for each version that changes the Portkey package. Nothing detects the behaviour changing between runs. |
+| A workspace key for the wrong workspace delivers another team's data. | The scope assertion before the first collect and every re-assertion interval. The pipeline attribute as evidence. | The assertion sees traffic, not permissions: a wrong key whose workspace has been idle for seven days stays unverified and emits nothing until that workspace has traffic, and is then caught. |
+| An organisation key reads more than its target's workspace. | The slug on every request; Q6 for every endpoint used, run again for each version that changes the Portkey package; the scope assertion. | The assertion reads one endpoint. Nothing detects another endpoint ceasing to honour the slug between runs of Q6. |
+| An organisation key is a credential for the whole organisation. | Teams are asked for a workspace key first. An organisation key should be limited to `analytics.view` where Portkey allows it (Q6). | A leaked organisation key exposes every workspace's analytics, and more if its scopes cannot be limited. |
+| One API key is configured for two tenants. | The duplicate-key check at assembly (section 5.5), which blocks both and pages. | Found at pod start, not in CI. |
 | A bug pairs a loop with the wrong emitter. | One place of assembly; the release gate with seeded faults. | A test proves the code against a fake, not against production. |
 | One process holds every team's source API key and destination token. | Secrets are files in one directory per tenant and are never placed in the config tree, so a config error cannot contain one. Each emitter already removes its own credentials from error text. Teams should issue a destination token limited to writing metrics. | Anyone who can read Secrets in the install's namespace, or exec into its pods, can read every tenant's credentials. Access to that namespace is the central team's alone. The author accepted this. |
 | A restart or a bad version pauses every tenant in the install. | Recovery is from checkpoints with no gap inside the lookback; `maxUnavailable: 0`; a ceiling of about 25 tenants per install. | A pause of up to a minute per rollout. A tenant that needs more isolation gets its own install (Alternative B). |
@@ -853,7 +1002,10 @@ The checkpoint key contains no shard name, so a later shard design does not rewr
 | The vendor's own OpenTelemetry export makes polling unnecessary. | Q2 is answered before change 2. | None after Q2. |
 | Every checkpoint save rewrites one ConfigMap. | Q5 measures it before change 6. Alternative L is the first response. | The store holds every key ever written until an offline prune exists. |
 | The change breaks an existing single-team install. | Golden tests and an upgrade test land first and stay green through every change. Changes 2 to 5 do not alter a legacy install's emitted telemetry, checkpoint keys or self-metric label sets. | A legacy install with two sources sharing a loop name keeps today's overwritten lag gauge. |
-| An idle or newly added tenant looks broken because nothing is emitted. | An explicit unverified state, left out of outage alerts, with its own low-severity alert; stated in the tenant data contract. | A stack shows no data, not zeros, for a workspace idle for seven days. |
+| A newly added tenant, or one with a rotated key, looks broken because nothing is emitted. | An explicit unverified state, left out of outage alerts, with its own low-severity alert; stated in the tenant data contract. | A stack shows no data, not zeros, until the workspace's first traffic under the current key. |
+| Every tenant's assertion reads one endpoint Portkey does not document (`/analytics/groups/workspace`). | Matched pipelines ride out up to 20 minutes of failures (section 5.1). The stale-poller alert fires for every matched pipeline past that. | A change or removal of that endpoint stops every tenant at once, and no other endpoint is known to replace it. |
+| Two tenants name the same workspace with an organisation key. | No scope may appear in two tenants, checked by the config check in CI (section 2). | An organisation key can still be pointed at a workspace that belongs to no tenant of the install; only review of the plan table catches that. |
+| Workspace slugs are unique only inside a Portkey organisation (Q9). | None in the binary: the workspace grouping returns no id. | A key from another organisation whose workspace has the configured slug returns `Matched`. Accepted if Q9 finds slugs are not globally unique. |
 | A rule that needs a built source is broken, and the config check does not find it. | The pod fails to become ready and the rollout stops with the old pods running. | The mistake is found at rollout, not in CI. The config is one ConfigMap updated in place, so an old pod that restarts during a stopped rollout reads the new config and fails too. A stopped rollout must be rolled back promptly. |
 
 ## Alternatives Considered
@@ -934,11 +1086,17 @@ its id; pods compete for slot leases.
 *   **Reason for Rejection**: Rejected by author as the routing mechanism between tenants. A tenant
     may still put a collector behind its own destination.
 
-### Alternative H: One organisation-level API key with all workspaces aggregated
+### Alternative H: One organisation-level API key for every workspace
 
-*   **Pros**: One credential for a whole organisation.
-*   **Cons**: It returns one aggregate, not a series per workspace that can go to different stacks.
-*   **Reason for Rejection**: Rejected by author: it cannot route per workspace.
+One organisation key, with one target per workspace, each sending its own `workspace_slug`.
+
+*   **Pros**: One credential for a whole organisation. Portkey documents `workspace_slug` as
+    selecting the workspace for an organisation key, so it could route per workspace. (The first
+    draft rejected it as unable to route; that rested on a probe made with a workspace key.)
+*   **Cons**: One revocation stops every tenant. Every tenant shares one key's request budget. An
+    organisation-wide credential serves teams that should each hold their own.
+*   **Reason for Rejection**: Rejected by author on 2026-11-26: one API key serves exactly one
+    workspace.
 
 ### Alternative I: One process per API key, several containers in a pod
 
@@ -991,15 +1149,40 @@ its id; pods compete for slot leases.
 *   **Reason for Rejection**: Open, not rejected. It is question Q2, which must be answered before
     change 2.
 
-### Alternative O: Assert the scope on a timer, before the collect only
+### Alternative O: Assert again after every collect, before the batch is queued
 
-*   **Pros**: One assertion every few minutes per pipeline in place of one per collect.
-*   **Cons**: A bucket can close just before an assertion and be ingested by the vendor just after
-    it. The bucket is then emitted on a result that predates the traffic. The timer would have to
-    be tied to each loop's settle, which for one Portkey loop is a setting local to the vendor
-    package that core cannot read.
-*   **Reason for Rejection**: Rejected by author: its safety has no margin and depends on a
-    vendor package's settings.
+The first draft's design: an assertion before the collect, and another after it on every tick.
+
+*   **Pros**: Catches a key that can read a second workspace whose traffic arrived between the
+    check before the collect and the collect itself.
+*   **Cons**: One more request per collect, and a failed assertion throws away a completed
+    collect. Under the one-key rule the case it catches needs Portkey to stop honouring the slug,
+    and the assertion would not see that, because it reads a different endpoint from the data.
+*   **Reason for Rejection**: Rejected by author on 2026-11-26, once a key serves one workspace.
+
+### Alternative Q: Workspace keys only at launch
+
+*   **Pros**: The launch rests only on Portkey binding a workspace key, which Portkey documents
+    and Q9 observed. No organisation-wide credential is held.
+*   **Cons**: A team that can only issue an organisation key cannot be onboarded.
+*   **Reason for Rejection**: Rejected by author: organisation keys are accepted from launch,
+    with their workspace named. Q6 remains the gate, and if it fails the launch falls back to this
+    alternative.
+
+### Alternative R: Stop the install on a duplicate API key
+
+*   **Pros**: The mistake cannot be missed.
+*   **Cons**: One tenant's config mistake stops every tenant at the next rollout.
+*   **Reason for Rejection**: Rejected by author: block the tenants that share the key and page.
+
+### Alternative S: Emit nothing until traffic is seen after every change of leader
+
+The first draft's behaviour for an idle workspace.
+
+*   **Pros**: No state about the scope outlives a leader.
+*   **Cons**: Every rollout stops every idle tenant, including its zero-valued samples, until its
+    workspace has traffic again.
+*   **Reason for Rejection**: Rejected by author: a match is remembered per key and scope.
 
 ### Alternative P: Put the scope policy inside each loop, or in a wrapper around it
 
@@ -1023,16 +1206,16 @@ its id; pods compete for slot leases.
 *   Content minimisation is unchanged. Every guard denies the same content fields. Some of them
     can never be released. A per-loop opt-in can release one of the others, for that pipeline
     only.
-*   Self-telemetry names every tenant and pipeline, and the plan table names every scope id. Both
+*   Self-telemetry names every tenant and pipeline, and the plan table names every scope. Both
     go only to the central team: self-telemetry to `emit.self`, the plan table to CI output.
-*   The config check prints scope ids, URLs and instance ids. None is a secret.
+*   The config check prints scope names and ids, URLs and instance ids. None is a secret.
 
 **Performance.**
 
-*   Expected steady state at 20 tenants with two loops each at a 60-second cadence: under one
-    checkpoint save a second, and about three vendor requests a second. After a restart each
-    tenant makes about 10 requests, paced by its own rate limiter. Q1, Q3 and Q5 test whether one
-    install sustains this.
+*    Expected steady state at 20 tenants with two loops each at a 60-second cadence: under one
+    checkpoint save a second, and between two and three vendor requests a second. After a restart
+    each tenant makes 8 requests in its first minute, paced by its own rate limiter. Q1, Q3 and Q5
+    test whether one install sustains this.
 *   Each pipeline's guard holds its own seen-values set, up to the cardinality budget per metric
     name. Q3 measures the footprint at the full budget.
 
@@ -1044,10 +1227,10 @@ its id; pods compete for slot leases.
 *   A tenant team is told, in a one-page contract: data arrives about ten minutes behind because
     of settle; a gap longer than the lookback is permanent and counted; a rollout of the shared
     install pauses delivery for up to a minute; nothing is emitted before the workspace's first
-    traffic, or after seven days without traffic.
+    traffic under the current key, and after that idle spells are sent as zeros.
 
 
-### Additional Resources
+## Additional Resources
 
 *   `ARCHITECTURE.md`: the frozen interfaces and the decision ledger. This design amends these
     rows:
@@ -1066,20 +1249,25 @@ its id; pods compete for slot leases.
 *   `docs/high-availability.md`, `internal/source/portkey/AGENTS.md`, `followup.md`.
 *   Portkey API key types:
     https://docs.portkey.ai/docs/product/enterprise-offering/org-management/api-keys-authn-and-authz
-*   Portkey analytics parameters:
+*   Portkey analytics parameters (`workspace_slug`, `include_all_workspaces`,
+    `exclude_workspace_slugs`):
     https://docs.portkey.ai/docs/api-reference/admin-api/control-plane/analytics/graphs-time-series-data/get-requests-data
+    and
+    https://docs.portkey.ai/docs/api-reference/admin-api/control-plane/analytics/groups-paginated-data/get-model-grouped-data
+*   `internal/source/portkey/AGENTS.md`, `followup.md` and issue #321 say Portkey ignores
+    workspace targeting. That holds for a workspace key, which is what was probed. It is not
+    known for an organisation key until Q6.
 
-### Future Improvements
+## Future Improvements
 
 *   **Shards**: section 12.
 *   **Re-reading a tenant's secret file on an auth failure** (Alternative M).
 *   **A way to tell which scope an API key belongs to that does not need traffic.** It would let
-    an idle tenant's zero-valued series be emitted.
-*   **A standing check of the vendor behaviour in Q6**: a target on a deliberately wide key that
-    must report mismatched, with an alert if it ever reports matched.
-*   **API keys that cover several scopes**: one target per scope under a wider key, after a live
-    investigation shows every endpoint used honours a scope parameter, including with a bad or
-    missing value.
+    a new tenant emit before its first traffic. Q9 showed a wrong slug is not refused, so this
+    needs another vendor endpoint.
+*   **A standing check of the vendor behaviour in Q6**: a target on an organisation key with a
+    slug for a workspace that has traffic but is not its tenant's, checked against a workspace key
+    for that workspace, with an alert if the two ever differ.
 *   **Scope discovery as a detector**: list scopes, compare with the plan, and signal the ones
     with no target. An operator adds the target.
 *   **Log records in the tenant shape**, after Q7.
@@ -1087,7 +1275,7 @@ its id; pods compete for slot leases.
 *   **Per-tenant governance settings.**
 *   **LangSmith in the tenant shape**, which needs a scope assertion for that source.
 *   **Retiring the legacy `expected_workspace` check**, by giving the legacy shape an optional
-    scope id that uses the gate.
+    scope that uses the gate.
 *   **An offline prune of orphaned checkpoint keys.**
 *   **A Kubernetes operator and a tenant resource**, only if an outside system must add tenants
     without a reviewed config change.
@@ -1104,11 +1292,11 @@ this document: it is written into the issues.
 | 2 | Tenant and pipeline labels in self-telemetry | The labels and log attributes of section 8, goal G4 | Q1 and Q2 pass |
 | 3a | The plan package and the config check's output | Section 3 | Unit 2 |
 | 3b | The three passes of assembly and the two factories | Sections 4, 5.2 and 6 | Unit 3a |
-| 4 | The scope gate | Section 5.1 and its signals in section 8 | Unit 3b; Q6 passes |
+| 4 | The scope gate, the slug on every request and the remembered match | Sections 5.1 and 7 and their signals in section 8 | Unit 3b. Q6 decides whether organisation keys are accepted, not whether the unit lands. |
 | 5a | The race detector on the acceptance recipe | Verification | Unit 3b |
 | 5b | The release gate and the isolation tests | Section 5.3, goals G2 and G5, the run-time cases of G3 | Units 4 and 5a |
 | 6a | The tenant config schema and its load rules | Section 2 (load phase), goal G9 | Unit 3b |
-| 6b | Resolving, secrets and assembly for tenant rows | Sections 2 (resolve and assemble phases), 7 and 9, goal G8 | Units 5b and 6a; Q3 and Q5 pass |
+| 6b | Resolving, secrets, the duplicate-key check and assembly for tenant rows | Sections 2 (resolve and assemble phases), 5.5, 7 and 9, goal G8 | Units 5b and 6a; Q3 and Q5 pass |
 | 6c | The chart | Section 11 | Unit 6a |
 | 6d | Alert rules and the dashboard | The alerts of section 8 | Units 4 and 6b |
 | 6e | Switching the tenant shape on | Goals G1 and G7, the unreadable-secret case of G3, the evidence query of section 5.4, the documentation and the design record | Units 6b, 6c and 6d |

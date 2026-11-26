@@ -11,17 +11,16 @@
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
   "labels": ["dependencies"],
-  "description": "chore(deps) keeps dep bumps out of the release CHANGELOG (release-please hides chore); see CLAUDE.md release ritual. No schedule - PRs open as soon as a release clears minimumReleaseAge; all bumps (including majors) automerge once CI is green. The repo is public, so GitHub-native auto-merge (platformAutomerge) gates on the `ci-success` required status check set by main's branch ruleset, which has no bypass actor. Strong CI/test coverage makes the green pipeline a sufficient guard for major bumps too.",
+  "description": "Dependency bumps commit as chore(deps), which release-please hides from the CHANGELOG, except direct Go module dependencies: config:recommended types production dependencies as fix, so those batches land as fix(deps), appear under Bug Fixes and cut a patch release (deliberate: the shipped binary changed). No schedule - PRs open as soon as a release clears minimumReleaseAge; all bumps (including majors) automerge once CI is green. The repo is public, so GitHub-native auto-merge (platformAutomerge) gates on the `ci-success` required status check set by main's branch ruleset, which has no bypass actor. Strong CI/test coverage makes the green pipeline a sufficient guard for major bumps too.",
   "automerge": true,
   "platformAutomerge": true,
   "automergeStrategy": "squash",
   "internalChecksAsSuccess": true,
-  "ignorePaths": ["**/node_modules/**", "**/vendor/**"],
   "postUpdateOptions": [
     "gomodTidy",
-    "gomodUpdateImportPaths",
-    "gomodVendor"
+    "gomodUpdateImportPaths"
   ],
+  "ignorePaths": ["**/node_modules/**", "**/vendor/**"],
   "internalChecksFilter": "strict",
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
@@ -62,12 +61,12 @@
     },
     {
       "description": "The golang builder image must track go.mod's Go version — bump it with the toolchain, separately from the distroless runtime base.",
-      "matchManagers": ["dockerfile", "gitlabci"],
+      "matchManagers": ["dockerfile"],
       "matchPackageNames": ["golang", "mirror.gcr.io/library/golang"],
       "groupName": "go toolchain (docker base)"
     },
     {
-      "description": "CI actions (Forgejo/GitHub) grouped — they're all major-pinned tags.",
+      "description": "CI actions grouped — they're all major-pinned tags.",
       "matchManagers": ["github-actions"],
       "groupName": "ci actions"
     }

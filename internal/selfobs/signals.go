@@ -9,6 +9,11 @@ package selfobs
 import "github.com/rknightion/genai-otel-bridge/internal/docs/signal"
 
 func selfMetric(name, instrument, unit, desc string, attrs ...string) signal.Signal {
+	// metrics.go creates every counter with no unit (mk has no WithUnit), so a counter's wire unit is
+	// always empty whatever the descriptor passes; record that rather than the "1" the callers write.
+	if instrument == "counter" {
+		unit = ""
+	}
 	return signal.Signal{
 		Plane: signal.PlaneSelf, Type: signal.KindMetric, Source: "selfobs",
 		Name: "genai_otel_bridge_" + name, Instrument: instrument, Unit: unit,

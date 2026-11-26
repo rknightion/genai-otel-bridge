@@ -25,6 +25,8 @@ backend. Keep that ordering when adding to `main`.
   the app-created Lease and the checkpoint ConfigMap via `internal/cleanup.Run`; with the retain flag
   it deletes neither, because the Lease carries the epoch fence the retained checkpoint was written
   under. Needs only `-namespace`. Idempotent (NotFound counts as success).
+- `-version` - prints the ldflags-stamped build version (`version.String()`) and exits. It branches
+  first of the four, before any config or wiring. See the `internal/version` import rule below.
 
 ## Shared HA-object names
 

@@ -3,9 +3,66 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/rknightion/genai-otel-bridge/internal/config/gen/helmgen"
 )
+
+// [#382] the generated chart default config, with only mode: push and a push block layered on top
+// (what a Helm values override does after deep-merge), must validate and not crash-loop.
+func TestPushProfilingWithChartDefaults(t *testing.T) {
+	block, err := helmgen.RenderConfigBlock(reflect.TypeFor[Config](), "config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Config map[string]any `yaml:"config"`
+	}
+	if err := yaml.Unmarshal(block, &doc); err != nil {
+		t.Fatalf("parse rendered block: %v", err)
+	}
+	for _, m := range envRefRe.FindAllStringSubmatch(string(block), -1) {
+		v := "v"
+		if strings.Contains(m[1], "ENDPOINT") || strings.Contains(m[1], "URL") {
+			v = "https://x.example"
+		}
+		t.Setenv(m[1], v)
+	}
+	sub := func(m map[string]any, k string) map[string]any {
+		v, _ := m[k].(map[string]any)
+		if v == nil {
+			v = map[string]any{}
+			m[k] = v
+		}
+		return v
+	}
+	prof := sub(sub(doc.Config, "selfobs"), "profiling")
+	prof["enabled"], prof["mode"] = true, "push"
+	prof["push"] = map[string]any{"endpoint": "https://profiles.example", "instance_id": "1", "token": "t"}
+	raw, err := yaml.Marshal(doc.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(map[string]struct{}{"portkey": {}, "langsmith": {}}); err != nil {
+		t.Fatalf("chart defaults + mode push must validate: %v", err)
+	}
+	// pull mode with no address still defaults to :6060.
+	cfg2, err := LoadBytes([]byte("selfobs:\n  profiling:\n    enabled: true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.Selfobs.Profiling.Pull.Addr != ":6060" {
+		t.Fatalf("pull mode default addr: %q", cfg2.Selfobs.Profiling.Pull.Addr)
+	}
+}
 
 func TestValidateProfiling(t *testing.T) {
 	setEnv(t)

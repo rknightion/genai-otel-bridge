@@ -176,7 +176,8 @@ step.
 Work is tracked in this repository's GitHub issues; they are the only queue. Do not add a checklist
 file such as `ROADMAP.md` beside them.
 
-- A pull request body says how it relates to an issue, on a line of its own: `Closes #N` with the
+- A pull request body says how it relates to an issue, on a line of its own. A contributor writes `Refs #N`
+  and no closing keyword; the forms below are the maintainer's: `Closes #N` with the
   `Acceptance evidence` table from `.github/pull_request_template.md` (one row for each acceptance
   criterion of that issue), `Refs #N` when it only relates to one, or `Task: none, <reason>`.
 - A pull request that changes `.github/workflows/` or `.github/actions/` carries no closing keyword:

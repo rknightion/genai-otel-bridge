@@ -11,7 +11,8 @@ spec:
   # Every scope assertion call for a pipeline in the last 15m ended in an error (result="error": a 5xx, a timeout or an
   # unreadable reply), with no matched, mismatch or unverifiable result beside it. That is a pipeline stuck with no
   # result, which scope_state alone reports as unverified. Held for 30m. Max across replicas (a counter series
-  # per replica); a pipeline with no data is healthy.
+  # per replica); a pipeline with no data is healthy. SeedScope creates all four result series at 0 for a pipeline with
+  # a scope gate, so increase() sees the first result of each kind (a first match after a run of errors).
   execErrState: Ok
   noDataState: Ok
   for: 30m

@@ -888,3 +888,45 @@ func TestUnscopedRowHasNoGate(t *testing.T) {
 		t.Fatalf("assembly called the vendor: %v", got)
 	}
 }
+
+// scopeSeedTelemetry counts SeedScope calls.
+type scopeSeedTelemetry struct {
+	noopTelemetry
+	mu    sync.Mutex
+	seeds int
+}
+
+func (s *scopeSeedTelemetry) SeedScope() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seeds++
+}
+
+// TestScopeAssertionSeededOnlyForGatedRows: a row with a scope gate has its telemetry seeded with the
+// scope-assertion series (so increase() sees the first result after a run of errors); a row with no
+// scope seeds nothing, which keeps a legacy install's series unchanged.
+func TestScopeAssertionSeededOnlyForGatedRows(t *testing.T) {
+	testSourceTypes = func(reg *source.Registry) {
+		reg.Register("reserved-other", func(config.SourceConfig, source.Deps) (source.Source, error) {
+			return reservedSource{loopName: "other"}, nil
+		})
+	}
+	t.Cleanup(func() { testSourceTypes = nil })
+	for _, tc := range []struct {
+		name  string
+		scope config.ScopeConfig
+		want  int
+	}{{"scoped", config.ScopeConfig{Name: "ws-a", ID: "ws-id-a"}, 1}, {"legacy", config.ScopeConfig{}, 0}} {
+		r := tenantRow("https://vendor.example", "tenant-a", "primary", "https://stack-a.example", "100")
+		r.Source = config.SourceConfig{Type: "reserved-other", Enabled: true, SourceInstance: "fake-src", Scope: tc.scope,
+			Loops: map[string]config.LoopConfig{"other": {Enabled: true, Cadence: config.Duration(time.Minute)}}}
+		tel := &scopeSeedTelemetry{}
+		tf := func(_, _ string) PipelineTelemetry { return tel }
+		if _, err := BuildFromPlan(context.Background(), minimalConfig("https://vendor.example"), tenancy.Plan{Rows: []tenancy.Row{r}}, assemblyCheckpointer(t), coordinate.Noop{}, (&specRecorder{}).factory, tf, Options{}); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if tel.seeds != tc.want {
+			t.Errorf("%s: SeedScope called %d times, want %d", tc.name, tel.seeds, tc.want)
+		}
+	}
+}

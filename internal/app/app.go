@@ -300,6 +300,13 @@ func BuildFromPlan(ctx context.Context, cfg *config.Config, plan tenancy.Plan, c
 			}
 		}
 	}
+	// A row with a scope gate also seeds its scope_assertion_total results at 0, so the scope-assertion-errors
+	// rule's increase() sees the first result after a run of errors. A row with no gate seeds nothing.
+	for _, p := range pipes {
+		if s, ok := p.t.(interface{ SeedScope() }); ok && p.gate != nil {
+			s.SeedScope()
+		}
+	}
 	// Every spec carries its row's telemetry (LoopSpec.Metrics), so the scheduler's own metrics are only
 	// the fallback: the unlabelled hooks.
 	return &App{

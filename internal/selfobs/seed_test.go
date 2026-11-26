@@ -246,3 +246,111 @@ func TestSeedLoopSeedsTheSeriesTheRunnerRecords(t *testing.T) {
 		t.Fatalf("too_old series after seed + one event: %v, want one series {source=portkey-a} stepping 0 -> 1", points)
 	}
 }
+
+// resultsReadByScopeRules is every result value the bundled rules name for scope_assertion_total, with
+// "!=" matchers included: a rule that reads result!="error" reads every other result.
+func resultsReadByScopeRules(t *testing.T) (named []string, negated bool) {
+	t.Helper()
+	files, err := filepath.Glob("../../deploy/grafana/self-obs/*rule-*.yaml")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no rule files found: %v", err)
+	}
+	sel := regexp.MustCompile(`genai_otel_bridge_scope_assertion_total(\{[^}]*\})?`)
+	res := regexp.MustCompile(`\bresult(!=|!~|=~|=)"([^"]*)"`)
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if !strings.Contains(line, "expr:") {
+				continue
+			}
+			for _, m := range sel.FindAllStringSubmatch(line, -1) {
+				rm := res.FindStringSubmatch(m[1])
+				if rm == nil {
+					t.Fatalf("%s reads scope_assertion_total with no result matcher: %s", f, line)
+				}
+				if strings.HasPrefix(rm[1], "!") {
+					negated = true
+				}
+				named = append(named, strings.Split(rm[2], "|")...)
+			}
+		}
+	}
+	sort.Strings(named)
+	return slices.Compact(named), negated
+}
+
+// TestSeedScopeCoversEveryResultTheRulesRead: the scope-assertion-errors rule reads result="error" and
+// result!="error" under increase(), so a series born at its first event would hide that event (the first
+// match after a run of errors). Every result the rules name, and every other one a negated matcher reads,
+// must be seeded, and the seed list is exactly the four results the gate reports.
+func TestSeedScopeCoversEveryResultTheRulesRead(t *testing.T) {
+	named, negated := resultsReadByScopeRules(t)
+	if len(named) == 0 {
+		t.Fatal("no rule reads scope_assertion_total; the check proved nothing")
+	}
+	want := []string{"error", "matched", "mismatch", "unverifiable"}
+	if got := slices.Sorted(slices.Values(alertedScopeResults)); !slices.Equal(got, want) {
+		t.Errorf("seeded scope results %v, want %v", got, want)
+	}
+	for _, n := range named {
+		if !slices.Contains(alertedScopeResults, n) {
+			t.Errorf("a rule reads scope_assertion_total result %q, which SeedScope does not seed", n)
+		}
+	}
+	if negated && len(alertedScopeResults) != len(want) {
+		t.Errorf("a rule reads result!=..., so every result must be seeded")
+	}
+}
+
+// TestSeedScopeSeedsAssertionSeries: SeedScope creates each result at 0 under the attribute set
+// ScopeAssertion records (so the first event is a 0 to 1 step, no second series), a With copy adds tenant
+// and pipeline, and a Metrics nothing seeded exports no scope_assertion series (a legacy install).
+func TestSeedScopeSeedsAssertionSeries(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	m, err := NewMetrics(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect := func() map[string]int64 {
+		var rm metricdata.ResourceMetrics
+		if err := reader.Collect(context.Background(), &rm); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]int64{}
+		for _, sm := range rm.ScopeMetrics {
+			for _, mt := range sm.Metrics {
+				if mt.Name != "genai_otel_bridge_scope_assertion_total" {
+					continue
+				}
+				for _, dp := range mt.Data.(metricdata.Sum[int64]).DataPoints {
+					out[dp.Attributes.Encoded(attribute.DefaultEncoder())] = dp.Value
+				}
+			}
+		}
+		return out
+	}
+	if got := collect(); len(got) != 0 {
+		t.Fatalf("unseeded Metrics exports scope_assertion series %v, want none", got)
+	}
+	p := m.With("tenant-a", "tenant-a.primary")
+	p.SeedScope()
+	got := collect()
+	if len(got) != 4 {
+		t.Fatalf("seeded %v, want exactly 4 results", got)
+	}
+	for _, r := range []string{"matched", "mismatch", "unverifiable", "error"} {
+		if v, ok := got["pipeline=tenant-a.primary,result="+r+",tenant=tenant-a"]; !ok || v != 0 {
+			t.Errorf("result %s: present=%v value=%d, want present at 0", r, ok, v)
+		}
+	}
+	p.ScopeAssertion("matched")
+	got = collect()
+	if len(got) != 4 || got["pipeline=tenant-a.primary,result=matched,tenant=tenant-a"] != 1 {
+		t.Fatalf("after the first match: %v, want the same 4 series with matched at 1", got)
+	}
+}

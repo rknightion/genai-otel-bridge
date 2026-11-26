@@ -325,7 +325,11 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
     size. Cap simultaneous in-flight batches (per-loop single-flight already does this for emit).
   - **Set `GOMEMLIMIT` to (a fraction of) the container memory limit** so Go's GC targets it and
     applies backpressure/GC before the cgroup OOM-kills — graceful degradation, not a hard kill.
-  - **Self-observe** Go memstats (heap in-use, GC) via the OTel SDK and alert approaching the limit.
+  - **Self-observation of heap and limit is not on `main` yet** (open PR #497 adds it); until it lands there
+    is no process memory gauge to alert on, so size the limit from the model above.
+  - **LangSmith runs page cap:** a runs page is held whole in RAM before content is stripped, so the
+    per-page decode cap (`settings.max_response_bytes`, default 32 MiB; an oversize page is a loud decode
+    error) is part of the per-loop bound. It is positive-only today; an upper cap is in PR #497.
   - k8s `requests`/`limits` set from the model; document the formula so the limit and `queue.*`/
     `GOMEMLIMIT` are tuned together.
 - **Cardinality:** every series' label set is bounded and config-declared; guard rejects violations.
@@ -676,8 +680,8 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   content/identifiers (emails, study/doc ids, slugs, error strings) can't leave via a non-label field.
   There is no UUID-shape (or other value-pattern) detection anywhere in `internal/source` — an
   allow-listed key's UUID-valued labels are bounded only by the cardinality budget
-  (`governance.per_metric_cardinality_budget`, default 10k distinct series admitted first per series
-  name), not blocked outright.
+  (`governance.per_metric_cardinality_budget`, default 10k **active** label sets per series name; a set idle for a fixed 1h is evicted and stops
+  counting, #383), not blocked outright.
 - **Content-leak conformance is a RELEASE GATE for any logs/run-index feature (Cdx-C7/A5):** a test
   asserting forbidden fields are neither requested *nor present in the outbound OTLP/log payload* must
   gate release — not deferred — the moment a loop emits logs or run metadata. (Metrics-only v1 that

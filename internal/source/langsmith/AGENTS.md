@@ -55,8 +55,9 @@ The `runs` loop is the exception: it is a forward-only windowed log pull (see be
 - **Pagination is offset/limit with a plain JSON array, no cursor.** Stop on a short page, on the
   `max_sessions` cap (counted and logged), OR on a no-progress page - that last arm defends against
   an offset-ignoring server and is what stops the loop hanging.
-- **Error taxonomy:** 429 to `source.ErrQuotaExceeded` (discard, back off, F34); 401/403/5xx/timeout
-  to a retryable Collect error (no advance, retry next cadence, loud `window_lag`). A 404 on the sole endpoint is a real
+- **Error taxonomy:** 429 to `source.ErrQuotaExceeded` (discard, back off, F34); 5xx/timeout
+  to a retryable Collect error (no advance, retry next cadence, loud `window_lag`); 401/403 is the same
+  error wrapping `source.ErrAuth` (`source.WrapAuth`), so the scheduler backs off [#537]; that includes runs session discovery. A 404 on the sole endpoint is a real
   error, not a capability probe.
 - **Config is package-local** (`langsmith.Config`); nothing leaks into `internal/config` or the Helm
   generator. Knobs and defaults live in `settings.go` / `runs_settings.go` and are surfaced in the

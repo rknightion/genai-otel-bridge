@@ -115,6 +115,8 @@ func TestGroupsCollectAuthErrorFiresHook(t *testing.T) {
 		source.Deps{OnAuthError: func(loop, s string) { auth = append(auth, [2]string{loop, s}) }}, now)
 	if _, err := gl.Collect(context.Background(), model.Watermark{Time: now.Add(-time.Hour)}); err == nil {
 		t.Fatal("all-endpoints-fail (401) must error")
+	} else if !errors.Is(err, source.ErrAuth) {
+		t.Fatalf("all-endpoints-fail with a 401 must wrap source.ErrAuth [#537], got %v", err)
 	}
 	if len(auth) != 1 || auth[0] != [2]string{"groups", "pk-test"} {
 		t.Fatalf("OnAuthError want one (groups,pk-test), got %v", auth)

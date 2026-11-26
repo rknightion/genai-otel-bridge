@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,6 +64,42 @@ func TestRunsCollectAuthErrorFiresHook(t *testing.T) {
 	}
 	if len(auth) != 1 || auth[0] != [2]string{"runs", "ls-test"} {
 		t.Fatalf("OnAuthError want one (runs,ls-test), got %v", auth)
+	}
+}
+
+// TestRunsDiscoveryAuthErrorWrapsErrAuth [#537]: with session_filter and no static session_ids, a 401/403
+// from the discovery /sessions call must wrap source.ErrAuth (so the scheduler backs off) and fire the
+// credential hook once, like the runs/query path.
+func TestRunsDiscoveryAuthErrorWrapsErrAuth(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/sessions" {
+				t.Errorf("only discovery should be called, got %q", r.URL.Path)
+			}
+			w.WriteHeader(status)
+		}))
+		now := time.Date(2026, 6, 20, 2, 0, 0, 0, time.UTC)
+		var auth [][2]string
+		lp, err := newRunsLoop(
+			config.SourceConfig{BaseURL: srv.URL, SourceInstance: "ls-test",
+				Auth: config.AuthConfig{Header: "x-api-key", Value: "k"}},
+			config.LoopConfig{Enabled: true, Cadence: config.Duration(time.Minute), Settings: map[string]string{"session_filter": `eq(name,"x")`}},
+			source.Deps{OnAuthError: func(loop, s string) { auth = append(auth, [2]string{loop, s}) }}, runsTestClient(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lp.now = func() time.Time { return now }
+		_, err = lp.Collect(context.Background(), model.Watermark{})
+		srv.Close()
+		if !errors.Is(err, source.ErrAuth) {
+			t.Fatalf("status %d: discovery failure must wrap source.ErrAuth, got %v", status, err)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("discover sessions status %d", status)) {
+			t.Fatalf("status %d: error text must be kept, got %v", status, err)
+		}
+		if len(auth) != 1 || auth[0] != [2]string{"runs", "ls-test"} {
+			t.Fatalf("status %d: OnAuthError want one (runs,ls-test), got %v", status, auth)
+		}
 	}
 }
 

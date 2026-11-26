@@ -35,6 +35,31 @@ const DegradedBackoff = 10 * time.Minute
 // so acceleration changes timing only, never watermark contiguity. (DESIGN §7a Cdx-C13/F44.)
 const catchupInterval = 2 * time.Second
 
+// Pipeline names the tenant and pipeline a loop belongs to [#521]. The zero value is the legacy
+// shape, where a loop belongs to no tenant and its log lines and limiter keys are as before.
+type Pipeline struct {
+	Tenant, ID string
+}
+
+// LogAttrs returns the slog attributes "tenant", Tenant, "pipeline", ID when ID is set, else nil, so
+// a legacy loop's log lines are unchanged.
+func (p Pipeline) LogAttrs() []any {
+	if p.ID == "" {
+		return nil
+	}
+	return []any{"tenant", p.Tenant, "pipeline", p.ID}
+}
+
+// limitKey is a scheduler limiter key: "<kind>:<loop>", or "<kind>:<pipeline id>:<loop>" when the
+// pipeline is set, so one tenant's failing loop cannot suppress another tenant's same-named loop's
+// warning [#521].
+func (p Pipeline) limitKey(kind, loop string) string {
+	if p.ID == "" {
+		return kind + ":" + loop
+	}
+	return kind + ":" + p.ID + ":" + loop
+}
+
 type LoopSpec struct {
 	Runner      *LoopRunner
 	Loop        source.Loop
@@ -44,6 +69,11 @@ type LoopSpec struct {
 	// catch-up backlog (more than one window behind). MaxCatchupPerTick bounds the catch-up burst.
 	Window            time.Duration
 	MaxCatchupPerTick int
+	// Metrics records this loop's ticks; nil means the scheduler's own [#521]. In the tenant shape it
+	// is the pipeline's labelled copy, so the scheduler's series carry tenant and pipeline.
+	Metrics Metrics
+	// Pipeline is the tenant and pipeline the loop belongs to; zero in the legacy shape [#521].
+	Pipeline Pipeline
 }
 
 // Scheduler drives the per-loop tick→collect→enqueue cycle. The runner owns the checkpoint
@@ -54,7 +84,8 @@ type Scheduler struct {
 	beat  func() // [AR-H-beat] heartbeat hook, fed each tick attempt; wired to selfobs.Health.Beat
 	// lim throttles the per-tick warn lines (collect/checkpoint failures) to ≤1/min per loop so a
 	// flapping upstream doesn't spam stdout; the metric counters carry the true rate. Keys are
-	// "collect:<loop>" / "checkpoint_load:<loop>" — disjoint from the runner's keyspace.
+	// "collect:<loop>" / "checkpoint_load:<loop>", with the pipeline id before the loop when a spec
+	// has one ("collect:<pipeline>:<loop>", #521) — disjoint from the runner's keyspace.
 	lim *logging.Limiter
 }
 
@@ -206,6 +237,11 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	}
 	id := MetricsLoopID(sp.Loop) // [#387] {source, loop}: same-named loop instances keep distinct series
 	name := id.Loop
+	m := s.m
+	if sp.Metrics != nil {
+		m = sp.Metrics // [#521] the pipeline's own (labelled) metrics
+	}
+	pattrs := sp.Pipeline.LogAttrs() // [#521] nil in the legacy shape
 	// [followup §4] One span per tick covering the SYNCHRONOUS work (collect → enqueue). The async emit
 	// runs in the runner's worker (decoupled via the queue), so it is NOT in this span — it is covered by
 	// emit_errors_total + the upstream-request histogram; cross-queue span propagation is a future path.
@@ -227,9 +263,9 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 			span.SetAttributes(attribute.String("outcome", "cancelled"))
 			return tickOutcome{}
 		}
-		s.m.EmitError(id, "checkpoint_load")
-		if s.lim.Allow("checkpoint_load:" + name) {
-			slog.Warn("checkpoint load failed; skipping tick", "loop", name, "err", err)
+		m.EmitError(id, "checkpoint_load")
+		if s.lim.Allow(sp.Pipeline.limitKey("checkpoint_load", name)) {
+			slog.Warn("checkpoint load failed; skipping tick", append([]any{"loop", name, "err", err}, pattrs...)...)
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "checkpoint_load")
@@ -238,7 +274,7 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	if !wm.Time.IsZero() {
 		// [AR-C6] window_lag floors at ~bucket_settle+cadence (we never emit unsettled buckets), so
 		// staleness alerts must be thresholded ABOVE that baseline, not at zero (deploy README).
-		s.m.WindowLag(id, now.Sub(wm.Time))
+		m.WindowLag(id, now.Sub(wm.Time))
 	}
 	// [AR-C6] Count an abandoned-as-unstorable span (older than the backend accept window) ONCE — the
 	// source clamps its start to the same floor and the runner's commit(until) advances past it, so
@@ -253,21 +289,21 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 		// of magnitude. The runner records the last-counted floor per frontier so the initial gap is
 		// counted once and only ~cadence is added per subsequent stuck tick.
 		if mins := sp.Runner.BackfillUnstorableMinutes(wm.Time, floor); mins > 0 {
-			s.m.SamplesSkipped(id, "backfill_unstorable", mins)
+			m.SamplesSkipped(id, "backfill_unstorable", mins)
 		}
 	}
 	batch, err := sp.Loop.Collect(ctx, wm)
 	switch {
 	case errors.Is(err, source.ErrQuotaExceeded):
 		// Discard, no advance (F34); the tick loop stretches the wait while the streak lasts [#370].
-		s.m.SamplesSkipped(id, "quota_exceeded", 1)
+		m.SamplesSkipped(id, "quota_exceeded", 1)
 		span.SetAttributes(attribute.String("outcome", "quota_exceeded"))
 		return tickOutcome{quota: true}
 	case errors.Is(err, source.ErrGranularityUnexpected):
 		// [Cdx-M5] A granularity flip is alertable + no-advance (F27). Degrade the loop so the scheduler
 		// backs off to degradedBackoff (10m) instead of re-pulling every cadence and hammering the source
 		// with the same loud error; a later good collect+save clears the degrade (commit resets it).
-		s.m.EmitError(id, "granularity_unexpected")
+		m.EmitError(id, "granularity_unexpected")
 		sp.Runner.Degrade("granularity_unexpected")
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "granularity_unexpected")
@@ -281,9 +317,9 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 		// An auth failure (401/403, source.ErrAuth) is still a counted collect error, but the tick loop
 		// stretches the wait like a quota streak so a bad key does not spend the request budget [#537].
 		auth := errors.Is(err, source.ErrAuth)
-		s.m.EmitError(id, "collect")
-		if s.lim.Allow("collect:" + name) {
-			slog.Warn("collect failed", "loop", name, "err", err)
+		m.EmitError(id, "collect")
+		if s.lim.Allow(sp.Pipeline.limitKey("collect", name)) {
+			slog.Warn("collect failed", append([]any{"loop", name, "err", err}, pattrs...)...)
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "collect")
@@ -302,7 +338,7 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	)
 	// Per-tick detail for bring-up (Debug — silent at the default info level). Not rate-limited: it only
 	// fires when debug is explicitly enabled, and a steady cadence makes it self-bounding.
-	slog.Debug("tick collected", "loop", name, "since", wm.Time, "samples", len(batch.Samples), "logs", len(batch.Logs))
+	slog.Debug("tick collected", append([]any{"loop", name, "since", wm.Time, "samples", len(batch.Samples), "logs", len(batch.Logs)}, pattrs...)...)
 	// [Cdx-C13/F44] Backlog detection: a windowed loop whose just-collected `until` (batch.Watermark.Time)
 	// is still more than one window behind `now` has further windows to drain → signal catch-up. A backlog
 	// only exists when max_backfill > window (e.g. raised per GS2); at steady state the lag is ~settle <

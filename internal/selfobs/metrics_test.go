@@ -4,14 +4,18 @@ package selfobs
 
 import (
 	"context"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"runtime/debug"
+	"slices"
+	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -469,5 +473,261 @@ func TestPartialRejectCounterExistsAtZeroForBothPlanes(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("want exactly the two plane series, got %v", got)
+	}
+}
+
+// --- [#521] tenant and pipeline labels (With) ---
+
+// legacyLabelKeys is every self-metric's attribute key set when no With copy carries labels: the label
+// sets a legacy install exports today, written out by name. With("", "") must record exactly these.
+var legacyLabelKeys = map[string][]string{
+	"genai_otel_bridge_emitted_total":                           {"loop", "source"},
+	"genai_otel_bridge_emitted_logs_total":                      {"loop", "source"},
+	"genai_otel_bridge_samples_skipped_total":                   {"loop", "reason", "source"},
+	"genai_otel_bridge_emit_errors_total":                       {"kind", "loop", "source"},
+	"genai_otel_bridge_guard_dropped_total":                     {"loop", "source"},
+	"genai_otel_bridge_bucket_revised_after_settle_total":       {"loop"},
+	"genai_otel_bridge_new_label_values_total":                  {"series"},
+	"genai_otel_bridge_samples_capped_total":                    {"loop", "reason", "source"},
+	"genai_otel_bridge_source_capability_total":                 {"graph", "loop", "state"},
+	"genai_otel_bridge_source_data_incomplete_total":            {"loop", "reason"},
+	"genai_otel_bridge_auth_errors_total":                       {"loop", "source"},
+	"genai_otel_bridge_emit_partial_success_rejected_total":     {"plane"},
+	"genai_otel_bridge_last_success_timestamp_seconds":          {"loop", "source"},
+	"genai_otel_bridge_window_lag_seconds":                      {"loop", "source"},
+	"genai_otel_bridge_queue_depth":                             {"loop", "source"},
+	"genai_otel_bridge_loop_degraded":                           {"loop", "reason", "source"},
+	"genai_otel_bridge_leader":                                  {},
+	"genai_otel_bridge_go_heap_inuse_bytes":                     {},
+	"genai_otel_bridge_go_memory_limit_bytes":                   {},
+	"genai_otel_bridge_upstream_request_duration_seconds":       {"method", "status_class", "target"},
+	"genai_otel_bridge_emit_request_duration_seconds":           {"plane", "status_class"},
+	"genai_otel_bridge_bucket_revised_after_settle_age_seconds": {"loop"},
+}
+
+// neverLabelled are the per-process instruments With never labels.
+var neverLabelled = map[string]bool{
+	"genai_otel_bridge_leader":                true,
+	"genai_otel_bridge_go_heap_inuse_bytes":   true,
+	"genai_otel_bridge_go_memory_limit_bytes": true,
+}
+
+// newTestMetrics builds a Metrics on its own manual reader.
+func newTestMetrics(t *testing.T) (*Metrics, *metric.ManualReader) {
+	t.Helper()
+	r := metric.NewManualReader()
+	mp := metric.NewMeterProvider(metric.WithReader(r), metric.WithView(selfHistogramView()))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	m, err := NewMetrics(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, r
+}
+
+// driveAll calls every recording method once, SeedLoop included.
+func driveAll(m *Metrics) {
+	id := loopid.ID{Source: "src-a", Loop: "analytics"}
+	m.SeedLoop(id, "analytics")
+	m.EmittedSamples(id, 1)
+	m.EmittedLogs(id, 1)
+	m.SamplesSkipped(id, "too_old", 1)
+	m.EmitError(id, "collect")
+	m.GuardDropped(id, 1)
+	m.BucketRevisedAfterSettle("analytics", time.Minute)
+	m.NewLabelValue("series-a")
+	m.SamplesCapped(id, 1)
+	m.SourceCapability("analytics", "graph-a", "no-data")
+	m.SourceDataIncomplete("analytics", "window_truncated")
+	m.AuthError("analytics", "src-a")
+	m.QueueDepth(id, 1)
+	m.LastSuccess(id, time.Unix(1700, 0))
+	m.WindowLag(id, time.Minute)
+	m.LoopDegraded(id, "terminal emit reject", true)
+	m.ObserveEmitRequest("metrics", 200, nil, time.Second)
+	m.ObserveEmitPartialReject("logs", 2)
+	m.ObserveUpstreamRequest("upstream.example", "GET", 200, nil, time.Second)
+	m.SetLeader(true)
+}
+
+// seriesByName collects every data point's attribute set, keyed by instrument name.
+func seriesByName(t *testing.T, r metric.Reader) map[string][]attribute.Set {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := r.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]attribute.Set{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			switch d := m.Data.(type) {
+			case metricdata.Sum[int64]:
+				for _, dp := range d.DataPoints {
+					out[m.Name] = append(out[m.Name], dp.Attributes)
+				}
+			case metricdata.Gauge[float64]:
+				for _, dp := range d.DataPoints {
+					out[m.Name] = append(out[m.Name], dp.Attributes)
+				}
+			case metricdata.ExponentialHistogram[float64]:
+				for _, dp := range d.DataPoints {
+					out[m.Name] = append(out[m.Name], dp.Attributes)
+				}
+			case metricdata.Histogram[float64]:
+				for _, dp := range d.DataPoints {
+					out[m.Name] = append(out[m.Name], dp.Attributes)
+				}
+			default:
+				t.Fatalf("%s: unexpected data type %T", m.Name, m.Data)
+			}
+		}
+	}
+	return out
+}
+
+func sortedLabelKeys(s attribute.Set) []string {
+	keys := []string{}
+	for _, kv := range s.ToSlice() {
+		keys = append(keys, string(kv.Key))
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func encodedSets(sets []attribute.Set) []string {
+	out := make([]string, 0, len(sets))
+	for _, s := range sets {
+		out = append(out, s.Encoded(attribute.DefaultEncoder()))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestWithAddsTenantAndPipeline [#521]: two copies with one LoopID and different pipelines record two
+// window_lag_seconds series that differ in pipeline, so two tenants' same-named loops never share one.
+func TestWithAddsTenantAndPipeline(t *testing.T) {
+	m, r := newTestMetrics(t)
+	id := loopid.ID{Source: "src-a", Loop: "analytics"}
+	m.With("t1", "t1.a").WindowLag(id, time.Minute)
+	m.With("t1", "t1.b").WindowLag(id, 2*time.Minute)
+
+	got := encodedSets(seriesByName(t, r)["genai_otel_bridge_window_lag_seconds"])
+	want := []string{
+		"loop=analytics,pipeline=t1.a,source=src-a,tenant=t1",
+		"loop=analytics,pipeline=t1.b,source=src-a,tenant=t1",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("window_lag_seconds series = %q, want %q", got, want)
+	}
+}
+
+// TestWithEmptyMatchesUnlabelled [#521]: With("", "") records the legacy label sets, key for key and
+// value for value, on every instrument, so the legacy shape exports exactly what it exports today.
+func TestWithEmptyMatchesUnlabelled(t *testing.T) {
+	base, baseR := newTestMetrics(t)
+	driveAll(base)
+	m, r := newTestMetrics(t)
+	driveAll(m.With("", ""))
+
+	got, want := seriesByName(t, r), seriesByName(t, baseR)
+	if len(got) != len(legacyLabelKeys) {
+		t.Errorf("With(\"\", \"\") recorded %d instruments, want the %d pinned ones", len(got), len(legacyLabelKeys))
+	}
+	for name, keys := range legacyLabelKeys {
+		sets, ok := got[name]
+		if !ok {
+			t.Errorf("%s: no series recorded", name)
+			continue
+		}
+		for _, s := range sets {
+			if k := sortedLabelKeys(s); !slices.Equal(k, keys) {
+				t.Errorf("%s: label keys %v, want %v", name, k, keys)
+			}
+		}
+		if g, w := encodedSets(sets), encodedSets(want[name]); !slices.Equal(g, w) {
+			t.Errorf("%s: With(\"\", \"\") series %q differ from the receiver's %q", name, g, w)
+		}
+	}
+}
+
+// TestWithLabelsEveryPerPipelineSeries [#521]: a copy with a tenant and a pipeline adds both labels to
+// every series it records, SeedLoop's included, and never to leader or the two memory gauges.
+func TestWithLabelsEveryPerPipelineSeries(t *testing.T) {
+	m, r := newTestMetrics(t)
+	driveAll(m.With("t1", "t1.a"))
+
+	got := seriesByName(t, r)
+	for name, legacy := range legacyLabelKeys {
+		sets := got[name]
+		if len(sets) == 0 {
+			t.Errorf("%s: no series recorded", name)
+			continue
+		}
+		want := legacy
+		if !neverLabelled[name] {
+			want = slices.Sorted(slices.Values(append(slices.Clone(legacy), "tenant", "pipeline")))
+		}
+		labelled := 0
+		for _, s := range sets {
+			k := sortedLabelKeys(s)
+			// The receiver's own unlabelled partial-reject seeds (NewMetrics) stay beside the copy's.
+			if name == "genai_otel_bridge_emit_partial_success_rejected_total" && slices.Equal(k, legacy) {
+				continue
+			}
+			if !slices.Equal(k, want) {
+				t.Errorf("%s: label keys %v, want %v", name, k, want)
+				continue
+			}
+			labelled++
+			if neverLabelled[name] {
+				continue
+			}
+			if v, _ := s.Value("tenant"); v.AsString() != "t1" {
+				t.Errorf("%s: tenant=%q, want t1", name, v.AsString())
+			}
+			if v, _ := s.Value("pipeline"); v.AsString() != "t1.a" {
+				t.Errorf("%s: pipeline=%q, want t1.a", name, v.AsString())
+			}
+		}
+		if labelled == 0 {
+			t.Errorf("%s: no series under %v", name, want)
+		}
+	}
+}
+
+// TestWithSeedsPartialRejectAtZero [#521]: a copy with a pipeline creates both plane series of
+// emit_partial_success_rejected_total at 0 under its labels (as NewMetrics does unlabelled, #499), so
+// the pipeline's first rejection is a measurable increase. With("", "") adds no series.
+func TestWithSeedsPartialRejectAtZero(t *testing.T) {
+	const name = "genai_otel_bridge_emit_partial_success_rejected_total"
+	m, r := newTestMetrics(t)
+	m.With("t1", "t1.a")
+	var rm metricdata.ResourceMetrics
+	if err := r.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, mm := range sm.Metrics {
+			if mm.Name != name {
+				continue
+			}
+			for _, dp := range mm.Data.(metricdata.Sum[int64]).DataPoints {
+				got[dp.Attributes.Encoded(attribute.DefaultEncoder())] = dp.Value
+			}
+		}
+	}
+	want := map[string]int64{
+		"plane=metrics": 0, "plane=logs": 0,
+		"pipeline=t1.a,plane=metrics,tenant=t1": 0, "pipeline=t1.a,plane=logs,tenant=t1": 0,
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("%s series = %v, want %v", name, got, want)
+	}
+
+	m2, r2 := newTestMetrics(t)
+	m2.With("", "")
+	if n := len(seriesByName(t, r2)[name]); n != 2 {
+		t.Fatalf("With(\"\", \"\") must add no partial-reject series: got %d, want the 2 unlabelled", n)
 	}
 }

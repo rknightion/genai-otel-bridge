@@ -42,6 +42,14 @@ never add a data-derived value. The hook-fed counters (`bucket_revised_after_set
 `source_capability`, `source_data_incomplete`) still carry only `loop`; `auth_errors_total` already
 carries `source` with the same meaning.
 
+`(*Metrics).With(tenant, pipeline)` (#521) returns a copy that shares the instruments and appends
+`tenant` and `pipeline`, each only when non-empty, to every series it records: the per-loop
+instruments, the hook-fed counters, `new_label_values_total`, the two request histograms and
+`emit_partial_success_rejected_total`. `leader` and the two memory gauges are per process and never
+labelled. `With("", "")` records exactly the receiver's label sets, which is what keeps a legacy install's
+series unchanged (`TestWithEmptyMatchesUnlabelled`). Both labels appear only in the tenant shape, and
+`signals.go` lists them on every instrument except those three.
+
 ## `signals.go` is a gate, not documentation
 
 It is the static catalogue the docs generator renders into `docs/telemetry.md`, and
@@ -97,6 +105,10 @@ reading an unseeded reason, or a seeded reason no rule reads, fails. Edit the se
 emit-failing rule reads (`alertedEmitKinds`), and `auth_errors_total` under the hook's `{loop, source}` (source =
 the runner identity's Source). `TestSeededEmitKindsAndAuthMatchBundledAlertRules` fails on a rule reading an
 unseeded kind or adding a source matcher to the auth rule.
+
+On a `With` copy, `SeedLoop` seeds under the copy's `tenant` and `pipeline` too, and `With` with a
+non-empty pipeline seeds that pipeline's two `emit_partial_success_rejected_total` plane series at 0, as
+`NewMetrics` does for the unlabelled ones (#521).
 
 ## Logs do not take the OTLP path
 

@@ -49,7 +49,11 @@ type LoopRunner struct {
 	// lim throttles the runner's warn lines (retryable-exhausted emit, checkpoint-save fail, skip-with-gap)
 	// to ≤1/min per key so a stuck loop doesn't spam stdout; the metric counters carry the true rate. Keys
 	// are "retry:<loop>" / "save:<loop>" / "skip:<loop>:<reason>" — disjoint from the scheduler's keyspace.
+	// The limiter is per runner, so its keys need no pipeline id.
 	lim *logging.Limiter
+	// pattrs are the pipeline's log attributes (tenant, pipeline) appended to every log line; nil in the
+	// legacy shape [#521].
+	pattrs []any
 
 	mu            sync.Mutex
 	busy          bool            // a batch is collected-but-not-yet-saved
@@ -67,7 +71,16 @@ type LoopRunner struct {
 	backfillCountedFloor time.Time
 }
 
-func NewLoopRunner(loop source.Loop, em emit.Emitter, cp checkpoint.Checkpointer, guard *source.Guard, queueDepth int, maxDPM int, m Metrics) *LoopRunner {
+// RunnerOption configures a LoopRunner beyond NewLoopRunner's positional parameters [#521].
+type RunnerOption func(*LoopRunner)
+
+// WithPipeline makes the runner's log lines carry the pipeline's tenant and pipeline attributes
+// (Pipeline.LogAttrs) [#521]. A zero Pipeline adds nothing.
+func WithPipeline(p Pipeline) RunnerOption {
+	return func(r *LoopRunner) { r.pattrs = p.LogAttrs() }
+}
+
+func NewLoopRunner(loop source.Loop, em emit.Emitter, cp checkpoint.Checkpointer, guard *source.Guard, queueDepth int, maxDPM int, m Metrics, opts ...RunnerOption) *LoopRunner {
 	if queueDepth < 1 {
 		queueDepth = 1
 	}
@@ -75,8 +88,15 @@ func NewLoopRunner(loop source.Loop, em emit.Emitter, cp checkpoint.Checkpointer
 		maxDPM = 1
 	}
 	id := MetricsLoopID(loop)
-	return &LoopRunner{loop: loop, em: em, cp: cp, guard: guard, q: make(chan queuedBatch, queueDepth), m: m, id: id, name: id.Loop, maxDPM: maxDPM, lim: logging.NewLimiter(time.Minute)}
+	r := &LoopRunner{loop: loop, em: em, cp: cp, guard: guard, q: make(chan queuedBatch, queueDepth), m: m, id: id, name: id.Loop, maxDPM: maxDPM, lim: logging.NewLimiter(time.Minute)}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
+
+// logArgs is kv followed by the pipeline's log attributes [#521].
+func (r *LoopRunner) logArgs(kv ...any) []any { return append(kv, r.pattrs...) }
 
 // Busy reports a collected-but-unsaved batch is in flight — the scheduler skips the tick. [CP-C1]
 func (r *LoopRunner) Busy() bool { r.mu.Lock(); defer r.mu.Unlock(); return r.busy }
@@ -261,7 +281,7 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 		case isAdvancePast(err): // duplicate-timestamp / too-old / 413: known sample-reject → skip-with-gap
 			r.m.SamplesSkipped(r.id, rejectReason(err), len(sub.Samples))
 			if r.lim.Allow("skip:" + r.name + ":" + rejectReason(err)) {
-				slog.Warn("samples skipped (advancing past, counted gap)", "loop", r.name, "reason", rejectReason(err), "count", len(sub.Samples))
+				slog.Warn("samples skipped (advancing past, counted gap)", r.logArgs("loop", r.name, "reason", rejectReason(err), "count", len(sub.Samples))...)
 			}
 			frontier, advanced = bucketTime, true
 		case isTerminalHalt(err): // [CP-C7/C8] bad-encoding OR unknown request-level 400 → degrade, no advance
@@ -289,7 +309,7 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 			}
 			r.m.EmitError(r.id, "retryable_exhausted")
 			if r.lim.Allow("retry:" + r.name) {
-				slog.Warn("emit failed after retries; will re-pull next tick", "loop", r.name)
+				slog.Warn("emit failed after retries; will re-pull next tick", r.logArgs("loop", r.name)...)
 			}
 			if advanced {
 				r.commit(leaderCtx, b.Key, frontier, "", epoch) // [round3-#2] interior bucket → empty cursor
@@ -341,7 +361,7 @@ func (r *LoopRunner) processLogs(leaderCtx context.Context, b model.Batch) bool 
 	case isAdvancePast(err): // known per-record reject → skip-with-gap, advance
 		r.m.SamplesSkipped(r.id, rejectReason(err), len(kept))
 		if r.lim.Allow("skip:" + r.name + ":" + rejectReason(err)) {
-			slog.Warn("log records skipped (advancing past, counted gap)", "loop", r.name, "reason", rejectReason(err), "count", len(kept))
+			slog.Warn("log records skipped (advancing past, counted gap)", r.logArgs("loop", r.name, "reason", rejectReason(err), "count", len(kept))...)
 		}
 		return true
 	case isTerminalHalt(err): // [CP-C7/C8] bad-encoding / unknown 4xx → degrade, no advance
@@ -354,7 +374,7 @@ func (r *LoopRunner) processLogs(leaderCtx context.Context, b model.Batch) bool 
 		}
 		r.m.EmitError(r.id, "retryable_exhausted")
 		if r.lim.Allow("retry:" + r.name) {
-			slog.Warn("emit failed after retries; will re-pull next tick (logs)", "loop", r.name)
+			slog.Warn("emit failed after retries; will re-pull next tick (logs)", r.logArgs("loop", r.name)...)
 		}
 		return false
 	}
@@ -396,9 +416,9 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 			if r.saveFails >= checkpointFailThreshold && !r.degraded {
 				r.degraded, r.degradeReason = true, "checkpoint-save failures"
 				r.m.LoopDegraded(r.id, r.degradeReason, true) // [#120] this path sets degraded directly, so route the gauge too
-				slog.Error("loop degraded: repeated checkpoint-save failures", "loop", r.name, "fails", r.saveFails)
+				slog.Error("loop degraded: repeated checkpoint-save failures", r.logArgs("loop", r.name, "fails", r.saveFails)...)
 			} else if r.lim.Allow("save:" + r.name) {
-				slog.Warn("checkpoint save failed", "loop", r.name, "fails", r.saveFails)
+				slog.Warn("checkpoint save failed", r.logArgs("loop", r.name, "fails", r.saveFails)...)
 			}
 			return false
 		}
@@ -416,7 +436,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 				span.SetAttributes(attribute.String("outcome", "fenced"))
 				r.m.EmitError(r.id, "checkpoint_fenced")
 				slog.Warn("checkpoint forward-write fenced (stale-epoch or concurrent leader); not advancing",
-					"loop", r.name, "attempted", w.Time, "durable", stored.Time, "epoch", epoch, "durable_epoch", stored.Epoch)
+					r.logArgs("loop", r.name, "attempted", w.Time, "durable", stored.Time, "epoch", epoch, "durable_epoch", stored.Epoch)...)
 				// [#367] A fenced loop is stuck until the epoch situation changes, so back off instead of
 				// re-collecting and re-emitting the same window at full cadence. commit holds r.mu, so set the
 				// state directly (as the checkpoint-save-failures path does). A later successful commit clears
@@ -424,7 +444,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 				if !r.degraded {
 					r.degraded, r.degradeReason = true, "checkpoint fenced"
 					r.m.LoopDegraded(r.id, r.degradeReason, true)
-					slog.Error("loop degraded (loud halt, scheduler will back off)", "loop", r.name, "reason", r.degradeReason)
+					slog.Error("loop degraded (loud halt, scheduler will back off)", r.logArgs("loop", r.name, "reason", r.degradeReason)...)
 				}
 			}
 			r.frontier, r.hasFront = stored, true
@@ -445,7 +465,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 		// stdout (commit already logs under r.mu, so this is consistent). Uniform across samples + logs
 		// loops since both reach commit. Re-armed by Reset on (re-)election.
 		r.firstOK = true
-		slog.Info("loop committed first watermark advance (leader healthy)", "loop", r.name, "watermark", w.Time)
+		slog.Info("loop committed first watermark advance (leader healthy)", r.logArgs("loop", r.name, "watermark", w.Time)...)
 	}
 	// Mirror the durable advance in memory so Since() never trails it. Update on a forward Time OR a
 	// same-Time CURSOR advance to a NON-EMPTY cursor (a logs-export job step within a window) — matching
@@ -482,7 +502,7 @@ func (r *LoopRunner) enterDegraded(reason string) {
 	if !r.degraded {
 		r.degraded, r.degradeReason = true, reason
 		r.m.LoopDegraded(r.id, reason, true) // [#120] queryable non-flapping state gauge
-		slog.Error("loop degraded (loud halt, scheduler will back off)", "loop", r.name, "reason", reason)
+		slog.Error("loop degraded (loud halt, scheduler will back off)", r.logArgs("loop", r.name, "reason", reason)...)
 	}
 }
 

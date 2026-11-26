@@ -8,6 +8,7 @@ import (
 	"math"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -23,6 +24,9 @@ type Metrics struct {
 	partialRejected                                                                                                                  metric.Int64Counter
 	lastSuccess, windowLag, queueDepth, loopDegraded, leader                                                                         metric.Float64Gauge
 	upstreamDur, revisedAge, emitDur                                                                                                 metric.Float64Histogram
+	// extra are the pipeline labels (tenant, pipeline) a With copy appends to every per-pipeline series
+	// [#521]. Empty on the value NewMetrics returns and on With("", ""), so the legacy label sets hold.
+	extra []attribute.KeyValue
 }
 
 func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
@@ -114,6 +118,31 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	return m, err
 }
 
+// With returns a copy that shares every instrument and appends tenant and pipeline, each only when
+// non-empty, to every per-pipeline series it records [#521]. With("", "") records exactly the receiver's
+// label sets. leader and the two memory gauges are per process and never labelled. A copy with a
+// pipeline creates its emit_partial_success_rejected_total series at 0 for both planes, as NewMetrics
+// does for the unlabelled ones (#499), so the pipeline's first rejection is a measurable increase.
+func (m *Metrics) With(tenant, pipeline string) *Metrics {
+	c := *m
+	c.extra = slices.Clone(m.extra)
+	if tenant != "" {
+		c.extra = append(c.extra, attribute.String("tenant", tenant))
+	}
+	if pipeline != "" {
+		c.extra = append(c.extra, attribute.String("pipeline", pipeline))
+		for _, plane := range []string{"metrics", "logs"} {
+			c.partialRejected.Add(context.Background(), 0, c.attrs(attribute.String("plane", plane)))
+		}
+	}
+	return &c
+}
+
+// attrs is a measurement option of kv plus the copy's pipeline labels.
+func (m *Metrics) attrs(kv ...attribute.KeyValue) metric.MeasurementOption {
+	return metric.WithAttributes(append(kv, m.extra...)...)
+}
+
 // SetLeader records this replica's leadership: 1 while it holds the lease, 0 otherwise. Unlike the
 // per-loop gauges (recorded only by the scheduler, which only a leader runs), every replica calls
 // this, so a standby is visible. NewMetrics records the initial 0.
@@ -146,79 +175,81 @@ var (
 // emit_errors_total is seeded under the runner's {source, loop, kind} for the kinds the emit-failing rule
 // reads, and auth_errors_total under the hook's {loop, source} (#517; the auth rule has no label matcher,
 // so every loop's series is read, and source is the runner identity's Source, as the hooks pass it).
+// On a With copy every seed also carries the copy's tenant and pipeline [#521], the labels the copy's
+// producers record under.
 func (m *Metrics) SeedLoop(id loopid.ID, hookLoop string) {
 	ctx := context.Background()
 	for _, reason := range alertedIncompleteReasons {
-		m.sourceDataIncomplete.Add(ctx, 0, metric.WithAttributes(
+		m.sourceDataIncomplete.Add(ctx, 0, m.attrs(
 			attribute.String("loop", hookLoop), attribute.String("reason", reason)))
 	}
 	for _, reason := range alertedSkipReasons {
-		m.skipped.Add(ctx, 0, idAttrs(id, attribute.String("reason", reason)))
+		m.skipped.Add(ctx, 0, m.idAttrs(id, attribute.String("reason", reason)))
 	}
 	for _, kind := range alertedEmitKinds {
-		m.emitErr.Add(ctx, 0, idAttrs(id, attribute.String("kind", kind)))
+		m.emitErr.Add(ctx, 0, m.idAttrs(id, attribute.String("kind", kind)))
 	}
-	m.authErr.Add(ctx, 0, metric.WithAttributes(
+	m.authErr.Add(ctx, 0, m.attrs(
 		attribute.String("loop", hookLoop), attribute.String("source", id.Source)))
 }
 
-func loopAttr(loop string) metric.MeasurementOption {
-	return metric.WithAttributes(attribute.String("loop", loop))
+func (m *Metrics) loopAttr(loop string) metric.MeasurementOption {
+	return m.attrs(attribute.String("loop", loop))
 }
 
 // idAttrs are the per-loop-instance attributes [#387]: source (the configured source_instance) and
 // loop. Both are configuration-bounded, so two same-named loop instances keep distinct series without
-// opening the label set to data.
-func idAttrs(id loopid.ID, extra ...attribute.KeyValue) metric.MeasurementOption {
-	return metric.WithAttributes(append([]attribute.KeyValue{
+// opening the label set to data. A With copy's tenant and pipeline follow them [#521].
+func (m *Metrics) idAttrs(id loopid.ID, extra ...attribute.KeyValue) metric.MeasurementOption {
+	return m.attrs(append([]attribute.KeyValue{
 		attribute.String("source", id.Source), attribute.String("loop", id.Loop)}, extra...)...)
 }
 
 func (m *Metrics) EmittedSamples(id loopid.ID, n int) {
-	m.emitted.Add(context.Background(), int64(n), idAttrs(id))
+	m.emitted.Add(context.Background(), int64(n), m.idAttrs(id))
 }
 func (m *Metrics) EmittedLogs(id loopid.ID, n int) {
-	m.emittedLogs.Add(context.Background(), int64(n), idAttrs(id))
+	m.emittedLogs.Add(context.Background(), int64(n), m.idAttrs(id))
 }
 func (m *Metrics) SamplesSkipped(id loopid.ID, reason string, n int) {
-	m.skipped.Add(context.Background(), int64(n), idAttrs(id, attribute.String("reason", reason)))
+	m.skipped.Add(context.Background(), int64(n), m.idAttrs(id, attribute.String("reason", reason)))
 }
 func (m *Metrics) EmitError(id loopid.ID, kind string) {
-	m.emitErr.Add(context.Background(), 1, idAttrs(id, attribute.String("kind", kind)))
+	m.emitErr.Add(context.Background(), 1, m.idAttrs(id, attribute.String("kind", kind)))
 }
 func (m *Metrics) GuardDropped(id loopid.ID, n int) {
-	m.guardDropped.Add(context.Background(), int64(n), idAttrs(id))
+	m.guardDropped.Add(context.Background(), int64(n), m.idAttrs(id))
 }
 func (m *Metrics) BucketRevisedAfterSettle(loop string, age time.Duration) {
-	m.revised.Add(context.Background(), 1, loopAttr(loop))
-	m.revisedAge.Record(context.Background(), age.Seconds(), loopAttr(loop))
+	m.revised.Add(context.Background(), 1, m.loopAttr(loop))
+	m.revisedAge.Record(context.Background(), age.Seconds(), m.loopAttr(loop))
 }
 func (m *Metrics) NewLabelValue(series string) {
-	m.newLabel.Add(context.Background(), 1, metric.WithAttributes(attribute.String("series", series)))
+	m.newLabel.Add(context.Background(), 1, m.attrs(attribute.String("series", series)))
 }
 func (m *Metrics) SamplesCapped(id loopid.ID, n int) {
-	m.capped.Add(context.Background(), int64(n), idAttrs(id, attribute.String("reason", "dpm")))
+	m.capped.Add(context.Background(), int64(n), m.idAttrs(id, attribute.String("reason", "dpm")))
 }
 func (m *Metrics) SourceCapability(loop, graph, state string) {
-	m.sourceCapability.Add(context.Background(), 1, metric.WithAttributes(
+	m.sourceCapability.Add(context.Background(), 1, m.attrs(
 		attribute.String("loop", loop), attribute.String("graph", graph), attribute.String("state", state)))
 }
 func (m *Metrics) SourceDataIncomplete(loop, reason string) {
-	m.sourceDataIncomplete.Add(context.Background(), 1, metric.WithAttributes(
+	m.sourceDataIncomplete.Add(context.Background(), 1, m.attrs(
 		attribute.String("loop", loop), attribute.String("reason", reason)))
 }
 func (m *Metrics) AuthError(loop, source string) {
-	m.authErr.Add(context.Background(), 1, metric.WithAttributes(
+	m.authErr.Add(context.Background(), 1, m.attrs(
 		attribute.String("loop", loop), attribute.String("source", source)))
 }
 func (m *Metrics) QueueDepth(id loopid.ID, depth int) {
-	m.queueDepth.Record(context.Background(), float64(depth), idAttrs(id))
+	m.queueDepth.Record(context.Background(), float64(depth), m.idAttrs(id))
 }
 func (m *Metrics) LastSuccess(id loopid.ID, t time.Time) {
-	m.lastSuccess.Record(context.Background(), float64(t.Unix()), idAttrs(id))
+	m.lastSuccess.Record(context.Background(), float64(t.Unix()), m.idAttrs(id))
 }
 func (m *Metrics) WindowLag(id loopid.ID, lag time.Duration) {
-	m.windowLag.Record(context.Background(), lag.Seconds(), idAttrs(id))
+	m.windowLag.Record(context.Background(), lag.Seconds(), m.idAttrs(id))
 }
 
 // LoopDegraded reports the loop's degraded state as a 0/1 gauge with the degrade reason as an
@@ -232,7 +263,7 @@ func (m *Metrics) LoopDegraded(id loopid.ID, reason string, degraded bool) {
 	if degraded {
 		v = 1.0
 	}
-	m.loopDegraded.Record(context.Background(), v, idAttrs(id, attribute.String("reason", reason)))
+	m.loopDegraded.Record(context.Background(), v, m.idAttrs(id, attribute.String("reason", reason)))
 }
 
 // ObserveEmitRequest records one outbound emit POST attempt: its latency bucketed by {plane,
@@ -245,7 +276,7 @@ func (m *Metrics) ObserveEmitRequest(plane string, statusCode int, err error, d 
 	if err == nil && statusCode > 0 {
 		class = fmt.Sprintf("%dxx", statusCode/100)
 	}
-	m.emitDur.Record(context.Background(), d.Seconds(), metric.WithAttributes(
+	m.emitDur.Record(context.Background(), d.Seconds(), m.attrs(
 		attribute.String("plane", plane),
 		attribute.String("status_class", class),
 	))
@@ -257,7 +288,7 @@ func (m *Metrics) ObserveEmitRequest(plane string, statusCode int, err error, d 
 // so the loop-agnostic emitter stays decoupled from selfobs. The runner's per-loop skip/emit counters
 // never see this reject (the emit POST returned 2xx success), so this is the ONLY alertable signal for it.
 func (m *Metrics) ObserveEmitPartialReject(plane string, rejected int64) {
-	m.partialRejected.Add(context.Background(), rejected, metric.WithAttributes(
+	m.partialRejected.Add(context.Background(), rejected, m.attrs(
 		attribute.String("plane", plane)))
 }
 
@@ -270,7 +301,7 @@ func (m *Metrics) ObserveUpstreamRequest(target, method string, statusCode int, 
 	if err == nil && statusCode > 0 {
 		class = fmt.Sprintf("%dxx", statusCode/100)
 	}
-	m.upstreamDur.Record(context.Background(), d.Seconds(), metric.WithAttributes(
+	m.upstreamDur.Record(context.Background(), d.Seconds(), m.attrs(
 		attribute.String("target", target),
 		attribute.String("method", method),
 		attribute.String("status_class", class),

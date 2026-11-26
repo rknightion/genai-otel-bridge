@@ -12,12 +12,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// Invariant 1 — exactly one stable leader; the checkpoint advances under it; no churn/split-brain.
+// Invariant 1 — exactly one stable leader; the checkpoint advances under it; no churn/split-brain;
+// and what it emits is what the mock served, one point per bucket with none missing.
 func TestInvariant1_SingleLeader(t *testing.T) {
 	cs := client(t)
 	waitSteady(t, cs)
 	l0 := getLease(t, cs)
 	startHolder, startTrans := holder(l0), transitions(l0)
+	marks := sinkMarks(t, cs)
 
 	// The single leader must make forward progress (checkpoint advances at least once).
 	var wm0 time.Time
@@ -38,10 +40,14 @@ func TestInvariant1_SingleLeader(t *testing.T) {
 		l := getLease(t, cs)
 		return holder(l) == startHolder && transitions(l) == startTrans
 	}, "leader changed under steady state (churn or split-brain)")
+
+	requireLeaderRun(t, cs, startHolder, startTrans, marks[startHolder], 2)
 }
 
-// Invariant 2 — killing the leader: a standby takes over and resumes FORWARD from the checkpoint
-// (no rewind), within the lease-expiry budget (ReleaseOnCancel=false ⇒ ~LeaseDuration, not instant).
+// Invariant 2 — killing the leader: a standby takes over within the lease-expiry budget
+// (ReleaseOnCancel=false ⇒ ~LeaseDuration, not instant), the checkpoint moves forward, and the new
+// leader's first emitted bucket is the first one the old checkpoint did not cover (no re-emit, no
+// re-bootstrap, no gap), read from its OTLP sink.
 func TestInvariant2_FailoverResumesNoRewind(t *testing.T) {
 	cs := client(t)
 	waitSteady(t, cs)
@@ -57,6 +63,9 @@ func TestInvariant2_FailoverResumesNoRewind(t *testing.T) {
 		}
 		return ok && !wm.IsZero()
 	}, "checkpoint never advanced before kill")
+	cp0, _ := latestRecord(t, cs)
+	frontier := &failoverFrontier{oldEpoch: cp0.Epoch, old: cp0.Time}
+	marks := sinkMarks(t, cs)
 
 	// Hard-kill the leader (grace 0 — skip the 300s drain; the standby acquires after lease expiry).
 	zero := int64(0)
@@ -67,15 +76,22 @@ func TestInvariant2_FailoverResumesNoRewind(t *testing.T) {
 
 	// A different pod takes the Lease; transitions increments.
 	eventually(t, 45*time.Second, func() bool {
+		frontier.observe(t, cs)
 		l := getLease(t, cs)
 		return holder(l) != oldHolder && holder(l) != "" && transitions(l) > oldTrans
 	}, "standby did not take over within lease-expiry budget")
+	newHolder := holder(getLease(t, cs))
 
-	// The new leader resumes FORWARD past the pre-kill frontier (no rewind / no re-bootstrap).
+	// The checkpoint moves forward past the pre-kill frontier. This alone does not prove a resume
+	// from the checkpoint: a re-bootstrapped leader would also write a later watermark within a tick.
 	eventually(t, 120*time.Second, func() bool {
+		frontier.observe(t, cs)
 		wm, ok := latestWatermark(t, cs)
 		return ok && wm.After(wm0)
 	}, "checkpoint did not advance past the pre-kill watermark after failover")
+
+	// [#408] What does prove it: the new leader's emitted data starts exactly after the old checkpoint.
+	requireResumeAtCheckpoint(t, cs, frontier, newHolder, marks[newHolder])
 }
 
 // Invariant 3 — a LIVE but demoted leader ("zombie"): freezing the leader (SIGSTOP) makes it stop

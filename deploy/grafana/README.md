@@ -1,6 +1,6 @@
 # genai-otel-bridge Grafana resources (gcx resources-as-code)
 
-Grafana-managed alert/recording rules (and dashboards, when added) live here as **gcx-native
+Grafana-managed alert rules, recording rules and a dashboard live here as **gcx-native
 resource manifests** — the same shape `gcx resources pull` produces — so they can be applied
 directly with `gcx resources push`. (This replaces the old Prometheus-rule-group
 `dashboards/recording-rules.yaml`.)
@@ -13,7 +13,7 @@ see `test/eks/README.md`), NOT by stack name. The manifests are **stack-agnostic
 
 | Dir | Role | Holds |
 |-----|------|-------|
-| `self-obs/` | the integrator's own o11y (`genai_otel_bridge_*`) | folder, the dropped-records **alert**, self recording rules |
+| `self-obs/` | the integrator's own o11y (`genai_otel_bridge_*`) | folder, the self-obs dashboard (`dashboard-self-obs.yaml`), the alert rules (see Self-obs alerts below) and the self recording rules |
 | `product/` | product telemetry (`portkey_api_*`, `langsmith_*`) | folder, portkey + langsmith recording rules |
 
 `gcx` auto-detects kind from each file's `apiVersion`/`kind`, so the flat per-role layout is enough.
@@ -54,7 +54,7 @@ threshold alerts/panels rely on the recording rules being present). Re-pull to r
 | Profiling | the poller's OWN Pyroscope profiles (`service_name=genai-otel-bridge`): CPU, heap in-use, goroutines, CPU flame graph |
 
 Three datasource variables — `${datasource}` (Prometheus, `grafanacloud-prom`), `${loki}`
-(`grafanacloud-logs`), `${pyroscope}` (`grafanacloud-profiles`) — plus a multi `$loop`. Stack-agnostic;
+(`grafanacloud-logs`), `${pyroscope}` (`grafanacloud-profiles`) — plus a multi `$loop` and a multi `$namespace` (a Loki label-values query; the Logs panels use it). Stack-agnostic;
 pick the datasources per stack. Push: `gcx resources push -p deploy/grafana/self-obs --context
 <self-obs-stack>` (push the `Folder` first, or the dashboard 404s on the missing folder).
 

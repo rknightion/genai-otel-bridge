@@ -99,6 +99,7 @@ a broken panel.
 | `${loki}` | Loki | `grafanacloud-logs` |
 | `${pyroscope}` | Pyroscope | `grafanacloud-profiles` |
 | `${loop}` | — | multi-value loop filter |
+| `${namespace}` | Loki (query) | multi-value namespace filter, used by the Logs panels |
 
 The dashboard is stack-agnostic. Select the correct datasource UIDs for your stack when
 provisioning.
@@ -111,9 +112,9 @@ provisioning.
 |------|-----------------|
 | `genai-otel-bridge:last_success_age:seconds` | `time() − max by (loop)(last_success_timestamp_seconds)` — staleness in seconds per loop |
 | `genai-otel-bridge:last_success_age:baseline6h` | Trailing 6h p90 of `last_success_age:seconds` per loop — the self-relative staleness baseline |
-| `genai-otel-bridge:freshness_ratio` | `last_success_age:seconds / last_success_age:baseline6h` — the ratio the dashboard colours on |
-| `genai-otel-bridge:upstream_error_ratio:5m` | Error ratio per upstream `target` — drives the upstream-health panel and `GenaiOtelBridgeUpstreamErrorBudget` alert |
-| `genai-otel-bridge:window_truncated:rate5m` | Rate of window-truncation events per loop — drives `GenaiOtelBridgeWindowTruncatedDroppingRecords` |
+| `genai-otel-bridge:freshness_ratio` | `last_success_age:seconds / clamp_min(last_success_age:baseline6h, 120)` — the ratio the dashboard colours on; the 120s floor stops a fast, quiet loop dividing by about 0 |
+| `genai-otel-bridge:upstream_error_ratio:5m` | Error ratio per upstream `target`, for the upstream-health panel. The `GenaiOtelBridgeUpstreamErrorBudget` alert inlines its own query and does not read this rule |
+| `genai-otel-bridge:window_truncated:rate5m` | Rate of window-truncation events per loop, for dashboards. The `GenaiOtelBridgeWindowTruncatedDroppingRecords` alert inlines its own query and does not read this rule |
 | `genai-otel-bridge:scrape_healthy` | 1 when the leader's last successful collect+emit is recent |
 | `genai-otel-bridge:scrape_present` | 1 if `last_success_timestamp_seconds` was exported in the last 15m |
 
@@ -140,8 +141,10 @@ The Portkey rules encode the correct query patterns for per-bucket gauges (using
     total over the trailing `stats_window` (aggregate-now). Read them with `last_over_time`; never
     `sum_over_time`, which adds overlapping windows.
 
-    `portkey_api_*` metrics are **per-bucket gauges**, not counters. An instant query between
-    emit cycles may read as absent — use `last_over_time(...[20m])` to see the last known value.
+    `portkey_api_*` metrics are **per-bucket gauges**, not counters. The loops emit every
+    cadence (60s by default), but the newest sample is about 11 minutes old because the query upper
+    bound sits `bucket_settle` (10m) behind now. An instant query can therefore read as absent: use
+    `last_over_time(...[20m])` to see the last known value.
     Always use `sum_over_time` to aggregate; never use `rate()` or `increase()` on these metrics.
     `genai_otel_bridge_source_capability_total`, `genai_otel_bridge_source_data_incomplete_total`, and
     `genai_otel_bridge_upstream_request_duration_seconds` are counters — `rate()` is correct there.

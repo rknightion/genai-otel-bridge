@@ -22,7 +22,8 @@ import (
 type Metrics struct {
 	emitted, emittedLogs, skipped, emitErr, guardDropped, revised, newLabel, capped, sourceCapability, sourceDataIncomplete, authErr metric.Int64Counter
 	partialRejected                                                                                                                  metric.Int64Counter
-	lastSuccess, windowLag, queueDepth, loopDegraded, leader                                                                         metric.Float64Gauge
+	scopeAssertion                                                                                                                   metric.Int64Counter
+	lastSuccess, windowLag, queueDepth, loopDegraded, leader, scopeState                                                             metric.Float64Gauge
 	upstreamDur, revisedAge, emitDur                                                                                                 metric.Float64Histogram
 	// extra are the pipeline labels (tenant, pipeline) a With copy appends to every per-pipeline series
 	// [#521]. Empty on the value NewMetrics returns and on With("", ""), so the legacy label sets hold.
@@ -92,6 +93,11 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	// 10m, making an increase[10m] alert flap. A 0/1 gauge answers it in one query and supports a
 	// non-flapping `== 1 for 15m` alert. Bounded cardinality: the reason attr is the fixed enterDegraded set.
 	m.loopDegraded = mg("loop_degraded", "1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends", "1")
+	// The scope gate's two signals (design §8). scope_state has no unit, so its exported name has no
+	// suffix. Both are recorded only through a pipeline's With copy (the gate exists only in the tenant
+	// shape), so a legacy install exports neither.
+	m.scopeState = mg("scope_state", "1 for the scope gate's current state (matched, unverified or mismatched) and 0 for the others; all 0 with no result, which is what a replica that is not leading reports", "")
+	m.scopeAssertion = mk("scope_assertion_total", "scope assertion calls by result: matched, mismatch, unverifiable or error")
 	// Per-replica leadership (0 standby, 1 leader), recorded by every replica from startup so a
 	// standby is observable; the gauges above exist only on a replica that has led.
 	m.leader = mg("leader", "1 while this replica holds leadership, 0 while it is a standby; recorded by every replica from startup", "1")
@@ -256,7 +262,8 @@ func (m *Metrics) WindowLag(id loopid.ID, lag time.Duration) {
 // attribute. [#120] The caller (schedule.LoopRunner) records 1 with the reason on entering degraded
 // and 0 with the SAME reason on the clearing commit or when leadership ends ([#369]), so the
 // {source,loop,reason} series returns to 0 rather than sticking at 1. reason is the bounded set of fixed strings the runner and scheduler pass
-// (terminal emit reject / checkpoint-save failures / checkpoint fenced / granularity_unexpected) —
+// (terminal emit reject / checkpoint-save failures / checkpoint fenced / granularity_unexpected /
+// scope_mismatch) —
 // never unbounded free text.
 func (m *Metrics) LoopDegraded(id loopid.ID, reason string, degraded bool) {
 	v := 0.0
@@ -264,6 +271,27 @@ func (m *Metrics) LoopDegraded(id loopid.ID, reason string, degraded bool) {
 		v = 1.0
 	}
 	m.loopDegraded.Record(context.Background(), v, m.idAttrs(id, attribute.String("reason", reason)))
+}
+
+// scopeStates are the scope_state gauge's state values. No result is all of them at 0.
+var scopeStates = []string{"matched", "unverified", "mismatched"}
+
+// ScopeState records the scope gate's state: 1 on the named state and 0 on the other two; an empty
+// state (no result) records all three at 0. A With copy adds tenant and pipeline.
+func (m *Metrics) ScopeState(state string) {
+	for _, s := range scopeStates {
+		v := 0.0
+		if s == state {
+			v = 1.0
+		}
+		m.scopeState.Record(context.Background(), v, m.attrs(attribute.String("state", s)))
+	}
+}
+
+// ScopeAssertion counts one scope assertion call by result: matched, mismatch, unverifiable or error.
+// A With copy adds tenant and pipeline.
+func (m *Metrics) ScopeAssertion(result string) {
+	m.scopeAssertion.Add(context.Background(), 1, m.attrs(attribute.String("result", result)))
 }
 
 // ObserveEmitRequest records one outbound emit POST attempt: its latency bucketed by {plane,

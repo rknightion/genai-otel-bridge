@@ -42,6 +42,8 @@ func Signals() []signal.Signal {
 		selfMetric("window_lag_seconds", "gauge", "s", "now minus the watermark frontier", "source", "loop", "tenant", "pipeline"),
 		selfMetric("queue_depth", "gauge", "1", "1 while a batch is queued or being emitted, else 0", "source", "loop", "tenant", "pipeline"),
 		selfMetric("loop_degraded", "gauge", "1", "1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends", "source", "loop", "reason", "tenant", "pipeline"),
+		selfMetric("scope_state", "gauge", "", "1 for the scope gate's current state (matched, unverified or mismatched) and 0 for the others; all 0 with no result, which is what a replica that is not leading reports; tenant shape only", "state", "tenant", "pipeline"),
+		selfMetric("scope_assertion_total", "counter", "1", "scope assertion calls by result: matched, mismatch, unverifiable or error; tenant shape only", "result", "tenant", "pipeline"),
 		selfMetric("leader", "gauge", "1", "1 while this replica holds leadership, 0 while it is a standby; recorded by every replica from startup"),
 		selfMetric("go_heap_inuse_bytes", "gauge", "By", "bytes in in-use heap spans (runtime.MemStats.HeapInuse)"),
 		selfMetric("go_memory_limit_bytes", "gauge", "By", "the Go runtime soft memory limit (GOMEMLIMIT); 0 when no limit is set"),

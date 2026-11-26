@@ -16,6 +16,28 @@ copy); nil means the scheduler's. `NewLoopRunner(..., m, opts ...RunnerOption)` 
 which adds the same two attributes to every runner log line; the runner's limiter is per runner, so its
 keys need no pipeline. The `Metrics` interface does not change.
 
+A spec can carry its pipeline's scope gate (`LoopSpec.Gate *source.ScopeGate`, unit 4a; nil means no gate
+and a tick exactly as without one). The tick asks it after the `Busy` check and before `Since`:
+
+- `ScopeProceed` collects as usual.
+- `ScopeWait` ends the tick with no lag recorded, no unreadable time counted and nothing counted.
+- `ScopeMismatched` degrades the loop with reason `scope_mismatch` and ends the tick the same way, so
+  the loop is next ticked at `DegradedBackoff`; its next successful save clears the degrade.
+- A failed call is handled as a failed collect: `Since`, `window_lag` and `backfill_unstorable` as
+  today, then `emit_errors_total{kind="collect"}`, a warning (limiter key `scope_assertion:<loop>`,
+  with the pipeline id when set) and, for an error that is `source.ErrAuth` (a `*source.AuthError` is),
+  `AuthError(Key().Loop, source)`, all on the spec's `Metrics`. That auth failure also feeds the
+  auth backoff streak (`tickOutcome.auth`, #537), so a bad key's loop stretches its wait as it would for
+  a collect's 401/403. Nothing is collected.
+- `ScopeProceed` with an error is a 401/403 inside a matched pipeline's grace: the tick collects, and
+  the scheduler raises `AuthError` once for the gate's call (the collect's own 401 is the source hook's
+  to count, so each 401 response counts once). If the collect then fails for any reason other than quota,
+  the tick feeds the auth backoff streak; a successful collect does not. A failure after the
+  leader context is cancelled is the cancellation and is not counted.
+
+`Scheduler.Run` calls `Elected(leaderCtx)` once per distinct gate before starting any loop, and
+`Reset()` on each after the goroutines join.
+
 ## Invariants, each backed by a test
 
 - Single-flight collection. `Busy()` blocks re-collection while a batch is in flight and the

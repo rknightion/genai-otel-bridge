@@ -74,6 +74,9 @@ type LoopSpec struct {
 	Metrics Metrics
 	// Pipeline is the tenant and pipeline the loop belongs to; zero in the legacy shape [#521].
 	Pipeline Pipeline
+	// Gate is the pipeline's scope gate, shared by every loop of the pipeline and asked before each
+	// collect (design §5.1); nil means no gate, and the tick is exactly as without one.
+	Gate *source.ScopeGate
 }
 
 // Scheduler drives the per-loop tick→collect→enqueue cycle. The runner owns the checkpoint
@@ -84,8 +87,8 @@ type Scheduler struct {
 	beat  func() // [AR-H-beat] heartbeat hook, fed each tick attempt; wired to selfobs.Health.Beat
 	// lim throttles the per-tick warn lines (collect/checkpoint failures) to ≤1/min per loop so a
 	// flapping upstream doesn't spam stdout; the metric counters carry the true rate. Keys are
-	// "collect:<loop>" / "checkpoint_load:<loop>", with the pipeline id before the loop when a spec
-	// has one ("collect:<pipeline>:<loop>", #521) — disjoint from the runner's keyspace.
+	// "collect:<loop>" / "checkpoint_load:<loop>" / "scope_assertion:<loop>", with the pipeline id before
+	// the loop when a spec has one ("collect:<pipeline>:<loop>", #521) — disjoint from the runner's keyspace.
 	lim *logging.Limiter
 }
 
@@ -108,7 +111,15 @@ func (s *Scheduler) RunOnceForTest(ctx context.Context, sp LoopSpec, now time.Ti
 // re-sync the frontier from the durable checkpoint), and wg.Waits its goroutines out before
 // returning, so a leadership flap cannot leak a stale batch into the next leadership's queue. After the
 // join it zeroes each degraded loop's loop_degraded gauge [#369], so a demoted replica stops exporting 1.
+//
+// A spec's scope gate is told of the election (Elected: reset, then read the remembered match) before
+// any loop starts, once per distinct gate, and reset after the join, so a demoted replica reports no
+// result.
 func (s *Scheduler) Run(leaderCtx context.Context) {
+	gates := s.gates()
+	for _, g := range gates {
+		g.Elected(leaderCtx)
+	}
 	var wg sync.WaitGroup
 	for _, sp := range s.specs {
 		sp := sp
@@ -124,6 +135,22 @@ func (s *Scheduler) Run(leaderCtx context.Context) {
 	for _, sp := range s.specs {
 		sp.Runner.ClearDegradedGauge()
 	}
+	for _, g := range gates {
+		g.Reset()
+	}
+}
+
+// gates returns each distinct non-nil scope gate of the specs, in spec order.
+func (s *Scheduler) gates() []*source.ScopeGate {
+	var out []*source.ScopeGate
+	seen := map[*source.ScopeGate]bool{}
+	for _, sp := range s.specs {
+		if sp.Gate != nil && !seen[sp.Gate] {
+			seen[sp.Gate] = true
+			out = append(out, sp.Gate)
+		}
+	}
+	return out
 }
 
 func (s *Scheduler) tickLoop(ctx context.Context, sp LoopSpec) {
@@ -150,7 +177,7 @@ type tickOutcome struct {
 	more      bool // the loop is still draining: a windowed backlog, or a cursor mid-window [#374] (catch-up)
 	collected bool // Collect returned without error (the source answered)
 	quota     bool // Collect returned source.ErrQuotaExceeded
-	auth      bool // Collect failed with an error wrapping source.ErrAuth (401/403) [#537]
+	auth      bool // Collect, or the scope gate's call, failed with an error wrapping source.ErrAuth (401/403) [#537]
 }
 
 // maxQuotaStreak bounds the consecutive-quota counter. Any streak this long already pins the wait at
@@ -256,6 +283,38 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 		// never get catch-up acceleration". A busy snapshot loop simply retries at its jittered cadence.
 		return tickOutcome{more: sp.Window > 0}
 	}
+	// Design §5.1: ask the pipeline's scope gate after the busy check and before Since. Wait and
+	// mismatched end the tick with no lag and no unreadable time counted; a failed call is handled as a
+	// failed collect below, after the lag accounting.
+	var scopeErr error
+	gateAuth := false // the gate's call got a 401/403 inside the grace and the tick still collects
+	if sp.Gate != nil {
+		decision, err := sp.Gate.Before(ctx)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			span.SetAttributes(attribute.String("outcome", "cancelled"))
+			return tickOutcome{}
+		case err != nil && decision == source.ScopeProceed:
+			// [PR #548 review] Inside a matched pipeline's grace: collect anyway, but keep the auth signal
+			// for the gate's 401/403 (the asserter never calls the hook). One count per 401 response: the
+			// collect's own 401, if any, is the source's hook to count. It also feeds the backoff below.
+			if errors.Is(err, source.ErrAuth) {
+				gateAuth = true
+				m.AuthError(sp.Loop.Key().Loop, id.Source)
+			}
+		case err != nil:
+			scopeErr = err
+		case decision == source.ScopeProceed:
+		case decision == source.ScopeMismatched:
+			// Degraded, so the loop is next ticked at DegradedBackoff; its next successful save clears it.
+			sp.Runner.Degrade("scope_mismatch")
+			span.SetAttributes(attribute.String("outcome", "scope_mismatch"))
+			return tickOutcome{}
+		default: // ScopeWait, and any value the gate does not define
+			span.SetAttributes(attribute.String("outcome", "scope_wait"))
+			return tickOutcome{}
+		}
+	}
 	wm, err := sp.Runner.Since(ctx) // [CP-C1] in-memory saved frontier, or persisted checkpoint
 	if err != nil {
 		if ctx.Err() != nil {
@@ -292,6 +351,23 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 			m.SamplesSkipped(id, "backfill_unstorable", mins)
 		}
 	}
+	if scopeErr != nil {
+		// The scope assertion failed: like a failed collect, counted and logged against this loop, which
+		// retries with nothing advanced. A 401 or 403 (*source.AuthError, an ErrAuth) also raises the
+		// auth-error signal, since the asserter never calls the hook, and feeds the auth backoff streak as a
+		// collect's would [#537], so a bad key does not spend the request budget at cadence.
+		m.EmitError(id, "collect")
+		auth := errors.Is(scopeErr, source.ErrAuth)
+		if auth {
+			m.AuthError(sp.Loop.Key().Loop, id.Source)
+		}
+		if s.lim.Allow(sp.Pipeline.limitKey("scope_assertion", name)) {
+			slog.Warn("scope assertion failed; skipping collect", append([]any{"loop", name, "err", scopeErr}, pattrs...)...)
+		}
+		span.RecordError(scopeErr)
+		span.SetStatus(codes.Error, "scope_assertion")
+		return tickOutcome{auth: auth}
+	}
 	batch, err := sp.Loop.Collect(ctx, wm)
 	switch {
 	case errors.Is(err, source.ErrQuotaExceeded):
@@ -316,7 +392,7 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	case err != nil:
 		// An auth failure (401/403, source.ErrAuth) is still a counted collect error, but the tick loop
 		// stretches the wait like a quota streak so a bad key does not spend the request budget [#537].
-		auth := errors.Is(err, source.ErrAuth)
+		auth := errors.Is(err, source.ErrAuth) || gateAuth
 		m.EmitError(id, "collect")
 		if s.lim.Allow(sp.Pipeline.limitKey("collect", name)) {
 			slog.Warn("collect failed", append([]any{"loop", name, "err", err}, pattrs...)...)

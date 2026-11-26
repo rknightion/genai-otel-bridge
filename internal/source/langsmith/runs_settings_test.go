@@ -4,6 +4,7 @@ package langsmith
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,28 @@ func buildRunsSettings(s map[string]string) (runsSettings, error) {
 	rs := defaultRunsSettings()
 	err := applyRunsSettings(&rs, s)
 	return rs, err
+}
+
+func TestRunsSettingsRejectsHugeMaxResponseBytes(t *testing.T) {
+	scope := map[string]string{"session_ids": "a"}
+	with := func(v string) map[string]string {
+		return map[string]string{"session_ids": scope["session_ids"], "max_response_bytes": v}
+	}
+	_, err := buildRunsSettings(with("1073741824")) // 1 GiB
+	if err == nil || !strings.Contains(err.Error(), "max_response_bytes") {
+		t.Fatalf("1 GiB must be rejected with an error naming max_response_bytes, got %v", err)
+	}
+	if _, err := buildRunsSettings(with("268435457")); err == nil {
+		t.Fatal("256 MiB + 1 must be rejected")
+	}
+	for _, ok := range []string{"268435456", "67108864"} {
+		if _, err := buildRunsSettings(with(ok)); err != nil {
+			t.Fatalf("%s must be accepted: %v", ok, err)
+		}
+	}
+	if _, err := buildRunsSettings(scope); err != nil {
+		t.Fatalf("default must be accepted: %v", err)
+	}
 }
 
 func TestApplyRunsSettings(t *testing.T) {

@@ -236,8 +236,7 @@ config:
     profiling:
       enabled: false
       mode: pull
-      pull:
-        addr: :6060
+      pull: {}
     tracing:
       enabled: false
   sources:

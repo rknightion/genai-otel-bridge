@@ -16,7 +16,9 @@ This page is a narrative walk-through of the most important config sections. For
 Two syntax forms are supported anywhere in the config:
 
 - `${ENV_VAR}` — resolved from the process environment at startup. An unset variable is a fatal error.
-- `file:/path/to/file` — the entire scalar is replaced with the trimmed contents of the file.
+- `file:/path/to/file` — the entire scalar is replaced with the trimmed contents of the file. A file that is missing, or empty after trimming, is a fatal error.
+
+A resolved reference is always a string, so refs work for string and duration fields, not for booleans or numbers (a `${VAR}` there fails at load with a type error). A config error never echoes a resolved secret.
 
 ```yaml
 auth:

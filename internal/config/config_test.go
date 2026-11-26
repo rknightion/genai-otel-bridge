@@ -185,6 +185,55 @@ func TestValidateRejects(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsTable is the per-knob rejection table (LOOP.md: every knob owes a rejection
+// test). Each row mutates a valid config and asserts a distinguishing substring of the message.
+func TestValidateRejectsTable(t *testing.T) {
+	setEnv(t)
+	twoSources := func(c *Config) {
+		s2 := c.Sources[0]
+		c.Sources = append(c.Sources, s2)
+	}
+	loop := func(c *Config, f func(*LoopConfig)) {
+		lp := c.Sources[0].Loops["analytics"]
+		f(&lp)
+		c.Sources[0].Loops["analytics"] = lp
+	}
+	rows := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{"queue max_batches negative", func(c *Config) { c.Queue.MaxBatches = -5 }, "queue.max_batches must be >= 0"},
+		{"queue max_batch_bytes negative", func(c *Config) { c.Queue.MaxBatchBytes = -1 }, "queue.max_batch_bytes must be >= 0"},
+		{"emit endpoint required", func(c *Config) { c.Emit.Telemetry.OTLP.Endpoint = "" }, "emit.telemetry.otlp.endpoint required"},
+		{"max_catchup_per_tick negative", func(c *Config) { c.Governance.MaxCatchupPerTick = -1 }, "governance.max_catchup_per_tick must be >= 0"},
+		{"max_stream_label_keys negative", func(c *Config) { c.Governance.MaxStreamLabelKeys = -1 }, "governance.max_stream_label_keys must be >= 0"},
+		{"file checkpoint with lease", func(c *Config) { c.HA.Coordinator, c.HA.Checkpoint = "lease", "file" }, "ha.checkpoint=file is unsafe with ha.coordinator=lease"},
+		{"empty source_instance", func(c *Config) { c.Sources[0].SourceInstance = "" }, "source_instance required"},
+		{"duplicate source_instance", twoSources, "duplicate source_instance"},
+		{"slash in source_instance", func(c *Config) { c.Sources[0].SourceInstance = "a/b" }, "must not contain '/'"},
+		{"non-https base_url", func(c *Config) { c.Sources[0].BaseURL = "http://api.example.com" }, "base_url must be a non-empty https:// URL"},
+		{"missing auth", func(c *Config) { c.Sources[0].Auth = AuthConfig{} }, "auth.header and auth.value are required"},
+		{"cadence below floor", func(c *Config) { loop(c, func(l *LoopConfig) { l.Cadence = Duration(time.Second) }) }, "cadence 1s < floor"},
+		{"bootstrap_lookback above max_backfill", func(c *Config) {
+			loop(c, func(l *LoopConfig) { l.BootstrapLookback, l.MaxBackfill = Duration(50*time.Minute), Duration(40*time.Minute) })
+		}, "bootstrap_lookback 50m0s > max_backfill 40m0s"},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			cfg, err := Load("testdata/valid.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.mutate(cfg)
+			err = cfg.Validate(map[string]struct{}{"portkey": {}})
+			if err == nil || !strings.Contains(err.Error(), r.want) {
+				t.Fatalf("want error containing %q, got %v", r.want, err)
+			}
+		})
+	}
+}
+
 // TestValidateSnapshotLoop covers an aggregate-now (snapshot) loop: it declares no window, so the
 // time-bucket window/settle/backfill checks (which encode portkey semantics) MUST be skipped — only
 // the cadence floor still applies. It also asserts the decoupled `settings` map round-trips from YAML.

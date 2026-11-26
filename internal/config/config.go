@@ -148,7 +148,7 @@ type ProfilingConfig struct {
 
 // ProfilingPull configures pull mode: a dedicated pprof HTTP listener. Unset Addr ⇒ ":6060".
 type ProfilingPull struct {
-	Addr string `yaml:"addr" helm:"default=:6060"`
+	Addr string `yaml:"addr" helm:"omit"` // Load supplies :6060 in pull mode; rendering it would break a values override to mode: push
 }
 
 // ProfilingPush configures push mode: the pyroscope-go agent → Grafana Cloud Profiles. Same
@@ -500,6 +500,10 @@ func injectEnvPlaceholders(s string) (string, map[string]string, error) {
 	return out, ph, nil
 }
 
+// fileSecretKeyPrefix marks placeholder-map entries that hold a file:-sourced secret (no real
+// placeholder token starts with it); they are redacted at any length.
+const fileSecretKeyPrefix = "file-secret:"
+
 // redactSecretValues replaces every resolved secret value (the VALUES of the placeholder map) with
 // "[redacted]" in err's message [#111]. After secret resolution, a YAML decode/type/duration error can
 // echo a resolved config value verbatim; unredacted it reaches stderr → the container log → Loki. This
@@ -511,9 +515,15 @@ func redactSecretValues(err error, ph map[string]string) error {
 		return nil
 	}
 	msg := err.Error()
-	for _, v := range ph {
-		if len(v) > 3 {
-			msg = strings.ReplaceAll(msg, v, "[redacted]")
+	for tok, v := range ph {
+		fromFile := strings.HasPrefix(tok, fileSecretKeyPrefix)
+		if v == "" || (len(v) <= 3 && !fromFile) {
+			continue
+		}
+		msg = strings.ReplaceAll(msg, v, "[redacted]")
+		// yaml.v3 type errors print only the first 7 bytes plus "..." of a scalar longer than 10 bytes.
+		if len(v) > 10 {
+			msg = strings.ReplaceAll(msg, v[:7]+"...", "[redacted]")
 		}
 	}
 	return errors.New(msg)
@@ -545,6 +555,11 @@ func resolveSecretsNode(n *yaml.Node, ph map[string]string) error {
 				return fmt.Errorf("config: file secret %q: %w", p, err)
 			}
 			val = strings.TrimSpace(string(b))
+			if val == "" { // [#381] an empty/unsynced secret file is fatal, like an unset ${VAR} (F21)
+				return fmt.Errorf("config: file secret %q is empty", p)
+			}
+			// [#381] record it for redaction (the placeholder map doubles as the redaction set).
+			ph[fmt.Sprintf("%s%d", fileSecretKeyPrefix, len(ph))] = val
 		}
 		n.Value = val
 	}
@@ -556,6 +571,12 @@ func (c *Config) Validate(known map[string]struct{}) error {
 	var errs []error
 	if c.Emit.Telemetry.OTLP.Endpoint == "" {
 		errs = append(errs, errors.New("emit.telemetry.otlp.endpoint required"))
+	}
+	if c.Queue.MaxBatches < 0 {
+		errs = append(errs, fmt.Errorf("queue.max_batches must be >= 0 (0 means the default %d), got %d", defaultQueueMaxBatches, c.Queue.MaxBatches))
+	}
+	if c.Queue.MaxBatchBytes < 0 {
+		errs = append(errs, fmt.Errorf("queue.max_batch_bytes must be >= 0 (0 means the default %d), got %d", defaultQueueMaxBatchBytes, c.Queue.MaxBatchBytes))
 	}
 	if c.Queue.EmitWorkers != 1 {
 		errs = append(errs, fmt.Errorf("queue.emit_workers must be 1 (per-loop single-flight emit, C3); got %d", c.Queue.EmitWorkers))

@@ -5,6 +5,7 @@ package langsmith
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -36,12 +37,18 @@ func (m *money) UnmarshalJSON(b []byte) error {
 		if err != nil {
 			return fmt.Errorf("langsmith: cost %q: %w", unq, err)
 		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Errorf("langsmith: cost %q is not finite", unq)
+		}
 		m.v, m.set = f, true
 		return nil
 	}
 	f, err := strconv.ParseFloat(string(b), 64)
 	if err != nil {
 		return fmt.Errorf("langsmith: cost number %q: %w", b, err)
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return fmt.Errorf("langsmith: cost %q is not finite", b)
 	}
 	m.v, m.set = f, true
 	return nil

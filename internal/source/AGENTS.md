@@ -68,7 +68,11 @@ concurrent ticks wait for the first call's result rather than calling again.
   holds, so `checkpoint.CheckMonotonic` never refuses it when this leader's clock is behind the last
   one's. A match is written on `ScopeMatched` when the stored digest differs; an empty `Cursor` on every
   `ScopeMismatch` whose stored digest is not already empty. The gate's view of the store changes only
-  after a write succeeds, so a refused write is tried again at the next such result. Until a read or
+  after a write or a read succeeds. A refused or failed write makes the gate re-read the record and,
+  unless it already holds the wanted cursor, write once more above the stored time, so a Mismatch
+  clears a remembered match at once even when the election read failed and the record is ahead of this
+  leader's clock (PR #548 review). A write that still does not land is logged and tried again at the
+  next such result; the in-memory state does not depend on it, so the pipeline stays mismatched. Until a read or
   write succeeds the view is unknown, and both writes are made.
 - `KeyFingerprint` and the digest are never logged or emitted.
 

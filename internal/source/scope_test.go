@@ -519,16 +519,18 @@ func TestGateWriteNotRefusedWhenClockBehind(t *testing.T) {
 }
 
 // AC3: a refused clearing write is written at the next Mismatch; the gate's view moves only on success.
+// The store refuses both the write and the gate's one retry after re-reading the record (PR #548 review
+// round 2), so the clear is left for the next Mismatch.
 func TestGateRetriesClearOnMismatch(t *testing.T) {
-	st := &fakeStore{has: true, fence: true, wm: model.Watermark{Time: time.Unix(1, 0), Cursor: testDigest}, failSaves: 1}
+	st := &fakeStore{has: true, fence: true, wm: model.Watermark{Time: time.Unix(1, 0), Cursor: testDigest}, failSaves: 2}
 	r := newRig(t, st, "")
 	ctx := context.Background()
 	r.g.Elected(ctx)
 	r.asserter.next(ScopeMismatch, nil)
 	r.clock.Advance(3 * time.Minute) // the restored match's first re-assertion
 	r.before(t, ctx, ScopeMismatched, false, 1)
-	if n := len(st.Saves()); n != 0 || st.attempts != 1 {
-		t.Fatalf("first clearing write: %d accepted of %d attempts, want 0 of 1", n, st.attempts)
+	if n := len(st.Saves()); n != 0 || st.attempts != 2 {
+		t.Fatalf("first clearing write: %d accepted of %d attempts, want 0 of 2", n, st.attempts)
 	}
 	r.clock.Advance(time.Minute)
 	r.before(t, ctx, ScopeMismatched, false, 2)
@@ -538,19 +540,23 @@ func TestGateRetriesClearOnMismatch(t *testing.T) {
 	}
 	r.clock.Advance(time.Minute)
 	r.before(t, ctx, ScopeMismatched, false, 3)
-	if st.attempts != 2 {
-		t.Fatalf("attempts %d, want 2: a cleared store is not cleared again", st.attempts)
+	if st.attempts != 3 {
+		t.Fatalf("attempts %d, want 3: a cleared store is not cleared again", st.attempts)
 	}
 }
 
-// A refused match write keeps the in-memory match and is tried again at the next Matched.
+// A refused match write keeps the in-memory match and is tried again at the next Matched. The store
+// refuses the write and the gate's one retry after re-reading the record.
 func TestGateRetriesMatchWrite(t *testing.T) {
-	st := &fakeStore{failSaves: 1}
+	st := &fakeStore{failSaves: 2}
 	r := newRig(t, st, "")
 	ctx := context.Background()
 	r.g.Elected(ctx)
 	r.asserter.next(ScopeMatched, nil)
 	r.before(t, ctx, ScopeProceed, false, 1)
+	if n := len(st.Saves()); n != 0 || st.attempts != 2 {
+		t.Fatalf("first match write: %d accepted of %d attempts, want 0 of 2", n, st.attempts)
+	}
 	r.clock.Advance(10 * time.Minute)
 	r.before(t, ctx, ScopeProceed, false, 2)
 	if got := st.Saves(); len(got) != 1 || got[0].Cursor != testDigest {
@@ -670,5 +676,85 @@ func TestGateAuthFailureInsideGraceIsReturned(t *testing.T) {
 	}
 	if !slices.Equal(r.results, []string{"matched", "error", "error"}) {
 		t.Fatalf("results %q", r.results)
+	}
+}
+
+// --- PR #548 review round 2: a clearing write refused after a failed election read ---
+
+// aheadStore holds this pipeline's own remembered match an hour ahead of the gate's clock, fenced as
+// the real backends are, and refuses reads until readable is set.
+func aheadStore(epoch int64) *fakeStore {
+	ahead := newGateClock().Now().Add(time.Hour)
+	return &fakeStore{has: true, fence: true, loadErr: errors.New("configmap read timed out"),
+		wm: model.Watermark{Time: ahead, Cursor: testDigest, Epoch: epoch}}
+}
+
+// TestGateClearLandsAfterFailedElectionRead: the election read failed, so the gate does not know the
+// stored time, and its first clearing write at its own clock is refused by CheckMonotonic. The gate
+// re-reads the record and writes again above it, so the Mismatch clears the remembered match at once.
+func TestGateClearLandsAfterFailedElectionRead(t *testing.T) {
+	st := aheadStore(1)
+	r := newRig(t, st, "")
+	ctx := coordinate.WithEpoch(context.Background(), 1)
+	r.g.Elected(ctx)
+	st.mu.Lock()
+	st.loadErr = nil // the read failure was transient
+	ahead := st.wm.Time
+	st.mu.Unlock()
+	r.asserter.next(ScopeMismatch, nil)
+	r.before(t, ctx, ScopeMismatched, false, 1)
+	want := []model.Watermark{{Time: ahead.Add(time.Second), Cursor: "", Epoch: 1}}
+	if got := st.Saves(); !slices.Equal(got, want) {
+		t.Fatalf("saves %+v after %d attempts, want the clear written above the stored time %+v", got, st.attempts, want)
+	}
+}
+
+// TestGateStaleMatchNotRestoredAfterRefusedClear: after that Mismatch, the next leader must not restore
+// the match the mismatch was meant to clear; it starts with no result and asserts afresh.
+func TestGateStaleMatchNotRestoredAfterRefusedClear(t *testing.T) {
+	st := aheadStore(1)
+	first := newRig(t, st, "")
+	ctx := coordinate.WithEpoch(context.Background(), 1)
+	first.g.Elected(ctx)
+	st.mu.Lock()
+	st.loadErr = nil
+	st.mu.Unlock()
+	first.asserter.next(ScopeMismatch, nil)
+	first.before(t, ctx, ScopeMismatched, false, 1)
+	first.g.Reset()
+
+	next := newRig(t, st, "")
+	next.asserter.next(ScopeMismatch, nil)
+	next.g.Elected(coordinate.WithEpoch(context.Background(), 2))
+	if !slices.Equal(next.states, []string{""}) {
+		t.Fatalf("next leader states %q, want no result: a stale remembered match survived the mismatch", next.states)
+	}
+	next.before(t, ctx, ScopeMismatched, false, 1)
+}
+
+// TestGateRefusedClearFailsClosed: a clear the store still refuses after the re-read (here a later
+// leader's epoch fences it) is tried once more and then left for the next Mismatch; the pipeline stays
+// mismatched throughout and never collects.
+func TestGateRefusedClearFailsClosed(t *testing.T) {
+	st := aheadStore(5)
+	st.loadErr = nil
+	r := newRig(t, st, "")
+	ctx := coordinate.WithEpoch(context.Background(), 3)
+	r.g.Elected(ctx)
+	r.asserter.next(ScopeMismatch, nil)
+	r.clock.Advance(3 * time.Minute) // the restored match's first re-assertion
+	r.before(t, ctx, ScopeMismatched, false, 1)
+	if n := len(st.Saves()); n != 0 || st.attempts != 2 {
+		t.Fatalf("%d accepted of %d attempts, want 0 of 2 (one write, one after the re-read)", n, st.attempts)
+	}
+	r.clock.Advance(30 * time.Second)
+	r.before(t, ctx, ScopeMismatched, false, 1)
+	r.clock.Advance(30 * time.Second)
+	r.before(t, ctx, ScopeMismatched, false, 2)
+	if st.attempts != 4 {
+		t.Fatalf("attempts %d, want 4: the next Mismatch tries the clear again", st.attempts)
+	}
+	if !slices.Equal(r.states, []string{"", "matched", "mismatched"}) {
+		t.Fatalf("states %q", r.states)
 	}
 }

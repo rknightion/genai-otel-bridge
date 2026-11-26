@@ -350,20 +350,46 @@ func (g *ScopeGate) assertLocked(ctx context.Context, now time.Time) (ScopeDecis
 
 // writeLocked saves the remembered match (design §7). Its Time is the later of now and one second after
 // the stored time the gate holds, so CheckMonotonic never refuses it for time when this leader's clock
-// is behind the last one's. The gate's view changes only after the write succeeds, so a refused or
-// failed write is tried again at the next such result.
+// is behind the last one's. The gate's view changes only after a write or a read succeeds.
+//
+// A refused or failed write can mean the gate's view is wrong: unknown after a failed election read, so
+// the write went at this leader's clock under a record ahead of it [PR #548 review]. The gate then
+// re-reads the record and, unless it already holds the wanted cursor, writes once more above it, so a
+// Mismatch clears a remembered match at once rather than leaving it for the next leader to restore.
+// A write that still does not land (a later leader's epoch, a store that is down) is logged and tried
+// again at the next such result; the in-memory state is unaffected, so the pipeline stays mismatched.
 func (g *ScopeGate) writeLocked(ctx context.Context, now time.Time, cursor string) {
+	err := g.saveLocked(ctx, now, cursor)
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+	wm, lerr := g.cfg.Store.Load(ctx, ScopeMatchKey(g.cfg.SourceInstance))
+	if lerr == nil {
+		g.viewKnown, g.storedTime, g.storedCursor = true, wm.Time, wm.Cursor
+		if wm.Cursor == cursor {
+			return // the store already holds what this result wants
+		}
+		if err = g.saveLocked(ctx, now, cursor); err == nil || ctx.Err() != nil {
+			return
+		}
+	} else {
+		err = errors.Join(err, lerr)
+	}
+	slog.Warn("scope gate: remembered match not saved; retried at the next result",
+		"source", g.cfg.SourceInstance, "clear", cursor == "", "err", err)
+}
+
+// saveLocked makes one write at the later of now and one second after the stored time, and moves the
+// gate's view only when the store accepts it.
+func (g *ScopeGate) saveLocked(ctx context.Context, now time.Time, cursor string) error {
 	t := now
 	if floor := g.storedTime.Add(time.Second); g.viewKnown && floor.After(t) {
 		t = floor
 	}
 	w := model.Watermark{Time: t, Cursor: cursor, Epoch: coordinate.EpochFromContext(ctx)}
 	if err := g.cfg.Store.Save(ctx, ScopeMatchKey(g.cfg.SourceInstance), w); err != nil {
-		if ctx.Err() == nil {
-			slog.Warn("scope gate: remembered match not saved; retried at the next result",
-				"source", g.cfg.SourceInstance, "clear", cursor == "", "err", err)
-		}
-		return
+		return err
 	}
 	g.viewKnown, g.storedTime, g.storedCursor = true, t, cursor
+	return nil
 }

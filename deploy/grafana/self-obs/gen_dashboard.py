@@ -139,8 +139,8 @@ def add(p):
 
 
 # === Tab: Overview / SLO =====================================================
-add(stat(100, "Loops healthy", "HEALTHY when no selected loop is staler than 2x its OWN 6h baseline (max freshness_ratio < 2). Self-relative — won't read STALE just because a slow log-export loop is legitimately tens of minutes behind. Needs the recording rules pushed.",
-         'max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=HEALTHY_MAP))
+add(stat(100, "Loops healthy", "HEALTHY when no selected loop is staler than 2x its OWN 6h baseline (max freshness_ratio < 2) AND none is older than the 3h absolute ceiling of GenaiOtelBridgePollerStale (a long stall absorbs the self-relative baseline, so the ratio alone turns green again). Self-relative — won't read STALE just because a slow log-export loop is legitimately tens of minutes behind. Needs the recording rules pushed.",
+         '(max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2) * (max(time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})) < bool 10800)', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=HEALTHY_MAP))
 add(stat(101, "Leader present", "1 (PRESENT) if any selected loop exported a timestamp in the last 15m. ABSENT => leader gone / never emitted (distinct from stale). Inline — no recording rule required.",
          'max(present_over_time(genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"}[15m]))', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=PRESENT_MAP))
 add(stat(102, "Replicas emitting", "Distinct service_instance_id self-reporting. <2 => no standby (GenaiOtelBridgeNoStandby). Both active+standby self-emit, so 2 is the healthy HA steady state.",
@@ -202,7 +202,7 @@ add(ts(143, "Auth errors /s (401/403)", "rate(genai_otel_bridge_auth_errors_tota
        "cps", [(f'sum by (loop, source) (rate(genai_otel_bridge_auth_errors_total{LOOP}[{RI}]))', "{{loop}} / {{source}}")]))
 add(ts(144, "Source capability outcomes /s", "rate(genai_otel_bridge_source_capability_total) by loop, graph, and state. permission-denied means the capability cannot be used; GenaiOtelBridgeWorkspaceScopePermissionDenied covers workspace_scope. endpoint-absent and plan-unsupported are valid reserved states but currently producerless, so no series distinguishes them; a single 404 remains ambiguous and steady versus intermittent increments require query-time judgement.",
        "cps", [(f'sum by (loop, graph, state) (rate(genai_otel_bridge_source_capability_total{LOOP}[{RI}]))', "{{loop}} / {{graph}} / {{state}}")]))
-add(ts(145, "Source data incompleteness /s", "rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason. window_truncated is a counted dropped-records gap; export_failed/export_stuck mean the export pipeline cannot produce data. GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.",
+add(ts(145, "Source data incompleteness /s", "rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason. window_truncated (LangSmith runs only) is a counted dropped-records gap; export_failed/export_stuck mean the export pipeline cannot produce data; window_oversize is a parked Portkey logs_export window (nothing dropped, shrink settings.window). GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.",
        "cps", [(f'sum by (loop, reason) (rate(genai_otel_bridge_source_data_incomplete_total{LOOP}[{RI}]))', "{{loop}} / {{reason}}")]))
 
 # === Tab: Cardinality & governance ===========================================

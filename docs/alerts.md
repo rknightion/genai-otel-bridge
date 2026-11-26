@@ -23,12 +23,12 @@ gcx resources push -p deploy/grafana/self-obs --context self-obs-stack
 | Alert | Severity | When it fires |
 |-------|----------|---------------|
 | [GenaiOtelBridgeLeaderAbsent](#genaiotelbridgeleaderabsent) | critical | No successful emit from any replica in 15m |
-| [GenaiOtelBridgePollerStale](#genaiotelbridgepollerstale) | warning | A loop is staler than 2× its own 6h baseline AND > 300s |
+| [GenaiOtelBridgePollerStale](#genaiotelbridgepollerstale) | warning | A loop is staler than 2× its own 6h baseline AND > 300s, or older than 3h |
 | [GenaiOtelBridgeEmitFailing](#genaiotelbridgeemitfailing) | critical | Fatal emit errors in the last 10m |
 | [GenaiOtelBridgeAuthErrors](#genaiotelbridgeautherrors) | critical | Upstream returned 401/403 (credential failure) |
 | [GenaiOtelBridgeUpstreamErrorBudget](#genaiotelbridgeupstreamerrorbudget) | warning | > 20% of requests to an upstream target are errors |
-| [GenaiOtelBridgeWindowTruncatedDroppingRecords](#genaiotelbridgewindowtruncateddroppingrecords) | warning | A log loop truncated a window; records were dropped |
-| [GenaiOtelBridgeExportPipelineDataIncomplete](#genaiotelbridgeexportpipelinedataincomplete) | critical | A Portkey export job failed or remained stuck |
+| [GenaiOtelBridgeWindowTruncatedDroppingRecords](#genaiotelbridgewindowtruncateddroppingrecords) | warning | The LangSmith `runs` loop truncated a window; records were dropped |
+| [GenaiOtelBridgeExportPipelineDataIncomplete](#genaiotelbridgeexportpipelinedataincomplete) | critical | A Portkey export job failed or remained stuck, or a `logs_export` window is parked as oversize |
 | [GenaiOtelBridgeWorkspaceScopePermissionDenied](#genaiotelbridgeworkspacescopepermissiondenied) | critical | A credential does not match the configured workspace scope |
 | [GenaiOtelBridgeDataLoss](#genaiotelbridgedataloss) | warning | Samples skipped for a real-loss reason (too-old / duplicate) |
 | [GenaiOtelBridgeBucketRevisedAfterSettle](#genaiotelbridgebucketrevisedaftersettle) | warning | > 30 settled buckets/h still changing after `bucket_settle` |
@@ -73,13 +73,20 @@ See also: [Troubleshooting](./troubleshooting.md), [High Availability](./high-av
 
 **Severity:** warning
 
-**Fires when:** a loop's last-success age exceeds **2× its own trailing-6h p90 baseline AND
-> 300 seconds** for 15 minutes.
+**Fires when:** either arm holds for 15 minutes:
+
+- **Relative arm:** a loop's last-success age exceeds **2× its own trailing-6h p90 baseline AND
+  > 300 seconds**.
+- **Absolute arm:** a loop's last-success age exceeds **10800 seconds (3 hours)**.
 
 This rule is **self-relative** — each loop's threshold is derived from its own recent behaviour.
 Log-export loops (`logs_export`, `runs`) legitimately take tens of minutes per cycle; the
 self-relative threshold avoids false positives on those loops while remaining sensitive to
-a genuinely stuck snapshot loop (`sessions`).
+a genuinely stuck snapshot loop (`sessions`). The relative arm cannot hold through a long stall:
+after about 36 minutes the trailing p90 is itself a stalled sample and the condition turns false at
+about 72 minutes of stall. The 3-hour absolute arm sits above the slowest healthy sawtooth and keeps the
+alert firing until the loop recovers. It also catches a parked `logs_export` window
+(`window_oversize`), where the counter fires only once.
 
 **What to check:**
 
@@ -157,8 +164,10 @@ See also: [Troubleshooting — auth errors](./troubleshooting.md#auth-errors-401
 
 **Severity:** warning
 
-**Fires when:** a windowed log loop (`runs`, `logs_export`) truncated a window — it advanced
-past undrained records with a counted gap. Some log records were dropped.
+**Fires when:** the LangSmith `runs` loop truncated a window — it advanced past undrained
+records with a counted gap. Some log records were dropped. Only `runs` emits `window_truncated`;
+a Portkey `logs_export` window that is too large is parked instead (see
+[GenaiOtelBridgeExportPipelineDataIncomplete](#genaiotelbridgeexportpipelinedataincomplete)).
 
 **Query:** `sum by (loop) (increase(genai_otel_bridge_source_data_incomplete_total{reason="window_truncated"}[10m])) > 0`
 
@@ -166,10 +175,8 @@ The truncated count is unknowable by construction (the loop stops at the page ca
 
 **What to check:**
 
-1. Which loop truncated? The `loop` label identifies it.
-2. If `logs_export` is truncating: increase `settings.max_pages_per_window` or decrease
-   `settings.window` to reduce the volume per window.
-3. If `runs` is truncating: increase `settings.max_pages_per_window` or narrow the scope
+1. Which loop truncated? The `loop` label identifies it (`runs`).
+2. Increase `settings.max_pages_per_window` or narrow the scope
    via `settings.session_filter`.
 
 ---
@@ -178,13 +185,21 @@ The truncated count is unknowable by construction (the loop stops at the page ca
 
 **Severity:** critical
 
-**Fires when:** `genai_otel_bridge_source_data_incomplete_total` increases for `reason=export_failed`
-or `reason=export_stuck`. The export-job lifecycle cannot produce the target's data.
+**Fires when:** `genai_otel_bridge_source_data_incomplete_total` increases for `reason=export_failed`,
+`reason=export_stuck` or `reason=window_oversize`. For the first two the export-job lifecycle cannot
+produce the target's data. `window_oversize` means a Portkey `logs_export` window needed more pages
+than `settings.max_pages_per_window`: the loop fires the counter once, parks the window and stops
+advancing. Nothing was dropped, but the loop is stalled until the window changes.
 
-**Query:** `sum by (loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck"}[15m])) > 0`
+**Query:** `sum by (loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck|window_oversize"}[15m])) > 0`
 
 **What to check:** inspect the export-job status, then its retry and backoff behaviour. The `loop` and
 `reason` labels distinguish a failed export from a stuck one.
+
+For `reason=window_oversize`, shrink `settings.window` on the affected `logs_export` loop. Raising
+`max_pages_per_window` is not the remedy here and no records were dropped; the parked window is
+re-planned once the window setting changes. The counter fires once per park, so use
+`GenaiOtelBridgePollerStale` for the lasting signal that the loop is not advancing.
 
 ---
 

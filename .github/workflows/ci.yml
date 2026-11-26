@@ -30,7 +30,7 @@ jobs:
       matrix:
         include:
           - name: build-vet and acceptance
-            run: just build typecheck
+            run: just fmt-check build typecheck gen-check
           - name: lint
             run: just lint
           - name: test

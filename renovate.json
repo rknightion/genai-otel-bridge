@@ -77,7 +77,7 @@
       "description": "Pinned justfile tool versions; each assignment declares its own Renovate datasource and package metadata.",
       "managerFilePatterns": ["/^justfile$/"],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?(?: extractVersion=(?<extractVersion>[^\\s]+))?\\s+(?:golangci_lint_version|setup_envtest_version|envtest_k8s_version|helm_version|k3d_version|go_licenses_version|syft_version|gitleaks_version)\\s*:=\\s*env\\('[^']+', '(?<currentValue>[^']+)'\\)"
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?(?: extractVersion=(?<extractVersion>[^\\s]+))?\\s+(?:golangci_lint_version|setup_envtest_version|envtest_k8s_version|helm_version|k3d_version|go_licenses_version|syft_version|gitleaks_version|pyyaml_version)\\s*:=\\s*env\\('[^']+', '(?<currentValue>[^']+)'\\)"
       ],
       "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
     },

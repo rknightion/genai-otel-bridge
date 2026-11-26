@@ -37,6 +37,38 @@ Extend it when unit-suffixed or counter names are added.
 with `source.WrapAuth(code, err)` into the retryable Collect error (it stays a counted collect failure)
 and the scheduler stretches the wait as for quota [#537].
 
+## Scope gate (`scope.go`, design §5.1 and §7)
+
+`ScopeAsserter` is an optional capability a source implements when it can report what its API key
+reads: `ScopeMatched`, `ScopeMismatch` or `ScopeUnverifiable`, or an error for a failed call. A 401 or
+403 is returned as `*AuthError{Status}`; the asserter never calls `Deps.OnAuthError`, because the
+scheduler raises the auth signal for it. No source implements it yet (unit 4b, #526).
+
+`ScopeGate` is the vendor-neutral policy, one per pipeline, shared by every loop of the pipeline and
+asked by the scheduler before each collect (`Before` returns `ScopeProceed`, `ScopeWait` or
+`ScopeMismatched`, or an error for a failed call). It holds one in-memory state (no result, matched,
+unverified, mismatched) and makes one assertion call at a time: the mutex is held across the call, so
+concurrent ticks wait for the first call's result rather than calling again.
+
+- Re-assertion is due one interval (10 minutes) after a fresh match; while unverified or mismatched,
+  or after a failed call, at most one call a minute. `ScopeUnverifiable` keeps a match. A failed call
+  keeps a match for two intervals after the last successful assertion or restored match, then is a
+  failure (the ticks between its calls wait). Only `ScopeMatched` ends a mismatch. None of these is a
+  config key. A call cut short by the leader context's cancellation changes and counts nothing.
+- `Elected(ctx)` resets the gate and reads the remembered match at `ScopeMatchKey(sourceInstance)`
+  (`<source instance>/scope-match/v1`; the loop name `scope-match` is reserved). A stored digest equal
+  to the configured `ScopeMatchDigest(KeyFingerprint(header), name, id)` starts the gate matched with
+  its first re-assertion at `Jitter(10m)`; anything else, or a read error, starts it with no result.
+  `Reset()` sets no result. Both report the state through `OnState` (`""` is no result).
+- Writes go through `ScopeMatchStore` (a `checkpoint.Checkpointer` satisfies it), with the leader
+  epoch from the context. `Time` is the later of now and one second after the stored time the gate
+  holds, so `checkpoint.CheckMonotonic` never refuses it when this leader's clock is behind the last
+  one's. A match is written on `ScopeMatched` when the stored digest differs; an empty `Cursor` on every
+  `ScopeMismatch` whose stored digest is not already empty. The gate's view of the store changes only
+  after a write succeeds, so a refused write is tried again at the next such result. Until a read or
+  write succeeds the view is unknown, and both writes are made.
+- `KeyFingerprint` and the digest are never logged or emitted.
+
 ## Guard
 
 One `*Guard` instance per group is shared across the loop runners of that group (the rows that share a

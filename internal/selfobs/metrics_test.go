@@ -731,3 +731,95 @@ func TestWithSeedsPartialRejectAtZero(t *testing.T) {
 		t.Fatalf("With(\"\", \"\") must add no partial-reject series: got %d, want the 2 unlabelled", n)
 	}
 }
+
+// --- unit 4a: the scope gate's two signals ---
+
+// scopePoints maps each data point of the named instrument, by its encoded attribute set, to its value.
+func scopePoints(t *testing.T, r metric.Reader, name string) map[string]float64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := r.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]float64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, mm := range sm.Metrics {
+			if mm.Name != name {
+				continue
+			}
+			switch d := mm.Data.(type) {
+			case metricdata.Gauge[float64]:
+				for _, dp := range d.DataPoints {
+					out[dp.Attributes.Encoded(attribute.DefaultEncoder())] = dp.Value
+				}
+			case metricdata.Sum[int64]:
+				for _, dp := range d.DataPoints {
+					out[dp.Attributes.Encoded(attribute.DefaultEncoder())] = float64(dp.Value)
+				}
+			default:
+				t.Fatalf("%s is %T", name, mm.Data)
+			}
+		}
+	}
+	return out
+}
+
+// TestScopeStateGauge: through a With copy, scope_state carries exactly tenant, pipeline and state; the
+// current state is 1 and the other two 0, no result is all 0, and two pipelines keep separate series.
+// A Metrics nothing has asked for a scope state exports no scope_state series (the legacy shape).
+func TestScopeStateGauge(t *testing.T) {
+	const name = "genai_otel_bridge_scope_state"
+	m, r := newTestMetrics(t)
+	if got := scopePoints(t, r, name); len(got) != 0 {
+		t.Fatalf("unused scope_state exports %v, want nothing", got)
+	}
+	a, b := m.With("t1", "t1.a"), m.With("t1", "t1.b")
+	a.ScopeState("matched")
+	b.ScopeState("unverified")
+	for _, sets := range seriesByName(t, r)[name] {
+		if k := sortedLabelKeys(sets); !slices.Equal(k, []string{"pipeline", "state", "tenant"}) {
+			t.Fatalf("label keys %v, want [pipeline state tenant]", k)
+		}
+	}
+	key := func(p, s string) string { return "pipeline=" + p + ",state=" + s + ",tenant=t1" }
+	want := map[string]float64{
+		key("t1.a", "matched"): 1, key("t1.a", "unverified"): 0, key("t1.a", "mismatched"): 0,
+		key("t1.b", "matched"): 0, key("t1.b", "unverified"): 1, key("t1.b", "mismatched"): 0,
+	}
+	if got := scopePoints(t, r, name); !maps.Equal(got, want) {
+		t.Fatalf("scope_state = %v, want %v", got, want)
+	}
+	a.ScopeState("mismatched")
+	b.ScopeState("")
+	want = map[string]float64{
+		key("t1.a", "matched"): 0, key("t1.a", "unverified"): 0, key("t1.a", "mismatched"): 1,
+		key("t1.b", "matched"): 0, key("t1.b", "unverified"): 0, key("t1.b", "mismatched"): 0,
+	}
+	if got := scopePoints(t, r, name); !maps.Equal(got, want) {
+		t.Fatalf("scope_state after a change and a reset = %v, want %v", got, want)
+	}
+}
+
+// TestScopeAssertionCounterLabels: through a With copy, scope_assertion_total carries exactly tenant,
+// pipeline and result and counts each call under its result.
+func TestScopeAssertionCounterLabels(t *testing.T) {
+	const name = "genai_otel_bridge_scope_assertion_total"
+	m, r := newTestMetrics(t)
+	if got := scopePoints(t, r, name); len(got) != 0 {
+		t.Fatalf("unused scope_assertion_total exports %v, want nothing", got)
+	}
+	c := m.With("t1", "t1.a")
+	for _, res := range []string{"matched", "mismatch", "unverifiable", "error", "error"} {
+		c.ScopeAssertion(res)
+	}
+	for _, sets := range seriesByName(t, r)[name] {
+		if k := sortedLabelKeys(sets); !slices.Equal(k, []string{"pipeline", "result", "tenant"}) {
+			t.Fatalf("label keys %v, want [pipeline result tenant]", k)
+		}
+	}
+	key := func(res string) string { return "pipeline=t1.a,result=" + res + ",tenant=t1" }
+	want := map[string]float64{key("matched"): 1, key("mismatch"): 1, key("unverifiable"): 1, key("error"): 2}
+	if got := scopePoints(t, r, name); !maps.Equal(got, want) {
+		t.Fatalf("scope_assertion_total = %v, want %v", got, want)
+	}
+}

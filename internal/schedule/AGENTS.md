@@ -16,6 +16,22 @@ copy); nil means the scheduler's. `NewLoopRunner(..., m, opts ...RunnerOption)` 
 which adds the same two attributes to every runner log line; the runner's limiter is per runner, so its
 keys need no pipeline. The `Metrics` interface does not change.
 
+A spec can carry its pipeline's scope gate (`LoopSpec.Gate *source.ScopeGate`, unit 4a; nil means no gate
+and a tick exactly as without one). The tick asks it after the `Busy` check and before `Since`:
+
+- `ScopeProceed` collects as usual.
+- `ScopeWait` ends the tick with no lag recorded, no unreadable time counted and nothing counted.
+- `ScopeMismatched` degrades the loop with reason `scope_mismatch` and ends the tick the same way, so
+  the loop is next ticked at `DegradedBackoff`; its next successful save clears the degrade.
+- A failed call is handled as a failed collect: `Since`, `window_lag` and `backfill_unstorable` as
+  today, then `emit_errors_total{kind="collect"}`, a warning (limiter key `scope_assertion:<loop>`,
+  with the pipeline id when set) and, for a `*source.AuthError` anywhere in the chain,
+  `AuthError(Key().Loop, source)`, all on the spec's `Metrics`. Nothing is collected. A failure after the
+  leader context is cancelled is the cancellation and is not counted.
+
+`Scheduler.Run` calls `Elected(leaderCtx)` once per distinct gate before starting any loop, and
+`Reset()` on each after the goroutines join.
+
 ## Invariants, each backed by a test
 
 - Single-flight collection. `Busy()` blocks re-collection while a batch is in flight and the

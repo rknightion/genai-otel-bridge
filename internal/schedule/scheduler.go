@@ -157,6 +157,11 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 	}
 	wm, err := sp.Runner.Since(ctx) // [CP-C1] in-memory saved frontier, or persisted checkpoint
 	if err != nil {
+		if ctx.Err() != nil {
+			// [#368] leadership lost / shutdown mid-load: the cancellation, not a checkpoint failure
+			span.SetAttributes(attribute.String("outcome", "cancelled"))
+			return false
+		}
 		s.m.EmitError(name, "checkpoint_load")
 		if s.lim.Allow("checkpoint_load:" + name) {
 			slog.Warn("checkpoint load failed; skipping tick", "loop", name, "err", err)
@@ -200,6 +205,11 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 		sp.Runner.Degrade("granularity_unexpected")
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "granularity_unexpected")
+		return
+	case err != nil && ctx.Err() != nil:
+		// [#368] Leadership lost or shutdown mid-collect: the error is the cancellation, not an upstream
+		// failure, so neither count nor warn. Nothing was enqueued, so nothing advances.
+		span.SetAttributes(attribute.String("outcome", "cancelled"))
 		return
 	case err != nil:
 		s.m.EmitError(name, "collect")

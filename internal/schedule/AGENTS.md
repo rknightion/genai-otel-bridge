@@ -26,6 +26,10 @@ implements.
   `error`; the span never changes the live leadership context or commit semantics.
 - Leadership-loss race. A `select` can dequeue a batch in the same iteration `leaderCtx` is
   cancelled, so both `Run()` and `ProcessBatch()` re-check `ctx.Err()` before emit and drop it.
+- Cancellation is not failure. An emit, save, load or collect that fails after the leader context is
+  cancelled (shutdown, lease loss) is not counted in `emit_errors_total`, not logged as a failure, does
+  not step `saveFails` and does not degrade; a fence seen after cancellation is the hand-over to the
+  next leader. The same errors under a live context still count.
 
 ## Behaviour
 

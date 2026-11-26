@@ -261,6 +261,12 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 			r.enterDegraded("terminal emit reject")
 			return
 		default: // RetryableError (5xx/429/exhausted): stop, no advance; re-pull next tick.
+			if leaderCtx.Err() != nil {
+				// [#368] Leadership lost or shutdown mid-emit: the error is the cancellation, not an emit
+				// failure, so neither count nor warn (retryable_exhausted feeds the critical emit-failing
+				// alert). Nothing advances: the interior commit below would no-op on the cancelled ctx anyway.
+				return
+			}
 			r.m.EmitError(r.name, "retryable_exhausted")
 			if r.lim.Allow("retry:" + r.name) {
 				slog.Warn("emit failed after retries; will re-pull next tick", "loop", r.name)
@@ -320,6 +326,9 @@ func (r *LoopRunner) processLogs(leaderCtx context.Context, b model.Batch) bool 
 		r.enterDegraded("terminal emit reject (logs)")
 		return false
 	default: // retryable exhausted → no advance, re-pull (idempotent: cursor not committed)
+		if leaderCtx.Err() != nil {
+			return false // [#368] cancelled mid-emit (leadership loss / shutdown): not a failure, no count
+		}
 		r.m.EmitError(r.name, "retryable_exhausted")
 		if r.lim.Allow("retry:" + r.name) {
 			slog.Warn("emit failed after retries; will re-pull next tick (logs)", "loop", r.name)
@@ -352,6 +361,11 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 	if err != nil {
 		if !errors.Is(err, checkpoint.ErrStaleWrite) {
 			span.SetAttributes(attribute.String("outcome", "error"))
+			if ctx.Err() != nil {
+				// [#368] The save was cut short by leadership loss or shutdown: not a checkpoint failure, so
+				// no checkpoint_save count, no warn and no saveFails step towards the degrade threshold.
+				return
+			}
 			r.saveFails++
 			r.m.EmitError(r.name, "checkpoint_save")
 			if r.saveFails >= checkpointFailThreshold && !r.degraded {
@@ -371,7 +385,9 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 		// in-memory frontier to the durable truth either way so Since() never runs ahead of a rejected write.
 		if stored, lerr := r.cp.Load(ctx, key); lerr == nil {
 			span.SetAttributes(attribute.String("outcome", "stale"))
-			if isFencedWrite(stored, w) {
+			// [#368] Under a cancelled ctx the fence is the expected hand-over to the next (higher-epoch)
+			// leader, not a stuck loop: the write stays rejected, but it is neither counted nor degraded.
+			if isFencedWrite(stored, w) && ctx.Err() == nil {
 				span.SetAttributes(attribute.String("outcome", "fenced"))
 				r.m.EmitError(r.name, "checkpoint_fenced")
 				slog.Warn("checkpoint forward-write fenced (stale-epoch or concurrent leader); not advancing",

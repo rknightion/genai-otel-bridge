@@ -21,14 +21,16 @@ Do not include secrets, tokens, or any prompt/response content.
 
 <!-- Anything reviewers should focus on, risks, follow-ups. -->
 
+<!-- BEGIN vended: rknightion/.github -->
 ## Issue
 
-<!-- Contributors write `Refs #<number>` on a line of its own for the issue the change works on: no closing keyword. Maintainers write `Closes #<number>` on a line of its own for each issue of this repository the change completes, with the table below. A change under `.github/workflows/` or `.github/actions/` never carries a closing keyword: write `Task: none, <reason>` on a line of its own (with `Refs #<number>` beside it if you like). A change with no issue also says `Task: none, <reason>`. -->
+<!-- Closes #<number> on a line of its own for each issue of this repository this change completes (Closes owner/repo#<number> means the same). Refs #<number> when it only relates to one. A change with no issue says "Task: none, <reason>" on a line of its own. -->
 
 ## Acceptance evidence
 
-<!-- One row per acceptance criterion of every issue this change closes, copied exactly from the issue's "- [ ] ACn" list. Evidence class is code, live or browser. In Proof, put repository paths in backticks, and write anything else (a command, a read-back, a run) without them. Delete the example row. Leave the table out only when the change closes no issue. -->
+<!-- A change that closes an issue needs one line of its own here: "Evidence: <command and result>", the command you ran and what it showed. With that line, delete the table below. The table is the longer form, for when each acceptance criterion needs its own proof: one row per acceptance criterion of every issue this change closes, copied exactly from the issue's "- [ ] ACn" list. Evidence class is code, live or browser. In Proof, put repository paths in backticks, and write anything else (a command, a read-back, a run) without them. Delete the example row. Leave the table out when the change closes no issue. -->
 
 | Issue | AC | AC text | Evidence class | Proof |
 | --- | --- | --- | --- | --- |
 | #N | AC1 | The acceptance criterion, word for word | code | `path/to/the_test.go` TestWhatItProves |
+<!-- END vended: rknightion/.github -->

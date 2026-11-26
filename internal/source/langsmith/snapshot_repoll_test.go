@@ -62,6 +62,41 @@ func TestSnapshotSameMinuteRepollSessionsSkipsVendor(t *testing.T) {
 	}
 }
 
+// Collect succeeds but the emit then fails: the runner leaves the checkpoint unchanged, so the next
+// poll in the same minute receives the OLD watermark and must emit again (nothing was delivered).
+func TestSnapshotSameMinuteRetryAfterFailedEmitSessions(t *testing.T) {
+	srv := fakeLangSmith(t, loadFixture(t, "sessions_with_stats.json"))
+	defer srv.Close()
+	now := time.Date(2026, 11, 16, 12, 0, 2, 0, time.UTC)
+	lp := mkLoop(t, testConfig(srv), now)
+	since := model.Watermark{} // never advanced: the emit failed, nothing committed
+	if b, err := lp.Collect(context.Background(), since); err != nil || len(b.Samples) == 0 {
+		t.Fatalf("first poll: err=%v samples=%d", err, len(b.Samples))
+	}
+	now = now.Add(55 * time.Second)
+	lp.now = func() time.Time { return now }
+	b, err := lp.Collect(context.Background(), since)
+	if err != nil || len(b.Samples) == 0 {
+		t.Fatalf("same-minute retry after a failed emit must emit again: err=%v samples=%d", err, len(b.Samples))
+	}
+}
+
+func TestSnapshotSameMinuteRetryAfterFailedEmitUsage(t *testing.T) {
+	now := time.Date(2026, 11, 16, 12, 0, 2, 0, time.UTC)
+	f := newFakeUsageServer(t, usageFixture())
+	lp := mkUsageLoop(t, f, now, nil)
+	since := model.Watermark{}
+	if b, err := lp.Collect(context.Background(), since); err != nil || len(b.Samples) == 0 {
+		t.Fatalf("first poll: err=%v samples=%d", err, len(b.Samples))
+	}
+	now = now.Add(55 * time.Second)
+	lp.now = func() time.Time { return now }
+	b, err := lp.Collect(context.Background(), since)
+	if err != nil || len(b.Samples) == 0 {
+		t.Fatalf("same-minute retry after a failed emit must emit again: err=%v samples=%d", err, len(b.Samples))
+	}
+}
+
 func TestSnapshotSameMinuteRepollSessionsFailureDoesNotConsumeStamp(t *testing.T) {
 	var fail atomic.Bool
 	fail.Store(true)

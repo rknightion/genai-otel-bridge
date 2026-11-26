@@ -17,13 +17,13 @@ per session, no `data_points`, no per-minute buckets.
 
 - **Every sample is stamped at `now.Truncate(1m)`** (review-M3). The backend does NOT
   last-write-wins a changed value at an existing timestamp: it rejects it, and the runner would count
-  the whole batch as `samples_skipped{reason=duplicate_timestamp}`. So each loop keeps a `lastStamp`
-  and a poll in an already-emitted minute makes no vendor call, emits nothing and only advances the
-  liveness watermark. `CoalesceDPM` is per-batch and cannot dedup across polls. Residual: the first poll
-  after a failover or restart can land in the minute the previous leader wrote; that one is rejected and
-  counted.
+  the whole batch as `samples_skipped{reason=duplicate_timestamp}`. So each loop reads the committed watermark (`since.Time`, advanced only when the runner commits a
+  batch, so an emit that failed is retried in the same minute) and a poll in an already-committed minute
+  makes no vendor call, emits nothing and only advances the liveness watermark. `CoalesceDPM` is
+  per-batch and cannot dedup across polls. A failover or restart is covered too, as the watermark is
+  checkpointed.
 - The watermark advances `Time = now` (precise, un-truncated) as a forward-only liveness cursor;
-  `since.Time` is unused.
+  `since.Time` is read only for the same-minute check above, never as a window start.
 - **No settle, bucket-revision or gap-free backfill.** `deps.OnBucketRevised` is deliberately omitted
   (nothing to revise) and `ErrGranularityUnexpected` is not a path here. `bucket_settle`,
   `max_backfill` and `bootstrap_lookback` are portkey-bucket concepts that do not apply.

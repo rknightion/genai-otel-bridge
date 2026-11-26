@@ -256,8 +256,6 @@ type sessionsLoop struct {
 	onAuthError               func(loop, source string)
 	onDataIncomplete          func(loop string, reason source.IncompleteReason)
 	now                       func() time.Time
-	// lastStamp is the sample timestamp of the last successful derive. Collect is single-flight, so no lock.
-	lastStamp time.Time
 }
 
 func (l *sessionsLoop) Cadence() time.Duration { return l.cadence }
@@ -294,7 +292,10 @@ func (l *sessionsLoop) Collect(ctx context.Context, since model.Watermark) (mode
 	// Emit at most once per sample timestamp: the backend rejects (does not last-write-wins) a changed
 	// value at an existing (series, ts), which the runner would count as lost samples. A same-stamp poll
 	// makes no vendor call and only advances the liveness watermark.
-	if stamp := now.Truncate(time.Minute); stamp.Equal(l.lastStamp) {
+	// "Already emitted" is read from the COMMITTED watermark (since.Time = the poll time of the last batch
+	// the runner committed), never from in-memory state set before delivery: a batch whose emit failed
+	// leaves the watermark unchanged, so the retry in the same minute still emits.
+	if sameStamp(since, now) {
 		wm := since
 		wm.Time = now
 		return model.Batch{Key: l.Key(), Watermark: wm}, nil
@@ -352,10 +353,15 @@ func (l *sessionsLoop) Collect(ctx context.Context, since model.Watermark) (mode
 	}
 
 	samples := derive(sessions, l.deriveCfg, now)
-	l.lastStamp = now.Truncate(time.Minute)
 	wm := since
 	wm.Time = now
 	return model.Batch{Key: l.Key(), Samples: samples, Watermark: wm}, nil
+}
+
+// sameStamp reports whether the committed watermark already sits in now's minute, i.e. a batch stamped at
+// now.Truncate(time.Minute) was committed. A zero watermark (nothing committed) is never the same stamp.
+func sameStamp(since model.Watermark, now time.Time) bool {
+	return !since.Time.IsZero() && since.Time.Truncate(time.Minute).Equal(now.Truncate(time.Minute))
 }
 
 // fetchPage GETs one offset/limit page of /sessions with include_stats. Returns the decoded sessions,

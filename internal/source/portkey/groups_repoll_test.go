@@ -45,6 +45,24 @@ func TestGroupsSameMinuteRepollSkipsVendor(t *testing.T) {
 	}
 }
 
+// Collect succeeds but the emit fails (watermark not advanced): the same-minute retry must emit again.
+func TestGroupsSameMinuteRetryAfterFailedEmit(t *testing.T) {
+	srv := fakeGroups(t, map[string][]groupsResponse{"ai-models": {modelRows("a")}}, nil, nil)
+	defer srv.Close()
+	now := time.Date(2026, 11, 16, 12, 0, 2, 0, time.UTC)
+	gl := mkGroups(t, groupsCfg(srv, map[string]string{"emit_prompts": "false"}), source.Deps{}, now)
+	since := model.Watermark{}
+	if b, err := gl.Collect(context.Background(), since); err != nil || len(b.Samples) == 0 {
+		t.Fatalf("first poll: err=%v samples=%d", err, len(b.Samples))
+	}
+	now = now.Add(55 * time.Second)
+	gl.now = func() time.Time { return now }
+	b, err := gl.Collect(context.Background(), since)
+	if err != nil || len(b.Samples) == 0 {
+		t.Fatalf("same-minute retry after a failed emit must emit again: err=%v samples=%d", err, len(b.Samples))
+	}
+}
+
 func TestGroupsSameMinuteRepollFailureDoesNotConsumeStamp(t *testing.T) {
 	status := map[string]map[int]int{"ai-models": {0: http.StatusInternalServerError}}
 	srv := fakeGroups(t, map[string][]groupsResponse{"ai-models": {modelRows("a")}}, status, nil)

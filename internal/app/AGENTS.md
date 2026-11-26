@@ -143,3 +143,12 @@ four checks (delivery, slug, self endpoint, self identity) return findings; `Tes
 needs none in any scenario, and `TestCrossTenantSeededFaults` needs each seeded fault reported by
 exactly the checks it names. A new seeded fault (unit 6b-2 adds the duplicate key) is another
 `faultCase`.
+
+`isolation_test.go` (`TestIsolation*`) drives three pipelines on simulated time (`isoStart` and `step`:
+`Options.Now`, the loop clocks and `RunOnceForTest` move together, fast retry policy) and fails one: a
+destination that answers 503 for ten minutes, a revoked key (35 minutes, longer than a matched gate's
+grace) or a key that reads another workspace. Every other pipeline's `window_lag` must stay within settle
+plus two cadences. The faulty pipeline is run first and last in the plan, because a leak by sharing one
+emitter or one gate shares the first row's. `acceptance_multi_test.go` (`TestMultiPipeline*`) runs the three
+single-pipeline acceptance scenarios again with three pipelines, each with its own vendor values and its
+own Mimir-model recorder, over one checkpoint file.

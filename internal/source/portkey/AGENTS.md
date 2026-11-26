@@ -87,6 +87,12 @@ is not a re-parameterised graphs loop.
   `settings.metadata_keys`, and the prompt dimension (`emit_prompts`, on by default). A 404 endpoint
   emits nothing for itself, fires `Deps.OnCapability(loop, endpoint, CapabilityTransient404)`, and
   does NOT block the others. Only when EVERY endpoint fails does `Collect` error.
+- **A skipped endpoint or a truncation is counted.** Every failure arm except 404 (transport/decode error,
+  non-200, `is_quota_exceeded`, row parse error) fires `OnDataIncomplete(loop, endpoint_unavailable)` once for
+  that endpoint; `max_groups` and the page cap fire `window_truncated`. The first HTTP 429 of a poll
+  stops the poll (the remaining endpoints and passes are counted, not called), and when every endpoint
+  failed with at least one quota failure (429 or `is_quota_exceeded`) `Collect` returns
+  `source.ErrQuotaExceeded`. `page_size` above 1000 is rejected at construction (1 MiB decode cap).
 - **All-or-nothing across pages.** `current_page` is 0-indexed; discard the whole endpoint's set on
   any page error, non-200, `is_quota_exceeded` or parse failure - it is a snapshot, so re-fetching
   next poll is free. Terminate on an empty or short page; the page cap

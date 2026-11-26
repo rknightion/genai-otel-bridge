@@ -114,7 +114,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cleanup
-          image: {{ .Values.image }}
+          image: {{ include "genai-otel-bridge.image" . }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - "-cleanup"

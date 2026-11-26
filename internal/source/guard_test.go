@@ -3,6 +3,7 @@
 package source
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -101,5 +102,103 @@ func TestGuardEmptyAllowlistDeniesLabels(t *testing.T) {
 	}
 	if len(out.Samples) != 1 {
 		t.Fatalf("empty allowlist: kept=%d want 1 (no-label sample)", len(out.Samples))
+	}
+}
+
+// budgetPlane drives one cardinality-budget plane (metric samples or log records) with a single label
+// set per call, so the active-series tests below run unchanged against Sanitize and SanitizeLogs (#383).
+type budgetPlane struct {
+	name   string
+	series string // the key onNew reports
+	send   func(g *Guard, value string) (dropped int)
+}
+
+var budgetPlanes = []budgetPlane{
+	{name: "samples", series: "m", send: func(g *Guard, v string) int {
+		_, d := g.Sanitize(model.Batch{Samples: []model.Sample{{Name: "m", Kind: model.Gauge, Labels: map[string]string{"session": v}, Timestamp: time.Unix(1, 0)}}})
+		return d
+	}},
+	{name: "logs", series: "logs:inst/loop/f", send: func(g *Guard, v string) int {
+		_, d := g.SanitizeLogs("inst/loop/f", []model.LogRecord{logRecord(map[string]string{"session": v}, nil, "")})
+		return d
+	}},
+}
+
+// fakeClock is a settable clock for GuardConfig.Now.
+type fakeClock struct{ t time.Time }
+
+func (c *fakeClock) now() time.Time       { return c.t }
+func (c *fakeClock) step(d time.Duration) { c.t = c.t.Add(d) }
+func newFakeClock() *fakeClock            { return &fakeClock{t: time.Unix(1_700_000_000, 0)} }
+func budgetGuard(c *fakeClock, budget int, onNew func(string)) *Guard {
+	return NewGuard(GuardConfig{AllowLabelKeys: []string{"session"}, PerSeriesBudget: budget, OnNewLabelValue: onNew, Now: c.now})
+}
+
+// TestGuardBudgetIsActiveNotLifetime (#383): the budget bounds ACTIVE label sets. With exactly one
+// active label set per tick and the clock stepping past the idle window between ticks, a churning
+// dimension three times the budget is never dropped, every admission still fires the new-label-value
+// hook, and the tracked state never grows past the budget. Pre-fix, the set of label sets ever seen
+// filled after budget ticks and every later one was dropped for the life of the process.
+func TestGuardBudgetIsActiveNotLifetime(t *testing.T) {
+	for _, p := range budgetPlanes {
+		t.Run(p.name, func(t *testing.T) {
+			const budget = 5
+			clock := newFakeClock()
+			warned := map[string]int{}
+			g := budgetGuard(clock, budget, func(s string) { warned[s]++ })
+			dropped := 0
+			for i := 0; i < 3*budget; i++ {
+				dropped += p.send(g, fmt.Sprintf("s%d", i))
+				clock.step(seenIdleWindow + time.Minute)
+			}
+			if dropped != 0 {
+				t.Fatalf("1 active label set per tick against a budget of %d, yet %d of %d were dropped", budget, dropped, 3*budget)
+			}
+			if warned[p.series] != 3*budget {
+				t.Fatalf("new-label-value hook fired %d times for %q, want %d (one per admission)", warned[p.series], p.series, 3*budget)
+			}
+			if n := len(g.seen[p.series].last); n > budget {
+				t.Fatalf("tracked %d label sets, want at most the budget %d (memory must stay bounded)", n, budget)
+			}
+		})
+	}
+}
+
+// TestGuardBudgetStillDropsWhenFull (#383): idle eviction must not turn the budget into no budget.
+// budget+1 label sets active at once drop exactly one, and a label set last seen just inside the idle
+// window still holds its slot; only once it has been idle for the whole window does a new set get in.
+func TestGuardBudgetStillDropsWhenFull(t *testing.T) {
+	for _, p := range budgetPlanes {
+		t.Run(p.name, func(t *testing.T) {
+			const budget = 5
+			clock := newFakeClock()
+			warned := 0
+			g := budgetGuard(clock, budget, func(string) { warned++ })
+			dropped := 0
+			for i := 0; i <= budget; i++ { // budget+1 simultaneously active label sets
+				dropped += p.send(g, fmt.Sprintf("s%d", i))
+			}
+			if dropped != 1 {
+				t.Fatalf("budget+1 active label sets: dropped %d, want exactly 1", dropped)
+			}
+			if warned != budget+1 {
+				t.Fatalf("new-label-value hook fired %d times, want %d (each admission plus the over-budget drop)", warned, budget+1)
+			}
+			// The admitted sets keep arriving, so they stay active and a new set is still refused.
+			clock.step(seenIdleWindow / 2)
+			for i := 0; i < budget; i++ {
+				if d := p.send(g, fmt.Sprintf("s%d", i)); d != 0 {
+					t.Fatalf("active label set s%d dropped=%d, want 0", i, d)
+				}
+			}
+			clock.step(seenIdleWindow - time.Second) // idle just under the window: still counted
+			if d := p.send(g, "late"); d != 1 {
+				t.Fatalf("new label set with the budget full of sets idle %s: dropped=%d, want 1", seenIdleWindow-time.Second, d)
+			}
+			clock.step(time.Second) // now idle for the whole window: evicted, the new set is admitted
+			if d := p.send(g, "late"); d != 0 {
+				t.Fatalf("new label set once the full set had been idle %s: dropped=%d, want 0", seenIdleWindow, d)
+			}
+		})
 	}
 }

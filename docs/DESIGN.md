@@ -163,7 +163,7 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
 - Immutable after load. (Hot reload is out of scope for v1.)
 
 ### 4.2 Scheduler / rate-limit / queue (`internal/schedule`)
-- One goroutine per loop; `time.Ticker(cadence)` + jitter (±10%).
+- One goroutine per loop; after each tick returns it arms a jittered timer (cadence ±10%), so the period is the cadence plus the collect time, not a fixed `time.Ticker`.
 - **Rate limiting is per *outbound request*, not per Collect (M6).** The token bucket
   (`golang.org/x/time/rate`, rps/burst from config, one per source, shared across its loops) is
   acquired inside the HTTP client (`httpx`) before *each* request — because one Collect fans out into
@@ -176,7 +176,7 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
   watermark past an un-emitted earlier batch is a silent gap. Per-loop single-flight emit makes
   "advance the watermark to the batch that just completed" trivially correct (it is always the
   contiguous successor). Cross-loop, fully concurrent — no head-of-line blocking between loops (F20).
-- Bounded queue (`queue.max_batches` per loop); send **blocks** when full (backpressure, never drop).
+- Bounded queue (`queue.max_batches` per loop); send **blocks** when full (backpressure, never drop). Collection is single-flight until the batch is emitted and saved, so a loop has at most one batch queued or in flight; the queue depth is a ceiling that steady state does not reach.
 - Single-flight per loop on **both** Collect and emit (a loop never overlaps itself).
 
 ### 4.3 Coordinator (`internal/coordinate`)
@@ -197,7 +197,7 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
   silently skipped because the loop watermark was already current (Cdx-A3). The fingerprint covers the
   output series set + naming config.
 - **Writes are monotonic + epoch-fenced (Cdx-C14/A2 — Lease is not a write fence).** `Save` rejects a
-  watermark ≤ the stored one (never moves the frontier backward) and carries the **leader lease
+  watermark that does not move forward (never moves the frontier backward; an equal `Time` with a changed `Cursor` is accepted, which the logs loops rely on) and carries the **leader lease
   epoch**; a stale demoted leader's write is rejected. The scheduler also checks lease ownership
   immediately before `Emit` and `Save` (§4.3). The single-threaded ConfigMap writer does *not* by
   itself prevent cross-replica stale writes — monotonicity + epoch do.
@@ -314,7 +314,7 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
 - **Resource / memory (modelled & bounded to the container limit).** It is fine for the app to use
   several GB if needed, **provided memory is modelled and bounded under the k8s container limit** —
   never OOM-killed. The model:
-  - **Dominant consumers:** (a) the per-loop bounded queues — `Σ queue.max_batches × max_batch_bytes`;
+  - **Dominant consumers:** (a) the per-loop queues — at most one batch per loop is queued or in flight (collection is single-flight), so the ceiling is `Σ max_batch_bytes` over loops, and `queue.max_batches` is only an upper bound on depth;
     (b) the **largest single in-flight payload** — for Portkey `logs_export` a job can be up to
     **50k records**, which if buffered whole is the real spike; (c) OTLP encode buffers; (d) Go
     runtime overhead.
@@ -356,9 +356,12 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   `genai_otel_bridge_source_capability_total{loop,graph,state}`. `state` is the closed set
   `endpoint-absent`, `plan-unsupported`, `permission-denied`, `no-data`, `transient-404`,
   `schema-changed`; producers pass typed constants. Current 404 producers use `transient-404`, because
-  one response cannot distinguish permanent absence from a plan gate or transient route failure.
-  `endpoint-absent` and `plan-unsupported` are therefore enumerated but producerless; steady versus
-  intermittent increments are interpreted at query time.
+  one response cannot distinguish permanent absence from a plan gate or transient route failure, so
+  `endpoint-absent` and `plan-unsupported` have no producer. `no-data` has none because an empty window is a
+  normal quiet result that advances the watermark and cannot be told from an idle workspace. `schema-changed`
+  has none because no code detects structural drift: tolerant decoders skip an unparseable line and count it
+  in `source_data_incomplete_total`, not as a capability state. All four are enumerated but producerless; steady
+  versus intermittent increments are interpreted at query time.
 - **F6 Open/incomplete & revised buckets (C1, the big one)** → a recent bucket may be incomplete (if
   emitted now → undercount) *and* may still change value *after* it settles (eventual consistency).
   **Mitigation:** emit a bucket only once `bucket_end ≤ now − bucket_settle`, where `bucket_settle` is
@@ -479,7 +482,7 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
 - **F36 NTP step / large backward clock correction on the leader** → a backward wall-clock jump moves
   `now − settle` backward, making an already-emitted bucket "eligible" again → duplicate-timestamp.
   Mitigation: the watermark is monotonic (never emit `bucket_end ≤ watermark.Time`), so a backward
-  clock jump cannot resurrect an emitted bucket; alert on detected backward jumps.
+  clock jump cannot resurrect an emitted bucket. No code detects a backward clock step, so there is no alert for one (not built).
 
 ### Added from the Codex review (2026-06-18)
 - **F37 New series added under an existing loop is silently skipped (Cdx-C4/A3)** → checkpoint key

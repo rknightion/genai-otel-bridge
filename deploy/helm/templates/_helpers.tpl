@@ -14,6 +14,17 @@ or a `helm upgrade` over an existing Deployment fails (selector is immutable pos
 {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- end -}}
 
+{{/*
+Container image shared by the Deployment and the post-delete cleanup Job. Default to the image built for
+THIS chart release when .Values.image is unset: chart version == appVersion == release version ==
+published image tag (all unprefixed, e.g. 3.0.1). A chart packaged for release X.Y.Z therefore
+default-installs the X.Y.Z image, never the previous release's binary. Override .Values.image to pin a
+digest or use a mirror/proxy.
+*/}}
+{{- define "genai-otel-bridge.image" -}}
+{{ .Values.image | default (printf "ghcr.io/rknightion/genai-otel-bridge:%s" .Chart.AppVersion) }}
+{{- end -}}
+
 {{- define "genai-otel-bridge.selectorLabels" -}}
 app: genai-otel-bridge
 {{- end -}}

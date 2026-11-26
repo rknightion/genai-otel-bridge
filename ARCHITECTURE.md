@@ -93,9 +93,9 @@ well, once, and turns it into clean Grafana-native telemetry.
 ```
 
 Three things this picture encodes: **one replica emits at a time** (leader election);
-**collection is decoupled from emission** by a bounded queue (which absorbs *transient* sink slowness;
-under *sustained* slowness it blocks on full and intentionally backpressures collection — visible as
-rising `window_lag`, never silent loss); and **the watermark only advances on successful emit** (the
+**collection is decoupled from emission** by a bounded per-loop queue and emit worker (collection is
+single-flight, so a loop has at most one batch queued or in flight; a slow sink therefore
+backpressures that loop's collection — visible as rising `window_lag`, never silent loss); and **the watermark only advances on successful emit** (the
 basis of the *conditional* gap-free / no-duplicate behaviour — engineered, see §9, not assumed).
 
 ---
@@ -214,8 +214,8 @@ type Emitter interface {
 }
 
 // Checkpointer durably stores watermarks keyed by CheckpointKey, shared across replicas for failover.
-// Save is MONOTONIC and EPOCH-FENCED (Cdx-C14): it rejects a watermark whose Time ≤ the stored Time,
-// or whose Epoch is older than the stored Epoch — so a stale/demoted leader cannot move the frontier
+// Save is MONOTONIC and EPOCH-FENCED (Cdx-C14): it rejects a watermark whose Time is before the stored Time,
+// an equal Time with an unchanged Cursor, or whose Epoch is older than the stored Epoch — so a stale/demoted leader cannot move the frontier
 // backward. A Kubernetes Lease reduces overlap; it is NOT itself a write fence — this is.
 type Checkpointer interface {
     Load(ctx context.Context, key CheckpointKey) (Watermark, error) // zero Watermark if absent;
@@ -231,7 +231,7 @@ type Coordinator interface {
 ```
 
 The **registry** maps a config `type` string to a `Source` constructor. The **composition root**
-(`cmd/genai-otel-bridge/main.go`) wires config → registry → enabled Sources → Scheduler → Emitter +
+(`internal/app`; `cmd/genai-otel-bridge/main.go` only calls it) wires config → registry → enabled Sources → Scheduler → Emitter +
 Checkpointer + Coordinator. Wiring only; no logic.
 
 A thin, generic **governance guard** sits between derive and emit (analogous to an Alloy relabel
@@ -312,7 +312,7 @@ default checkpointer, `configmaps` (get/create/update) in the tool's own namespa
   `Checkpointer` under a `CheckpointKey` (`{source_instance, loop, output-fingerprint}` — §4/§5,
   Cdx-C4). Default impl: a **Kubernetes ConfigMap** (one key per `CheckpointKey`), via a single writer
   goroutine, throttled, resource-version optimistic concurrency. **`Save` is monotonic + lease-epoch
-  fenced** (rejects ≤-stored Time or stale Epoch — Cdx-C14), so a Lease (which only reduces overlap)
+  fenced** (rejects an earlier Time, an equal Time with an unchanged Cursor, or a stale Epoch — Cdx-C14; an equal Time with a changed Cursor is accepted so stateful loops can persist in-flight progress), so a Lease (which only reduces overlap)
   does not have to be a write fence. A **file** impl (atomic temp-then-rename, periodic + on-shutdown
   sync) covers dev — **discouraged for HA/critical prod** (corrupt-file re-bootstrap risks dup-timestamp
   storms; Cdx-M5).
@@ -347,7 +347,7 @@ default checkpointer, `configmaps` (get/create/update) in the tool's own namespa
   leaves accepted samples durable and only the rejected bucket is skipped-with-gap. Conditions (1)–(3)
   keep these off the steady-state path; the classification is defence-in-depth.
 - **Checkpoint writes are monotonic + lease-epoch-fenced (Cdx-C14).** A Kubernetes Lease reduces
-  overlap but is not a write fence: `Save` rejects a watermark ≤ stored or from a stale epoch, so a
+  overlap but is not a write fence: `Save` rejects a watermark that does not move forward (an earlier `Time`, or an equal `Time` with an unchanged `Cursor`) or comes from a stale epoch, so a
   demoted/over-lapping leader cannot move the frontier backward or double-advance. The checkpoint key
   is `{source_instance}/{loop}/{output-schema-fingerprint}` (Cdx-C4), so adding a new series bootstraps
   its own history rather than being skipped by an already-current loop watermark.
@@ -363,7 +363,7 @@ out-of-order / too-old accept window** — surviving a multi-hour outage means w
 (Grafana Support), not buffering. For logs, a buffer also avoids an expensive re-fetch.
 
 **Memory is modelled and bounded to the container limit** (never OOM-killed): the dominant consumers
-are the bounded per-loop queues and the largest in-flight payload (a Portkey logs-export can be 50k
+are the largest in-flight payload per loop, because collection is single-flight and at most one batch per loop is queued or in flight (a Portkey logs-export can be 50k
 records — **streamed/chunked, never buffered whole**); `queue.*` sizes + `GOMEMLIMIT` are set against
 the k8s memory limit, and Go memstats are self-observed. Detail in `docs/DESIGN.md` §5.
 
@@ -444,14 +444,14 @@ The tool is on the production critical path, so it observes itself as a first-cl
 - **Self-metrics** (via the OTel-Go SDK, all `genai_otel_bridge_`-prefixed — the authoritative
   catalogue is `internal/selfobs/signals.go`, rendered into `docs/telemetry.md` and held in lockstep
   with the live instruments by `TestSelfObsSignalsParity`): the staleness/progress gauges
-  `last_success_timestamp_seconds`, `window_lag_seconds`, `queue_depth`; the throughput/gap counters
+  `last_success_timestamp_seconds`, `window_lag_seconds`, `queue_depth`, `loop_degraded`; the throughput/gap counters
   `emitted_total`, `emitted_logs_total`, `samples_skipped_total`, `emit_errors_total` (by `kind` —
   `kind="collect"` is the transient-Collect-failure counter), `guard_dropped_total`,
   `samples_capped_total`, `new_label_values_total`, `source_capability_total` (closed
   `{loop,graph,state}`), `source_data_incomplete_total` (closed `{loop,reason}`),
-  `auth_errors_total`, `bucket_revised_after_settle_total`; and the histograms
-  `upstream_request_duration_seconds` (outbound source-API latency by `{target,method,status_class}`)
-  and `bucket_revised_after_settle_age_seconds`. These are marked to **survive any Adaptive-Metrics
+  `auth_errors_total`, `emit_partial_success_rejected_total`, `bucket_revised_after_settle_total`; and the histograms
+  `upstream_request_duration_seconds` (outbound source-API latency by `{target,method,status_class}`),
+  `emit_request_duration_seconds` (OTLP emit POST latency by `{plane,status_class}`) and `bucket_revised_after_settle_age_seconds`. These are marked to **survive any Adaptive-Metrics
   aggregation** — they are the staleness signal and must not be silently dropped. Leadership is NOT a
   metric: it is exposed via `/healthz` (a leader past the stale threshold returns 503; a standby is
   always healthy).
@@ -510,12 +510,12 @@ identity:                                      # → OTLP resource attributes
   deployment_environment: ${ENV}
 
 ha:
-  coordinator: lease                           # lease | none
-  checkpoint: configmap                        # configmap | file
+  coordinator: lease                           # lease | dynamodb | none
+  checkpoint: configmap                        # configmap | dynamodb | file
 
 queue:
   max_batches: 256                             # bounded; block on full
-  emit_workers: 4
+  emit_workers: 1                              # must be 1 (per-loop single-flight emit)
 
 sources:
   - type: portkey
@@ -553,31 +553,30 @@ unknown source types), and is otherwise immutable for the process lifetime.
 
 ## 13. Repository layout
 
-```
-genai-otel-bridge/
-├── cmd/genai-otel-bridge/main.go            # composition root — wiring only
-├── internal/
-│   ├── config/                   # schema, load, validate, env-ref resolution
-│   ├── model/                    # Sample, LogRecord, Batch, Watermark  ← the central seam
-│   ├── source/                   # Source/Loop interfaces + registry + governance guard
-│   │   ├── portkey/              #   analytics + logs_export loops; thin HTTP client
-│   │   └── langsmith/            #   sessions + runs loops; thin HTTP client
-│   ├── emit/                     # Emitter interface
-│   │   └── otlp/                 #   hand-encoded OTLP/HTTP emitter
-│   ├── checkpoint/               # Checkpointer interface
-│   │   ├── configmap/            #   k8s ConfigMap impl (default)
-│   │   └── file/                 #   atomic-rename file impl (dev / non-k8s)
-│   ├── coordinate/               # Coordinator interface
-│   │   ├── lease/                #   k8s Lease leader election
-│   │   └── noop/                 #   always-leader (single replica / dev)
-│   ├── schedule/                 # scheduler, per-source rate limiting, the bounded queue + workers
-│   ├── selfobs/                  # OTel-SDK self-metrics/logs, health endpoints
-│   └── httpx/                    # shared HTTP client: User-Agent, TLS, timeouts, retry
-├── deploy/helm/                  # chart: Deployment, RBAC (Lease + ConfigMap), config, secrets
-├── docs/DESIGN.md                # tracked: detailed design spec + review dispositions
-│   └── superpowers/              # gitignored scratch: implementation plans only
-├── ARCHITECTURE.md  README.md  followup.md
-```
+The tree is described by package kind; each nested `AGENTS.md` is the authoritative guide to its
+package (`ls` and `find . -name AGENTS.md` give the current set).
+
+- `cmd/genai-otel-bridge/`: the binary entrypoint. It calls `internal/app` and holds no logic.
+- `internal/app/`: the **composition root**. Wires config, registry, enabled sources, scheduler,
+  emitter, checkpointer and coordinator; owns the governance denylist wiring.
+- `internal/config/`: schema, load, validate, env-ref resolution, and the generators' source of truth.
+- `internal/model/`: Sample, LogRecord, Batch, Watermark (the central FROZEN seam).
+- `internal/source/`: the Source/Loop interfaces, registry and governance guard, plus one package per
+  vendor (`portkey`, `langsmith`). Each vendor has three loops, kept behind the common interface.
+- `internal/emit/`: the Emitter interface and the hand-encoded OTLP/HTTP emitter (`otlp`).
+- `internal/checkpoint/`: the Checkpointer interface with `configmap`, `dynamodb` and `file` backends.
+- `internal/coordinate/`: the Coordinator interface, the `Noop` always-leader, and `lease` and
+  `dynamodb` leader election.
+- `internal/schedule/`: scheduler, per-source rate limiting, the per-loop queue and emit worker.
+- `internal/selfobs/`, `internal/logging/`, `internal/httpx/`: self-observability, structured
+  logging and the shared HTTP client.
+- `internal/cleanup/`, `internal/docs/`, `internal/version/`: housekeeping, the telemetry-catalogue
+  generator and build version.
+- `deploy/helm/`, `deploy/ecs/`, `deploy/grafana/`: the Helm chart, the ECS Terraform target and the
+  Grafana assets.
+- `test/`, `scripts/`: end-to-end, integration and EKS tests; repository scripts invoked by `just`.
+- `docs/DESIGN.md` is the tracked design spec; `ARCHITECTURE.md`, `README.md` and `followup.md` sit at
+  the root.
 
 ---
 

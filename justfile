@@ -161,6 +161,8 @@ spdx-check:
 [no-exit-message]
 helm-lint: _tools-e2e
     {{ tools_dir }}/helm lint deploy/helm
+    # Render with default values: a workload with an empty image (e.g. the cleanup hook) fails here, not at uninstall.
+    rendered=$({{ tools_dir }}/helm template rel deploy/helm) && if printf '%s\n' "$rendered" | grep -nE '^[[:space:]]+image:[[:space:]]*$'; then echo 'helm-lint: a default render has an empty container image' >&2; exit 1; fi
 
 # Format, validate, lint, and scan the ECS Terraform module; absent IaC tools self-skip.
 [group('check')]

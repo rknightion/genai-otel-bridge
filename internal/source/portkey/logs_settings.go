@@ -68,6 +68,13 @@ var hardDeniedLogFields = func() map[string]bool {
 	return m
 }()
 
+// isHardDeniedLogField reports whether k may never be opted in: the content floor by PREFIX
+// (source.IsContentFloorKey, the rule the guard applies, so a flattened gen_ai.prompt.0.content is
+// rejected at load rather than dropping whole records) or a member of hardDeniedLogFields.
+func isHardDeniedLogField(k string) bool {
+	return source.IsContentFloorKey(k) || hardDeniedLogFields[k]
+}
+
 // contentRequestKeys are fields that must NEVER be named in requested_data (defence-in-depth beyond the
 // egress strip): message bodies + the PoC §3 injected PII/config blobs. Requesting them can't widen what
 // we EMIT (the strip allow-list is authoritative), but asking for them at all is a content-minimisation
@@ -143,13 +150,13 @@ func applyLogsSettings(ls *logsSettings, s map[string]string) error {
 		case "metadata_record_fields":
 			ls.metadataRecordFields = splitCSV(v)
 		case "metadata_trace_id_field":
-			ls.metadataTraceIDField = v
+			ls.metadataTraceIDField = strings.TrimSpace(v)
 		case "trace_id_field":
-			ls.traceIDField = v
+			ls.traceIDField = strings.TrimSpace(v)
 		case "signed_url_allow_hosts":
 			ls.signedURLAllowHosts = splitCSV(v)
 		case "workspace_id":
-			ls.workspaceID = v
+			ls.workspaceID = strings.TrimSpace(v)
 		default:
 			slog.Warn("portkey logs_export: ignoring unknown setting", "key", k)
 		}
@@ -167,6 +174,15 @@ func applyLogsSettings(ls *logsSettings, s map[string]string) error {
 func validateLogsSettings(ls *logsSettings) error {
 	if ls.window <= 0 {
 		return fmt.Errorf("portkey logs_export: window must be positive, got %s", ls.window)
+	}
+	// A window no larger than settle never settles from a fresh watermark: winMax = min(winMin+window,
+	// now-settle) <= winMin on every tick, so no export is created and nothing is reported. max_backfill <=
+	// settle has the same effect through the floor clamp. Same rule as the LangSmith runs and groups loops.
+	if ls.settle >= ls.window {
+		return fmt.Errorf("portkey logs_export: settle (%s) must be < window (%s)", ls.settle, ls.window)
+	}
+	if ls.settle >= ls.maxBackfill {
+		return fmt.Errorf("portkey logs_export: settle (%s) must be < max_backfill (%s)", ls.settle, ls.maxBackfill)
 	}
 	if ls.pageSize > portkeyPageSizeMax {
 		return fmt.Errorf("portkey logs_export: page_size %d exceeds Portkey max %d", ls.pageSize, portkeyPageSizeMax)
@@ -186,22 +202,22 @@ func validateLogsSettings(ls *logsSettings) error {
 		}
 	}
 	for _, f := range ls.extraRecordFields {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: extra_record_fields cannot include %q — it is a hard-denied content/PII field (the guard would drop the whole record or it would leak)", f)
 		}
 	}
 	for _, f := range ls.extraIndexedFields {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: extra_indexed_fields cannot include %q — it is a hard-denied content/PII field (a body must never become a Loki stream label)", f)
 		}
 	}
 	for _, f := range ls.metadataRecordFields {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: metadata_record_fields cannot include %q — it is a hard-denied content/PII field (only content-free metadata sub-keys may be lifted out of the metadata blob)", f)
 		}
 	}
 	if f := ls.metadataTraceIDField; f != "" {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: metadata_trace_id_field cannot be %q — it is a hard-denied content/PII field", f)
 		}
 		if strings.Contains(f, ",") {
@@ -209,7 +225,7 @@ func validateLogsSettings(ls *logsSettings) error {
 		}
 	}
 	if f := ls.traceIDField; f != "" {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: trace_id_field cannot be %q — it is a hard-denied content/PII field", f)
 		}
 		if strings.Contains(f, ",") {
@@ -323,6 +339,7 @@ func newLogsExportLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps so
 		apiKeyIDs:        uc.apiKeyIDsCSV,
 		onDataIncomplete: deps.OnDataIncomplete,
 		onAuthError:      deps.OnAuthError,
+		onCapability:     deps.OnCapability,
 		now:              func() time.Time { return time.Now().UTC() },
 	}, nil
 }

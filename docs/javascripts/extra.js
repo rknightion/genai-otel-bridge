@@ -1,4 +1,4 @@
-/* Custom JavaScript for tailscale2otel documentation */
+/* Custom JavaScript for genai-otel-bridge documentation */
 
 // Enhanced search functionality
 document.addEventListener('DOMContentLoaded', function() {

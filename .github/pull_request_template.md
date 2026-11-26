@@ -23,7 +23,7 @@ Do not include secrets, tokens, or any prompt/response content.
 
 ## Issue
 
-<!-- Closes #<number> on a line of its own for each issue of this repository this change completes (Closes owner/repo#<number> means the same). Refs #<number> when it only relates to one. A change with no issue says "Task: none, <reason>" on a line of its own. -->
+<!-- Contributors write `Refs #<number>` on a line of its own for the issue the change works on: no closing keyword. Maintainers write `Closes #<number>` on a line of its own for each issue of this repository the change completes, with the table below. A change under `.github/workflows/` or `.github/actions/` never carries a closing keyword: write `Task: none, <reason>` on a line of its own (with `Refs #<number>` beside it if you like). A change with no issue also says `Task: none, <reason>`. -->
 
 ## Acceptance evidence
 

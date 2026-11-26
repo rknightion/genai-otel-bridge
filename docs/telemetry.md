@@ -93,7 +93,7 @@ live.
 | `genai_otel_bridge_emitted_total` | `genai_otel_bridge_emitted_total` | counter | — | loop | — | samples emitted |
 | `genai_otel_bridge_guard_dropped_total` | `genai_otel_bridge_guard_dropped_total` | counter | — | loop | — | data points or log records dropped by the governance guard |
 | `genai_otel_bridge_last_success_timestamp_seconds` | `genai_otel_bridge_last_success_timestamp_seconds` | gauge | s | loop | — | unix time of last successful emit |
-| `genai_otel_bridge_loop_degraded` | `genai_otel_bridge_loop_degraded_ratio` | gauge | 1 | loop, reason | — | 1 while a loop is degraded (reason attribute), 0 after the clearing commit |
+| `genai_otel_bridge_loop_degraded` | `genai_otel_bridge_loop_degraded_ratio` | gauge | 1 | loop, reason | — | 1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends |
 | `genai_otel_bridge_new_label_values_total` | `genai_otel_bridge_new_label_values_total` | counter | — | series | — | new label-value combinations seen per series |
 | `genai_otel_bridge_queue_depth` | `genai_otel_bridge_queue_depth_ratio` | gauge | 1 | loop | — | per-loop queue depth |
 | `genai_otel_bridge_samples_capped_total` | `genai_otel_bridge_samples_capped_total` | counter | — | loop, reason | — | samples suppressed by the DPM cap (coalesced last-write-wins per series-minute) |

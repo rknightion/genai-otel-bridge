@@ -98,11 +98,8 @@ spec:
 
       containers:
         - name: genai-otel-bridge
-          # Default to the image built for THIS chart release when .Values.image is unset: chart
-          # version == appVersion == release version == published image tag (all unprefixed, e.g. 3.0.1).
-          # A chart packaged for release X.Y.Z therefore default-installs the X.Y.Z image, never the
-          # previous release's binary. Override .Values.image to pin a digest or use a mirror/proxy.
-          image: {{ .Values.image | default (printf "ghcr.io/rknightion/genai-otel-bridge:%s" .Chart.AppVersion) }}
+          # Image defaults to this chart's appVersion; see the genai-otel-bridge.image helper.
+          image: {{ include "genai-otel-bridge.image" . }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - "-config=/etc/genai-otel-bridge/config.yaml"

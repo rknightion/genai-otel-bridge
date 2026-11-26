@@ -70,7 +70,6 @@ func TestAnalyticsCatchupBoundaryBucketEmittedOnce(t *testing.T) {
 
 	wm := model.Watermark{Time: time.Date(2026, 6, 18, 12, 45, 30, 0, time.UTC)}
 	seen := map[time.Time]int{}
-	var ends []time.Time
 	for i := 0; i < 10; i++ {
 		b, err := lp.Collect(context.Background(), wm)
 		if err != nil {
@@ -84,7 +83,6 @@ func TestAnalyticsCatchupBoundaryBucketEmittedOnce(t *testing.T) {
 		}
 		for _, s := range b.Samples {
 			seen[s.Timestamp]++
-			ends = append(ends, s.Timestamp)
 			if s.Value != 60 {
 				t.Errorf("bucket_end %v emitted partial: %v", s.Timestamp, s.Value)
 			}

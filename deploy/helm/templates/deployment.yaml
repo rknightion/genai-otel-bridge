@@ -5,6 +5,12 @@
 {{- if and (empty .Values.configOverride) (eq (dig "ha" "coordinator" "" .Values.config) "none") (gt (int .Values.replicas) 1) -}}
 {{- fail "ha.coordinator=none with replicas>1: all replicas would be leaders and double-emit. Use ha.coordinator=lease for multi-replica HA, or set replicas: 1." -}}
 {{- end -}}
+{{- /* Tenant shape: one optional Secret per tenant (see volumes below). A pod that fails to load or assemble
+       its config never becomes ready, so the old pod must stay until the new one is ready: maxUnavailable 0. */ -}}
+{{- $tenants := include "genai-otel-bridge.tenantIDs" . | fromJsonArray -}}
+{{- if and $tenants (not (has (toString .Values.rollingUpdate.maxUnavailable) (list "0" "0%"))) -}}
+{{- fail "tenants are set: rollingUpdate.maxUnavailable must be 0 (a new pod must be ready before the old one is removed)." -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -219,6 +225,12 @@ spec:
             # proto marshal scratch). [AR-H-tmp] must be explicit under readOnlyRootFilesystem.
             - name: tmp
               mountPath: /tmp
+            {{- /* Tenant secrets (token and API key files), read once at startup; outside the config mount. */}}
+            {{- range $tenants }}
+            - name: tenant-{{ . }}
+              mountPath: /var/run/secrets/genai-otel-bridge/tenants/{{ . }}
+              readOnly: true
+            {{- end }}
         {{- with .Values.extraContainers }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -233,6 +245,13 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
+        {{- /* Optional: a missing Secret does not stop the pod; that tenant is blocked at startup instead. */}}
+        {{- range $tenants }}
+        - name: tenant-{{ . }}
+          secret:
+            secretName: genai-otel-bridge-tenant-{{ . }}
+            optional: true
+        {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

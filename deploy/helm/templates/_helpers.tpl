@@ -25,6 +25,34 @@ digest or use a mirror/proxy.
 {{ .Values.image | default (printf "ghcr.io/rknightion/genai-otel-bridge:%s" .Chart.AppVersion) }}
 {{- end -}}
 
+{{/*
+Tenant ids, as a JSON list, from whichever config the ConfigMap renders: the parsed configOverride when
+set, else config.tenants. A configOverride that does not parse fails the render here, not at pod start.
+An id becomes a Secret name and a mount path, so it must match the tenant id rule of the config schema.
+*/}}
+{{- define "genai-otel-bridge.tenantIDs" -}}
+{{- $tenants := .Values.config.tenants -}}
+{{- if .Values.configOverride -}}
+{{- $parsed := fromYaml .Values.configOverride -}}
+{{- if hasKey $parsed "Error" -}}
+{{- fail (printf "configOverride does not parse as a YAML map: %s" $parsed.Error) -}}
+{{- end -}}
+{{- $tenants = $parsed.tenants -}}
+{{- end -}}
+{{- if not $tenants -}}
+{{- $tenants = dict -}}
+{{- end -}}
+{{- if not (kindIs "map" $tenants) -}}
+{{- fail "tenants must be a map keyed by tenant id" -}}
+{{- end -}}
+{{- range $id := keys $tenants -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$" $id) -}}
+{{- fail (printf "tenant id %q must match [a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?" $id) -}}
+{{- end -}}
+{{- end -}}
+{{- keys $tenants | sortAlpha | toJson -}}
+{{- end -}}
+
 {{- define "genai-otel-bridge.selectorLabels" -}}
 app: genai-otel-bridge
 {{- end -}}

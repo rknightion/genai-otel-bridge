@@ -1,0 +1,698 @@
+---
+# Source: genai-otel-bridge/templates/networkpolicy.yaml
+# NetworkPolicy: default-deny all egress, then permit DNS + OTLP + source API egress.
+#
+# [CP-H10] IMPORTANT — standard Kubernetes NetworkPolicy is CIDR/label-based and CANNOT
+# match FQDNs (hostnames) like "api.portkey.ai". The rules below use CIDR ranges as
+# placeholders. In production you have two options:
+#
+#   1. Widen to the provider's published CIDR ranges (e.g. Portkey's EIP allocation,
+#      Grafana Cloud's published egress IPs) and set them in values.yaml.
+#
+#   2. Use a CNI with FQDN-aware policy. For example, Cilium's CiliumNetworkPolicy
+#      supports `toFQDNs` rules that resolve the hostname and follow CNAME chains:
+#
+#        apiVersion: cilium.io/v2
+#        kind: CiliumNetworkPolicy
+#        metadata:
+#          name: genai-otel-bridge-egress
+#          namespace: <namespace>
+#        spec:
+#          endpointSelector:
+#            matchLabels:
+#              app: genai-otel-bridge
+#          egressDeny: []    # default-deny covered by CiliumClusterWideNetworkPolicy
+#          egress:
+#            - toFQDNs:
+#                - matchName: "api.portkey.ai"
+#                - matchName: "otlp-gateway-<region>.grafana.net"   # your Grafana Cloud OTLP host
+#                - matchName: "<your-signed-url-host>"   # Portkey logs_export's S3 signed-download
+#                                                          # host (DIFFERENT from api.portkey.ai —
+#                                                          # see config sources[].loops.logs_export.settings.signed_url_allow_hosts
+#                                                          # and values.yaml networkPolicy.exportEgressCIDR)
+#              toPorts:
+#                - ports:
+#                    - port: "443"
+#                      protocol: TCP
+#            - toEndpoints:
+#                - matchLabels:
+#                    k8s:io.kubernetes.pod.namespace: kube-system
+#              toPorts:
+#                - ports:
+#                    - port: "53"
+#                      protocol: UDP
+#                    - port: "53"
+#                      protocol: TCP
+#
+#      Without a CNI like Cilium, enforce FQDN egress at the mesh or cluster egress layer
+#      (e.g. Istio AuthorizationPolicy, AWS Security Group, GCP VPC firewall rules).
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: genai-otel-bridge
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+spec:
+  podSelector:
+    matchLabels:
+      app: genai-otel-bridge
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # Ingress: deny everything EXCEPT the health port (open to all, CP-H10c) and, in pull-mode
+  # profiling, the pprof port (open ONLY to profiling.pullFrom — see below). The pod serves no other
+  # listener — self-metrics are PUSHED via OTLP (selfobs PeriodicReader), nothing scrapes it — so the
+  # only legitimate from-anywhere inbound is the kubelet's liveness/readiness probe on 8080.
+  #
+  # [CP-H10c] We allow the health port from ALL sources (empty `from:`) rather than default-deny-all
+  # ingress. kubelet probes originate from the node's host netns; whether a default-deny ingress rule
+  # blocks them is CNI-dependent (a documented Cilium/VPC-CNI footgun), and there is no portable
+  # selector for "the node".
+  #
+  # [issue #127] The above justification does NOT extend to pprof: unlike the kubelet, pprof is
+  # scraped by a normal cluster pod (a Grafana Alloy/k8s-monitoring pod, typically) that IS
+  # selectable by namespace/pod labels. Appending pprof to the same empty-`from:` health rule let ANY
+  # pod in the cluster hit /debug/pprof/* — cheap CPU-profile-triggered DoS or recon of a process
+  # holding vendor API keys in memory. So pprof is rendered as its OWN ingress rule with a `from:`
+  # peer selector (profiling.pullFrom), never appended to the from-anywhere health rule.
+  # Numeric ports (not named): NetworkPolicy named-port resolution is inconsistent across CNIs, so we
+  # match the literal port the way the egress rules do. networkPolicy.ingressPorts defaults to just the
+  # integrator's health listener (8080); widen it only for extra sidecar listeners that the kubelet (or
+  # another pod) must reach — e.g. the e2e's loopback sink/mock probe ports.
+  # [CP-H10d] An empty ingressPorts list MUST mean deny-all, not allow-all. A NetworkPolicy ingress
+  # rule with a null/empty `ports:` (and no `from:`) matches ALL ports from ALL peers — the exact
+  # inverse of the intent. So render the health-port rule ONLY when ingressPorts is non-empty; emit
+  # `ingress: []` only when there is NOTHING to allow (no ingressPorts AND pprof not enabled), which
+  # with policyTypes:[Ingress] is a true default-deny-all-ingress.
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+
+  egress:
+    # DNS: select the cluster DNS pods (CoreDNS/kube-dns) in kube-system by LABEL, not CIDR.
+    # [CP-H10b] A CIDR rule is fragile here: kube-router/Calico evaluate egress on the POST-DNAT
+    # CoreDNS *pod* IP (in the pod CIDR), not the kube-dns service IP — so a service-CIDR rule
+    # silently blocks DNS (observed on k3s). A namespace+pod selector is portable across CNIs.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Kubernetes API server egress — REQUIRED for Lease leader election and the ConfigMap watermark
+    # checkpoint. Kept SEPARATE from the OTLP rule so the OTLP CIDR can be tightened to Grafana
+    # Cloud's egress range without silently breaking control-plane access (otherwise leader election
+    # fails). Set apiServerCIDR to your API server endpoint range (default 0.0.0.0/0 — tighten per env).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+
+    # Product OTLP gateway egress (emit.telemetry → the product stack, port 443). Under PrivateLink this
+    # is your in-VPC endpoint CIDR; over the public internet it's Grafana Cloud's regional egress CIDR.
+    # Kept separate from selfOtlpEgressCIDR so product and self-o11y can target different endpoints.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+
+    # Source API egress (e.g. Portkey public Analytics API, in-VPC LangSmith, etc.).
+    # Replace values.networkPolicy.sourceEgressCIDR with the CIDR of your source endpoints.
+    # For FQDN-based control (api.portkey.ai), use Cilium toFQDNs — see header comment above.
+    # [issue #128] Portkey's logs_export loop downloads export objects from a signed S3 URL on a
+    # DIFFERENT host than the control-plane API matched here (config sources[].loops.logs_export.settings.signed_url_allow_hosts;
+    # see internal/source/portkey/AGENTS.md and docs/DESIGN.md §4.7). Tightening this CIDR to just the
+    # control-plane API's range WITHOUT also allowing that S3 host stalls logs_export downloads — set
+    # networkPolicy.exportEgressCIDR below to cover it as a separate, independently-tightenable rule.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+
+---
+# Source: genai-otel-bridge/templates/pdb.yaml
+# PodDisruptionBudget: bound VOLUNTARY disruption (node drain, cluster-autoscaler/Karpenter
+# consolidation) so it can't evict all replicas at once. This service is on the telemetry critical
+# path — losing every replica simultaneously is a polling+emit gap until reschedule. maxUnavailable:1
+# forces the eviction API to serialise drains, keeping a warm standby alive to take the Lease.
+#
+# maxUnavailable (not minAvailable) is deliberate: it is a no-op at replicas:1 (the single dev pod is
+# still evictable, no drain deadlock), and serialises drains at replicas:3.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: genai-otel-bridge
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: genai-otel-bridge
+
+---
+# Source: genai-otel-bridge/templates/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: genai-otel-bridge
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+
+
+---
+# Source: genai-otel-bridge/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: genai-otel-bridge-config
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+data:
+  # config.yaml is either the verbatim .Values.configOverride string (e.g. a fully-resolved e2e
+  # config) or, by default, the generated default config map (.Values.config) serialised back to
+  # YAML. The generated map lives in values.yaml and is produced from the Go schema by `just
+  # gen` (see internal/config/gen). ${ENV} refs are scalar strings and survive toYaml intact;
+  # they are injected from the genai-otel-bridge-secrets Secret via envFrom at runtime.
+  config.yaml: |
+    emit:
+      telemetry:
+        otlp:
+          allow_insecure: false
+          endpoint: ${GC_OTLP_ENDPOINT}
+          instance_id: ${GC_INSTANCE_ID}
+          token: ${GC_OTLP_TOKEN}
+    governance:
+      allow_label_keys: []
+      max_catchup_per_tick: 1
+      max_dpm: 1
+      max_stream_label_keys: 15
+      per_metric_cardinality_budget: 10000
+    ha:
+      checkpoint: configmap
+      coordinator: lease
+    identity:
+      deployment_environment: ${ENV}
+      service_namespace: genai-otel-bridge
+    log:
+      format: logfmt
+      level: info
+    queue:
+      emit_workers: 1
+      max_batch_bytes: 1048576
+      max_batches: 256
+    selfobs:
+      profiling:
+        enabled: false
+        mode: pull
+        pull: {}
+      tracing:
+        enabled: false
+    sources:
+    - auth:
+        header: x-portkey-api-key
+        value: ${PORTKEY_API_KEY}
+      base_url: https://api.portkey.ai/v1
+      enabled: true
+      loops:
+        analytics:
+          bootstrap_lookback: 50m
+          bucket_settle: 10m
+          cadence: 60s
+          enabled: true
+          graphs:
+          - requests
+          - cost
+          - tokens
+          - latency
+          - errors
+          max_backfill: 90m
+          metric_prefix: portkey_api
+          window: 50m
+      rate_limit:
+        burst: 3
+        rps: 1
+      source_instance: portkey-${ENV}
+      type: portkey
+
+---
+# Source: genai-otel-bridge/templates/rbac.yaml
+# Namespaced Role (NOT ClusterRole) — genai-otel-bridge only needs access to resources in its own
+# namespace: Leases for leader election, and ConfigMaps for the watermark checkpoint.
+# ARCHITECTURE.md §8: keep RBAC minimal and namespace-scoped.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: genai-otel-bridge
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+rules:
+  # Lease leader election (coordination.k8s.io/leases). create is unscoped because RBAC resourceNames
+  # cannot gate create (the object name does not exist yet); get/update are scoped to the single lease.
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - create
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    resourceNames:
+      - genai-otel-bridge-leader
+    verbs:
+      - get
+      - update
+
+  # ConfigMap watermark checkpoint. Same pattern: create unscoped (resourceNames can't gate create),
+  # get/update scoped to the checkpoint ConfigMap only — so the pod can NOT read/modify its own
+  # genai-otel-bridge-config (or any other ConfigMap) in the namespace.
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - create
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - genai-otel-bridge-checkpoints
+    verbs:
+      - get
+      - update
+
+
+---
+# Source: genai-otel-bridge/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: genai-otel-bridge
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+subjects:
+  - kind: ServiceAccount
+    name: genai-otel-bridge
+    namespace: default
+roleRef:
+  kind: Role
+  name: genai-otel-bridge
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Source: genai-otel-bridge/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: genai-otel-bridge
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    app: genai-otel-bridge
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health
+      protocol: TCP
+
+---
+# Source: genai-otel-bridge/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: genai-otel-bridge
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  # RollingUpdate bounded to one pod at a time: with leader election only one replica is active, so a
+  # surge+drain of one pod at a time keeps a healthy standby ready to take the Lease throughout a roll.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: genai-otel-bridge
+  template:
+    metadata:
+      labels:
+        app: genai-otel-bridge
+        app.kubernetes.io/name: genai-otel-bridge
+        app.kubernetes.io/instance: rel
+        app.kubernetes.io/managed-by: Helm
+      annotations:
+        # Roll the pods when the rendered config ConfigMap changes. The binary reads config only at
+        # startup, so without this a `helm upgrade` that changes config: / configOverride updates the
+        # ConfigMap but leaves pods on stale config. Hashes ONLY templates/configmap.yaml (the
+        # genai-otel-bridge-config CM); the runtime genai-otel-bridge-checkpoints state CM is app-created, not chart-rendered,
+        # so it is intentionally not hashed here. A roll triggers one Lease failover: SIGTERM
+        # hard-cancels in-flight work (no drain), and the next leader re-pulls the interrupted window
+        # idempotently from the last committed watermark — so the roll is safe without a drain window.
+    spec:
+      serviceAccountName: genai-otel-bridge
+
+      # Pod-level security: non-root UID 65532 (distroless default), RuntimeDefault seccomp.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Spread pods across nodes AND availability zones so neither a node nor an AZ failure takes both
+      # the leader and the standby. ScheduleAnyway (not DoNotSchedule) — scheduling must never block:
+      # strict spreading would prevent startup on a single-node/single-AZ cluster (e.g. dev). On a
+      # multi-AZ EKS cluster this lands the standby in a different AZ; on a 1-node dev cluster it's a no-op.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: genai-otel-bridge
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: genai-otel-bridge
+
+      containers:
+        - name: genai-otel-bridge
+          # Image defaults to this chart's appVersion; see the genai-otel-bridge.image helper.
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-config=/etc/genai-otel-bridge/config.yaml"
+            - "-namespace=$(POD_NAMESPACE)"
+            - "-identity=$(POD_NAME)"
+            - "-container-mem-bytes=$(MEM_LIMIT)"
+
+          env:
+            # Downward API: pod identity for the Lease holder name and self-metric instance label.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Replica count: the binary fatals on ha.coordinator=none + replicas>1 (all-leader
+            # double-emit guard) — defence-in-depth with the chart-render guard at the top of this file.
+            - name: GENAI_OTEL_BRIDGE_REPLICAS
+              value: "2"
+            # GOMEMLIMIT: derived from the container's own memory limit at runtime (resourceFieldRef).
+            # The binary multiplies by 0.9 to leave headroom for GC overhead (DESIGN §4.1).
+            - name: MEM_LIMIT
+              valueFrom:
+                resourceFieldRef:
+                  containerName: genai-otel-bridge
+                  resource: limits.memory
+            # Non-secret, environment-specific config consumed as ${ENV} refs in config.yaml. Set these
+            # as literal env (NOT secret material) via runtimeEnv.*. Each is rendered ONLY when non-empty;
+            # when left empty (the default) the var keeps coming from the genai-otel-bridge-secrets Secret via
+            # envFrom below, so the hand-created-secret path is unaffected.
+
+          # Runtime secrets (GC_OTLP_TOKEN, PORTKEY_API_KEY, …) injected from the genai-otel-bridge-secrets
+          # Secret. By default this Secret is managed outside the chart (create before deploying); when
+          # externalSecrets.enabled is set, it is created and kept in sync by the ExternalSecret
+          # (templates/externalsecret.yaml) from a cloud secrets manager.
+          envFrom:
+            - secretRef:
+                name: genai-otel-bridge-secrets
+
+          # Container-level hardening (Cdx-M10 / AR-H-tmp):
+          #   readOnlyRootFilesystem: all writable paths are explicit volume mounts below.
+          #   drop ALL capabilities: the binary is a pure network poller; it needs none.
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+          # Standard requests/limits map, set in values.yaml. GOMEMLIMIT is still derived at runtime
+          # from limits.memory via the MEM_LIMIT downward API ref above — independent of how it's set.
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+
+          # Health probes. /readyz returns 200 once config is loaded and the health server is up — on
+          # BOTH the leader and the standby, at Run start, NOT gated on any collect/emit cycle (a Ready
+          # pod may not have emitted yet). This is deliberate: standbys must stay Ready for PDB/rollout
+          # purposes. /healthz likewise returns 200 for both leader and standby (so standby pods don't
+          # flap — CP-C5). Probe intervals and thresholds are intentionally loose; the liveness
+          # threshold (4 failures × 15s = 60s) gives the retry budget time to exhaust before a restart.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 4
+
+          ports:
+            - containerPort: 8080
+              name: health
+              protocol: TCP
+
+          volumeMounts:
+            # Config from the genai-otel-bridge-config ConfigMap (config.yaml with ${ENV} refs pre-resolved).
+            - name: config
+              mountPath: /etc/genai-otel-bridge
+              readOnly: true
+            # State dir: used by the dev file-based checkpointer. With the production configmap
+            # checkpointer the watermark is stored in a ConfigMap; this emptyDir is harmless but
+            # required because readOnlyRootFilesystem=true forbids any unlisted writable path.
+            - name: state
+              mountPath: /var/lib/genai-otel-bridge
+            # /tmp: net/http and the OTLP encoder need a writable /tmp (TLS handshake temp files,
+            # proto marshal scratch). [AR-H-tmp] must be explicit under readOnlyRootFilesystem.
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: config
+          configMap:
+            name: genai-otel-bridge-config
+        # emptyDir: lost on pod restart, which is correct (the durable watermark is the ConfigMap
+        # checkpoint; state/ is only ever written by the dev file checkpointer).
+        - name: state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+
+      terminationGracePeriodSeconds: 300
+---
+# Source: genai-otel-bridge/templates/cleanup-hook.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: genai-otel-bridge-cleanup
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+
+---
+# Source: genai-otel-bridge/templates/cleanup-hook.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: genai-otel-bridge-cleanup
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  # delete-only, scoped to the single lease (delete supports resourceNames, unlike create).
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    resourceNames:
+      - genai-otel-bridge-leader
+    verbs:
+      - delete
+  # Only granted when the checkpoint is being deleted; omitted under retainCheckpoint (tighter scope).
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - genai-otel-bridge-checkpoints
+    verbs:
+      - delete
+
+---
+# Source: genai-otel-bridge/templates/cleanup-hook.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: genai-otel-bridge-cleanup
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "-3"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: genai-otel-bridge-cleanup
+    namespace: default
+roleRef:
+  kind: Role
+  name: genai-otel-bridge-cleanup
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Source: genai-otel-bridge/templates/cleanup-hook.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: genai-otel-bridge-cleanup
+  namespace: default
+  labels:
+    app: genai-otel-bridge
+    app.kubernetes.io/name: genai-otel-bridge
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  # Bound the hook so a stuck delete can't hang `helm uninstall` indefinitely (binary self-times-out
+  # at 30s; this is the outer ceiling incl. image pull).
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        app: genai-otel-bridge
+    spec:
+      serviceAccountName: genai-otel-bridge-cleanup
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cleanup
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-cleanup"
+            - "-namespace=$(POD_NAMESPACE)"
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              memory: "128Mi"
+          volumeMounts:
+            # client-go TLS to the API server may need a writable /tmp under readOnlyRootFilesystem.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+

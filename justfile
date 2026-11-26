@@ -163,10 +163,38 @@ spdx-check:
 # Lint the bundled Helm chart.
 [group('check')]
 [no-exit-message]
+[script('bash')]
 helm-lint: _tools-e2e
-    {{ tools_dir }}/helm lint deploy/helm
+    set -euo pipefail
+    helm="{{ tools_dir }}/helm"
+    "$helm" lint deploy/helm
     # Render with default values: a workload with an empty image (e.g. the cleanup hook) fails here, not at uninstall.
-    rendered=$({{ tools_dir }}/helm template rel deploy/helm) && if printf '%s\n' "$rendered" | grep -nE '^[[:space:]]+image:[[:space:]]*$'; then echo 'helm-lint: a default render has an empty container image' >&2; exit 1; fi
+    rendered=$("$helm" template rel deploy/helm)
+    if printf '%s\n' "$rendered" | grep -nE '^[[:space:]]+image:[[:space:]]*$'; then echo 'helm-lint: a default render has an empty container image' >&2; exit 1; fi
+    # The default render must not drift: compare with the committed render (regenerate it with
+    # `just helm-default-render > test/helm/default-render.yaml` when a template change is intended).
+    if ! just helm-default-render | diff -u test/helm/default-render.yaml -; then echo 'helm-lint: the default render differs from test/helm/default-render.yaml' >&2; exit 1; fi
+    # Tenant shape: the example renders one optional Secret volume per tenant.
+    example=$("$helm" template rel deploy/helm -f deploy/helm/examples/tenants-values.yaml)
+    for t in team-a team-b; do
+      printf '%s\n' "$example" | grep -qxF "            secretName: genai-otel-bridge-tenant-$t" || { echo "helm-lint: the example renders no Secret volume for $t" >&2; exit 1; }
+    done
+    [ "$(printf '%s\n' "$example" | grep -c 'secretName: genai-otel-bridge-tenant-')" = 2 ] || { echo 'helm-lint: the example must render exactly two tenant Secret volumes' >&2; exit 1; }
+    # Failing variants: any tenant needs maxUnavailable 0, and a configOverride must parse.
+    if "$helm" template rel deploy/helm -f deploy/helm/examples/tenants-values.yaml --set rollingUpdate.maxUnavailable=1 >/dev/null 2>&1; then echo 'helm-lint: tenants with maxUnavailable 1 must fail to render' >&2; exit 1; fi
+    if "$helm" template rel deploy/helm --set-string 'configOverride=a: [' >/dev/null 2>&1; then echo 'helm-lint: a configOverride that does not parse must fail to render' >&2; exit 1; fi
+    # The packaged chart must not carry the examples.
+    pkg=$(mktemp -d); trap 'rm -rf "$pkg"' EXIT
+    "$helm" package deploy/helm --destination "$pkg" >/dev/null
+    if tar -tzf "$pkg"/*.tgz | grep -F 'examples/'; then echo 'helm-lint: the packaged chart lists examples/' >&2; exit 1; fi
+
+# The default chart render with a fixed release name, minus the lines that carry the chart or app version.
+# helm-lint compares it with test/helm/default-render.yaml.
+[private]
+[script('bash')]
+helm-default-render: _tools-e2e
+    set -euo pipefail
+    {{ tools_dir }}/helm template rel deploy/helm | grep -vE 'helm\.sh/chart:|app\.kubernetes\.io/version:|checksum/config:|image: ghcr\.io/rknightion/genai-otel-bridge:'
 
 # Format, validate, lint, and scan the ECS Terraform module; absent IaC tools self-skip.
 [group('check')]

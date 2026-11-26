@@ -5,6 +5,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -56,14 +57,14 @@ func writeCfg(t *testing.T, body string) string {
 
 // A valid overlay full of ${ENV} refs validates WITHOUT any secrets set — placeholders are injected.
 func TestValidateConfigFile_OK(t *testing.T) {
-	if err := ValidateConfigFile(writeCfg(t, validCfg)); err != nil {
+	if _, _, err := ValidateConfigFile(writeCfg(t, validCfg)); err != nil {
 		t.Fatalf("expected valid config to pass, got: %v", err)
 	}
 }
 
 // A schema violation (unknown key) is caught by Load.
 func TestValidateConfigFile_UnknownKey(t *testing.T) {
-	err := ValidateConfigFile(writeCfg(t, validCfg+"\nbogus_top_level_key: 1\n"))
+	_, _, err := ValidateConfigFile(writeCfg(t, validCfg+"\nbogus_top_level_key: 1\n"))
 	if err == nil {
 		t.Fatal("expected unknown-key config to fail")
 	}
@@ -72,7 +73,7 @@ func TestValidateConfigFile_UnknownKey(t *testing.T) {
 // A semantic violation (emit_workers != 1) is caught by Validate — proving Validate runs, not just Load.
 func TestValidateConfigFile_SemanticInvalid(t *testing.T) {
 	bad := strings.Replace(validCfg, "emit_workers: 1", "emit_workers: 2", 1)
-	err := ValidateConfigFile(writeCfg(t, bad))
+	_, _, err := ValidateConfigFile(writeCfg(t, bad))
 	if err == nil {
 		t.Fatal("expected emit_workers=2 to fail validation")
 	}
@@ -84,7 +85,7 @@ func TestValidateConfigFile_SemanticInvalid(t *testing.T) {
 // A bad source type is rejected (proves the registry's Known() set is used).
 func TestValidateConfigFile_UnknownSourceType(t *testing.T) {
 	bad := strings.Replace(validCfg, "type: portkey", "type: nosuchvendor", 1)
-	if err := ValidateConfigFile(writeCfg(t, bad)); err == nil {
+	if _, _, err := ValidateConfigFile(writeCfg(t, bad)); err == nil {
 		t.Fatal("expected unknown source type to fail")
 	}
 }
@@ -104,7 +105,7 @@ func TestValidateConfigRejectsWhatBuildRejects(t *testing.T) {
 			if body == validCfg {
 				t.Fatal("test case did not alter the config")
 			}
-			if err := ValidateConfigFile(writeCfg(t, body)); err == nil {
+			if _, _, err := ValidateConfigFile(writeCfg(t, body)); err == nil {
 				t.Fatal("-validate-config reports OK for a config Build refuses")
 			}
 		})
@@ -113,7 +114,26 @@ func TestValidateConfigRejectsWhatBuildRejects(t *testing.T) {
 
 // The shipped valid fixture still passes with no secrets set (Build runs with inert dependencies).
 func TestValidateConfigFile_ValidFixture(t *testing.T) {
-	if err := ValidateConfigFile("../config/testdata/valid.yaml"); err != nil {
+	if _, _, err := ValidateConfigFile("../config/testdata/valid.yaml"); err != nil {
 		t.Fatalf("valid.yaml should pass: %v", err)
+	}
+}
+
+// AC4 (#522): the config check returns the plan table, which names the source instance, and the plan
+// hash, 64 lower-case hex characters; a failed check returns neither.
+func TestValidateConfigFile_PrintsPlan(t *testing.T) {
+	table, hash, err := ValidateConfigFile(writeCfg(t, validCfg))
+	if err != nil {
+		t.Fatalf("ValidateConfigFile: %v", err)
+	}
+	if !strings.Contains(table, "portkey-test") {
+		t.Errorf("plan table does not name the source instance portkey-test:\n%s", table)
+	}
+	if !regexp.MustCompile("^[0-9a-f]{64}$").MatchString(hash) {
+		t.Errorf("plan hash %q is not 64 lower-case hex characters", hash)
+	}
+	bad := strings.Replace(validCfg, "emit_workers: 1", "emit_workers: 2", 1)
+	if table, hash, err := ValidateConfigFile(writeCfg(t, bad)); err == nil || table != "" || hash != "" {
+		t.Errorf("invalid config: table=%q hash=%q err=%v, want only an error", table, hash, err)
 	}
 }

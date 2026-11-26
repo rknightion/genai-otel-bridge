@@ -242,6 +242,12 @@ type OTLPConn struct {
 	// https endpoints ignore this flag.
 	AllowInsecure bool `yaml:"allow_insecure" helm:"default=false"`
 }
+
+// SelfNamespaceSuffix is appended to identity.service_namespace to form the service.namespace of the
+// bridge's own telemetry (self-metrics, self-traces, self-profiles), so it never shares a namespace
+// with the product telemetry it emits (H4).
+const SelfNamespaceSuffix = "-meta"
+
 type IdentityConfig struct {
 	ServiceNamespace string `yaml:"service_namespace" helm:"default=genai-otel-bridge"`
 	// Deployment environment label (e.g. dev, staging, prod).

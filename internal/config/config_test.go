@@ -216,7 +216,9 @@ func TestValidateRejectsTable(t *testing.T) {
 		{"missing auth", func(c *Config) { c.Sources[0].Auth = AuthConfig{} }, "auth.header and auth.value are required"},
 		{"cadence below floor", func(c *Config) { loop(c, func(l *LoopConfig) { l.Cadence = Duration(time.Second) }) }, "cadence 1s < floor"},
 		{"bootstrap_lookback above max_backfill", func(c *Config) {
-			loop(c, func(l *LoopConfig) { l.BootstrapLookback, l.MaxBackfill = Duration(50*time.Minute), Duration(40*time.Minute) })
+			loop(c, func(l *LoopConfig) {
+				l.BootstrapLookback, l.MaxBackfill = Duration(50*time.Minute), Duration(40*time.Minute)
+			})
 		}, "bootstrap_lookback 50m0s > max_backfill 40m0s"},
 	}
 	for _, r := range rows {

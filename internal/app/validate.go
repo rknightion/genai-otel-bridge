@@ -64,8 +64,8 @@ var validateEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // series ownership, no enabled loops) fails here too. Only a file is checked, not the inline
 // GENAI_OTEL_BRIDGE_CONFIG form. For a valid config it returns the resolved plan's table and hash
 // (tenancy.Plan.Table and Hash; the table holds no secret) and a nil error; otherwise only the error,
-// except a valid tenant-shape config, which returns its table and hash with
-// tenancy.ErrTenantShapeNotEnabled before BuildFromPlan runs.
+// except a tenant-shape config that also assembles (with placeholderSecrets, no secret file read), which
+// returns its table and hash with tenancy.ErrTenantShapeNotEnabled.
 // The hash of a config with an unset ${ENV} ref covers its placeholder, so it matches a running
 // leader's only when CI has the same environment.
 func ValidateConfigFile(path string) (table, hash string, err error) {
@@ -111,17 +111,34 @@ func ValidateConfigFile(path string) (table, hash string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	// A tenant-shape config that passes Validate is refused here, before it would build: this version
-	// does not run the shape. The table and hash come with the refusal.
+	// Constructors only build clients; the first network call is the lazy first Collect, which never runs.
+	// The config is validated and resolved above, so assembly starts from that plan. A tenant-shape plan
+	// is assembled with placeholderSecrets, never the real secret files, so every assemble rule that needs
+	// no secret (scope assertion support, the reserved scope-match loop, no loop that emits log records,
+	// series ownership per group) fails here as it would at startup; an unreadable secret and a duplicate
+	// API key are found only when a pod reads the files.
+	opts := Options{}
+	if plan.TenantShape {
+		opts.Secrets = placeholderSecrets{}
+	}
+	if _, err := BuildFromPlan(context.Background(), cfg, plan, inertCheckpointer{}, coordinate.Noop{}, inertEmitterFactory, noopTelemetryFactory, opts); err != nil {
+		return "", "", err
+	}
+	// A tenant-shape config that assembles is refused only now: this version does not run the shape. The
+	// table and hash come with the refusal.
 	if plan.TenantShape {
 		return plan.Table(), plan.Hash(), tenancy.ErrTenantShapeNotEnabled
 	}
-	// Constructors only build clients; the first network call is the lazy first Collect, which never runs.
-	// The config is validated and resolved above, so assembly starts from that plan.
-	if _, err := BuildFromPlan(context.Background(), cfg, plan, inertCheckpointer{}, coordinate.Noop{}, inertEmitterFactory, noopTelemetryFactory, Options{}); err != nil {
-		return "", "", err
-	}
 	return plan.Table(), plan.Hash(), nil
+}
+
+// placeholderSecrets is the SecretReader of the config check: it reads no file and returns a value that
+// differs for every tenant and file (neither can contain "/"), so assembly sees a distinct API key per
+// target and no tenant is blocked for a key the check never read.
+type placeholderSecrets struct{}
+
+func (placeholderSecrets) Read(tenant, file string) (string, error) {
+	return "placeholder/" + tenant + "/" + file, nil
 }
 
 // inertCheckpointer and inertEmitter let ValidateConfigFile run BuildFromPlan without any store or backend.

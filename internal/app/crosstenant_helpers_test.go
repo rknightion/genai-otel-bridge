@@ -115,8 +115,9 @@ type vendorKey struct {
 // check and never answers by it. It answers by API key and slug only:
 //   - the workspace grouping returns the one workspace the key reads (with a slug, an organisation key
 //     reads the slug's workspace; a workspace key always reads its own);
-//   - each analytics graph returns nine one-minute buckets before now, every value the marker of the
-//     workspace the key reads, or of foreign[key] when that fault is seeded;
+//   - each analytics graph returns buckets one-minute buckets before now (nine unless a world sets more),
+//     every value the marker of the workspace the key reads, or of foreign[key] when that fault is seeded
+//     (latency in milliseconds, so the seconds the loop emits are the marker too);
 //   - every other groups endpoint returns an empty page; an unknown key gets 401.
 type markerVendor struct {
 	*httptest.Server
@@ -124,13 +125,14 @@ type markerVendor struct {
 	keys     map[string]vendorKey
 	markers  map[string]float64 // by workspace
 	foreign  map[string]string  // seeded fault: key -> the workspace whose marker its data carries
+	buckets  int
 	now      time.Time
 	requests []vendorRequest
 }
 
 func newMarkerVendor(t *testing.T, tenants []gateTenant, now time.Time) *markerVendor {
 	t.Helper()
-	v := &markerVendor{keys: map[string]vendorKey{}, markers: map[string]float64{}, foreign: map[string]string{}, now: now}
+	v := &markerVendor{keys: map[string]vendorKey{}, markers: map[string]float64{}, foreign: map[string]string{}, buckets: 9, now: now}
 	for _, g := range tenants {
 		v.keys[g.Key] = vendorKey{workspace: g.Workspace, org: g.OrgKey, defaultWorkspace: g.DefaultWorkspace}
 		v.markers[g.Workspace] = g.Marker
@@ -165,6 +167,7 @@ func (v *markerVendor) serve(w http.ResponseWriter, r *http.Request) {
 		dataWS = f
 	}
 	marker := v.markers[dataWS]
+	buckets := v.buckets
 	v.mu.Unlock()
 	if !known {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -178,10 +181,11 @@ func (v *markerVendor) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "total": 0, "data": []any{}})
 	case strings.Contains(path, "/analytics/graphs/"):
 		var dps []map[string]any
-		for i := 9; i >= 1; i-- {
+		for i := buckets; i >= 1; i-- {
 			ts := now.Add(-time.Duration(i) * time.Minute)
 			dps = append(dps, map[string]any{"timestamp": ts.Format(time.RFC3339),
-				"total": marker, "total_request_units": marker, "total_response_units": marker})
+				"total": marker, "total_request_units": marker, "total_response_units": marker,
+				"avg": marker * 1000, "p50": marker * 1000, "p90": marker * 1000, "p99": marker * 1000})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"summary": map[string]any{"total": marker}, "data_points": dps, "is_quota_exceeded": false})
 	default:
@@ -431,34 +435,64 @@ func markerOwner(tenants []gateTenant, v float64) string {
 	return fmt.Sprintf("an unknown marker %v", v)
 }
 
-// deliveryCheck: every payload received under a tenant credential, refused ones included, carries only
-// that tenant's marker and that tenant's pipeline id. A payload under a credential that is neither a
-// tenant's nor self is a finding, and so is one that cannot be decoded. Subject: the receiving pipeline.
-func deliveryCheck(payloads []otlpPayload, tenants []gateTenant, selfCred string) []finding {
-	byCred := map[string]gateTenant{}
+// credentialHolders maps each tenant credential to the pipelines that send under it, in tenant order. In
+// the hand-made worlds each credential is one pipeline's; two targets of one tenant on one destination
+// (the fixture's team-a) share one.
+func credentialHolders(tenants []gateTenant) map[string][]gateTenant {
+	out := map[string][]gateTenant{}
 	for _, g := range tenants {
-		byCred[g.credential()] = g
+		out[g.credential()] = append(out[g.credential()], g)
 	}
+	return out
+}
+
+// holdersSubject names the pipelines holding one credential, comma-joined.
+func holdersSubject(gs []gateTenant) string {
+	ps := make([]string, 0, len(gs))
+	for _, g := range gs {
+		ps = append(ps, g.pipeline())
+	}
+	return strings.Join(ps, ",")
+}
+
+// deliveryCheck: every payload received under a tenant credential, refused ones included, carries only
+// the pipeline id of a pipeline holding that credential, and every point of a resource carries that
+// pipeline's marker. A resource whose pipeline id no holder has is a finding, and its points are judged
+// against the one holder's marker (with several holders, against any holder's). A payload under a
+// credential that is neither a tenant's nor self is a finding, and so is one that cannot be decoded.
+// Subject: the receiving pipeline (the holders, comma-joined, when a resource names none of them).
+func deliveryCheck(payloads []otlpPayload, tenants []gateTenant, selfCred string) []finding {
+	byCred := credentialHolders(tenants)
 	var out []finding
 	for _, p := range payloads {
 		if p.Credential == selfCred {
 			continue
 		}
-		g, ok := byCred[p.Credential]
+		gs, ok := byCred[p.Credential]
 		if !ok {
 			out = append(out, finding{checkDelivery, "unknown credential", fmt.Sprintf("a payload to %s under a credential no tenant holds", p.Path)})
 			continue
 		}
+		subject := holdersSubject(gs)
 		if p.DecodeErr != "" {
-			out = append(out, finding{checkDelivery, g.pipeline(), "a payload that does not decode: " + p.DecodeErr})
+			out = append(out, finding{checkDelivery, subject, "a payload that does not decode: " + p.DecodeErr})
 		}
 		for _, r := range p.Resources {
-			if got := r.Attrs[tenancy.PipelineAttribute]; got != g.pipeline() {
-				out = append(out, finding{checkDelivery, g.pipeline(), fmt.Sprintf("a resource with %s=%q", tenancy.PipelineAttribute, got)})
+			got := r.Attrs[tenancy.PipelineAttribute]
+			idx := slices.IndexFunc(gs, func(g gateTenant) bool { return g.pipeline() == got })
+			markers := gs
+			if idx >= 0 {
+				markers = gs[idx : idx+1]
+			} else {
+				out = append(out, finding{checkDelivery, subject, fmt.Sprintf("a resource with %s=%q", tenancy.PipelineAttribute, got)})
+			}
+			at := subject
+			if len(markers) == 1 {
+				at = markers[0].pipeline()
 			}
 			for _, pt := range r.Points {
-				if pt.Value != g.Marker {
-					out = append(out, finding{checkDelivery, g.pipeline(), fmt.Sprintf("%s carries %s", pt.Metric, markerOwner(tenants, pt.Value))})
+				if !slices.ContainsFunc(markers, func(g gateTenant) bool { return g.Marker == pt.Value }) {
+					out = append(out, finding{checkDelivery, at, fmt.Sprintf("%s carries %s", pt.Metric, markerOwner(tenants, pt.Value))})
 				}
 			}
 		}
@@ -522,18 +556,15 @@ func selfEndpointCheck(payloads []otlpPayload, selfCred string) []finding {
 // selfIdentityCheck: no payload under any credential but the self one carries a resource with the self
 // identity's service.namespace. Subject: the receiving pipeline, or the credential when no tenant holds it.
 func selfIdentityCheck(payloads []otlpPayload, tenants []gateTenant, selfCred, selfNamespace string) []finding {
-	byCred := map[string]string{}
-	for _, g := range tenants {
-		byCred[g.credential()] = g.pipeline()
-	}
+	byCred := credentialHolders(tenants)
 	var out []finding
 	for _, p := range payloads {
 		if p.Credential == selfCred {
 			continue
 		}
-		subject, ok := byCred[p.Credential]
-		if !ok {
-			subject = "unknown credential"
+		subject := "unknown credential"
+		if gs, ok := byCred[p.Credential]; ok {
+			subject = holdersSubject(gs)
 		}
 		for _, r := range p.Resources {
 			if r.Attrs["service.namespace"] == selfNamespace {
@@ -594,16 +625,28 @@ type gateWorld struct {
 	clockMu sync.Mutex
 	now     time.Time
 	epoch   int64
+
+	// blocked is every OnTenantBlocked call of every build, as "tenant reason" for a blocking one.
+	blockedMu sync.Mutex
+	blocked   []string
 }
 
 func newGateWorld(t *testing.T) *gateWorld {
 	t.Helper()
+	return newGateWorldWith(t, gateTenants(), 9)
+}
+
+// newGateWorldWith is a gate world over the given tenants, whose vendor serves buckets one-minute buckets
+// of history.
+func newGateWorldWith(t *testing.T, tenants []gateTenant, buckets int) *gateWorld {
+	t.Helper()
 	w := &gateWorld{
-		t: t, tenants: gateTenants(), cpPath: filepath.Join(t.TempDir(), "wm.yaml"),
+		t: t, tenants: tenants, cpPath: filepath.Join(t.TempDir(), "wm.yaml"),
 		selfInstance: "9000", selfToken: "self-token", maxBatchBytes: 1 << 20, now: assemblyAnchor,
 	}
 	w.recv = newOTLPReceiver(t, w.selfCred())
 	w.vendor = newMarkerVendor(t, w.tenants, w.now)
+	w.vendor.buckets = buckets
 	w.cfg = minimalConfig(w.vendor.URL)
 	w.secrets = &mapSecrets{values: map[[2]string]string{}}
 	for _, g := range w.tenants {
@@ -689,6 +732,14 @@ func (w *gateWorld) rows(names ...string) []tenancy.Row {
 // the receiver's one URL.
 func (w *gateWorld) build(rows []tenancy.Row, wrap func(EmitterFactory) EmitterFactory) *App {
 	w.t.Helper()
+	return w.buildPlan(w.cfg, tenancy.Plan{Rows: rows}, wrap)
+}
+
+// buildPlan is build for a whole plan and the config it was resolved from. OnTenantBlocked is wired as main
+// wires it, to the self-telemetry's TenantBlocked, and also recorded for blockedFor.
+func (w *gateWorld) buildPlan(cfg *config.Config, plan tenancy.Plan, wrap func(EmitterFactory) EmitterFactory) *App {
+	w.t.Helper()
+	rows := plan.Rows
 	for _, r := range rows {
 		if r.Destination.Endpoint != w.recv.URL {
 			w.t.Fatalf("row %s sends to %s, not the receiver's one URL %s", r.Pipeline, r.Destination.Endpoint, w.recv.URL)
@@ -703,8 +754,16 @@ func (w *gateWorld) build(rows []tenancy.Row, wrap func(EmitterFactory) EmitterF
 		ef = wrap(ef)
 	}
 	tf := func(tenant, pipeline string) PipelineTelemetry { return w.metrics.With(tenant, pipeline) }
-	a, err := BuildFromPlan(context.Background(), w.cfg, tenancy.Plan{Rows: rows}, cp, coordinate.Noop{}, ef, tf,
-		Options{Secrets: w.secrets, Now: w.clock})
+	onBlocked := func(tenant, reason string, blocked bool) {
+		w.metrics.TenantBlocked(tenant, reason, blocked)
+		if blocked {
+			w.blockedMu.Lock()
+			w.blocked = append(w.blocked, tenant+" "+reason)
+			w.blockedMu.Unlock()
+		}
+	}
+	a, err := BuildFromPlan(context.Background(), cfg, plan, cp, coordinate.Noop{}, ef, tf,
+		Options{Secrets: w.secrets, Now: w.clock, OnTenantBlocked: onBlocked})
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -890,6 +949,44 @@ func (w *gateWorld) sawScopeState(pipeline, state string) bool {
 		}
 	}
 	return false
+}
+
+// blockedFor reports whether any build reported tenant blocked for reason.
+func (w *gateWorld) blockedFor(tenant, reason string) bool {
+	w.blockedMu.Lock()
+	defer w.blockedMu.Unlock()
+	return slices.Contains(w.blocked, tenant+" "+reason)
+}
+
+// sawTenantBlocked reports whether self-telemetry exported tenant_blocked 1 for tenant and reason.
+func (w *gateWorld) sawTenantBlocked(tenant, reason string) bool {
+	for _, p := range w.recv.under(w.selfCred()) {
+		for _, r := range p.Resources {
+			for _, pt := range r.Points {
+				if pt.Metric == "genai_otel_bridge_tenant_blocked" && pt.Attrs["tenant"] == tenant && pt.Attrs["reason"] == reason && pt.Value == 1 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// deliveredTo is every data point accepted under a pipeline's credential in a resource naming that
+// pipeline, so two pipelines sharing one credential are told apart.
+func (w *gateWorld) deliveredTo(g gateTenant) []payloadPoint {
+	var out []payloadPoint
+	for _, p := range w.recv.under(g.credential()) {
+		if p.Status != http.StatusOK {
+			continue
+		}
+		for _, r := range p.Resources {
+			if r.Attrs[tenancy.PipelineAttribute] == g.pipeline() {
+				out = append(out, r.Points...)
+			}
+		}
+	}
+	return out
 }
 
 // latest is the newest data point time delivered under a tenant's credential.

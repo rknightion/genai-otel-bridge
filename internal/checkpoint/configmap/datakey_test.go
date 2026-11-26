@@ -79,3 +79,32 @@ func TestDataKeyGolden(t *testing.T) {
 		}
 	}
 }
+
+// TestDataKeyTenantGolden [unit 6b-2, G8] pins the ConfigMap data keys of the tenant shape's checkpoint
+// keys for the fixture pipeline team-a.prod (internal/config/testdata/tenants.yaml): its analytics loop
+// (the key string is pinned in internal/app's tenant_golden_test.go) and its remembered scope match. The
+// expected values were computed by hand from the rule TestDataKeyGolden states, with an independent tool,
+// and pasted; they are never derived by calling dataKey. Unit 1's cases above are untouched.
+func TestDataKeyTenantGolden(t *testing.T) {
+	cases := []struct {
+		name string
+		key  model.CheckpointKey
+		want string
+	}{
+		{
+			name: "tenant analytics loop",
+			key:  model.CheckpointKey{SourceInstance: "mt.team-a.prod", Loop: "analytics", OutputFingerprint: "a2e79cb406df867d"},
+			want: "mt.team-a.prod_analytics_a2e79cb406df867d.7fb1a7e81e29",
+		},
+		{
+			name: "tenant remembered scope match",
+			key:  model.CheckpointKey{SourceInstance: "mt.team-a.prod", Loop: "scope-match", OutputFingerprint: "v1"},
+			want: "mt.team-a.prod_scope-match_v1.a313b29916b8",
+		},
+	}
+	for _, c := range cases {
+		if got := dataKey(c.key); got != c.want {
+			t.Errorf("%s: dataKey(%q) = %q, want %q", c.name, c.key.String(), got, c.want)
+		}
+	}
+}

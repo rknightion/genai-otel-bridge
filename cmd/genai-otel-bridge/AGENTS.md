@@ -23,8 +23,11 @@ backend. Keep that ordering when adding to `main`.
   needed. Does not cover the inline `GENAI_OTEL_BRIDGE_CONFIG` form. On success `runValidateConfig`
   prints the plan table (`tenancy.Plan.Table`, no secrets) and then
   `validate-config: OK (<path>) plan <hash>` (the SHA-256 of the table) and exits 0; on failure it
-  prints `validate-config: FAIL: <err>` to stderr and exits 1. A valid tenant-shape config fails with
-  `the tenant shape is not enabled in this version`. For pre-deploy or external-overlay validation.
+  prints `validate-config: FAIL: <err>` to stderr and exits 1. A tenant-shape config is assembled too,
+  with placeholder secrets and no secret file read, so an assemble rule that needs no secret fails it
+  with that rule's error; one that assembles fails with `the tenant shape is not enabled in this
+  version`. A duplicate API key and an unreadable secret are found only at pod start. For pre-deploy or
+  external-overlay validation.
 - `-cleanup` (with `-cleanup-retain-checkpoint`) - the chart's `post-delete` uninstall hook. Deletes
   the app-created Lease and the checkpoint ConfigMap via `internal/cleanup.Run`; with the retain flag
   it deletes neither, because the Lease carries the epoch fence the retained checkpoint was written
@@ -69,7 +72,14 @@ access to its own lease or checkpoint. Fixed names; the chart is single-instance
   logging.NewLimiter(time.Minute))`, which owns the emit-leg observer, the partial-success counter
   and the rate-limited partial-reject warning, and a telemetry factory over `metrics.With`.
   `metrics.SetLeader` stays on the unlabelled `metrics` here; `leader` is never labelled.
-- **Self-observability** falls back to the telemetry endpoint when `cfg.Emit.Self` is nil; identity and self-profiling are in `internal/selfobs/AGENTS.md`. The self `service.namespace` is `identity.service_namespace` plus `config.SelfNamespaceSuffix` (`-meta`), never a literal.
+- **Tenant secrets.** `main` passes `app.BuildFromPlan` `tenancy.DirSecretReader(tenantSecretsRoot)`,
+  the constant `/var/run/secrets/genai-otel-bridge/tenants` (where the chart mounts each tenant's
+  Secret, `<root>/<tenant id>/<file>`; not a config key), and `metrics.TenantBlocked` as
+  `OnTenantBlocked`. A legacy plan names no secret file and has no tenant, so neither is used. The
+  tenant-shape refusal still runs right after `Prepare`, before assembly.
+- **Self-observability** (`selfOTLP`) falls back to the telemetry endpoint when `cfg.Emit.Self` is nil
+  in the legacy shape only; in the tenant shape self-telemetry goes to `emit.self` only, and a missing
+  one is an error, never a fallback; identity and self-profiling are in `internal/selfobs/AGENTS.md`. The self `service.namespace` is `identity.service_namespace` plus `config.SelfNamespaceSuffix` (`-meta`), never a literal.
 - **Liveness threshold** is derived, not a literal:
   `max(schedule.DegradedBackoff, slowest enabled loop cadence over the plan's rows) + emitRetryBudget(2m) + livenessMargin(4m)`.
   A leader in retry or backpressure survives; a wedged scheduler does not. `bucket_settle` drives the

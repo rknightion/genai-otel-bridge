@@ -63,6 +63,12 @@ type Options struct {
 	Secrets tenancy.SecretReader
 	// Now is the clock of every scope gate BuildFromPlan builds; nil means time.Now.
 	Now func() time.Time
+	// OnTenantBlocked reports, for a plan with tenant rows, whether each reason blocks each tenant at
+	// assembly: BuildFromPlan calls it once for every tenant and every reason (secret_unreadable,
+	// duplicate_key), in tenant order, with blocked true for each reason that leaves the tenant unbuilt.
+	// main passes the tenant_blocked recorder; nil records nothing. A legacy plan has no tenant, so it is
+	// never called.
+	OnTenantBlocked func(tenant, reason string, blocked bool)
 }
 
 // partialRejectLimitKey is the rate-limit key of the partial-reject warning. With no pipeline it is

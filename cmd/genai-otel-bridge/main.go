@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -50,6 +51,11 @@ const (
 	leaseName        = "genai-otel-bridge-leader"
 	checkpointCMName = "genai-otel-bridge-checkpoints"
 )
+
+// tenantSecretsRoot is the directory each tenant's secret files are read from in the tenant shape:
+// <root>/<tenant id>/<file>, the files a tenant's token_file and value_file name (design §2). The chart
+// mounts each tenant's Secret there. A constant, not a config key; a legacy install never reads it.
+const tenantSecretsRoot = "/var/run/secrets/genai-otel-bridge/tenants"
 
 func main() {
 	cfgPath := flag.String("config", "/etc/genai-otel-bridge/config.yaml", "config file")
@@ -180,14 +186,15 @@ func main() {
 		"profiling", cfg.Selfobs.Profiling.Enabled, "tracing", cfg.Selfobs.Tracing.Enabled,
 		"log_level", cfg.Log.Level)
 
-	// Self-observability provider (distinct identity, H4). Falls back to the telemetry endpoint.
+	// Self-observability provider (distinct identity, H4). Falls back to the telemetry endpoint in the
+	// legacy shape only (selfOTLP).
 	// NOTE [CP-M7]: newSelfProvider runs app.ValidateConfig (the cleartext-credential gate) BEFORE it
 	// builds the exporter, because the self instruments hold values at once and a PeriodicReader could
 	// export them with credentials before app.Prepare validates. Keep any other emit-bearing wiring behind
 	// that gate too.
-	selfEP := cfg.Emit.Telemetry.OTLP
-	if cfg.Emit.Self != nil {
-		selfEP = cfg.Emit.Self.OTLP
+	selfEP, _, err := selfOTLP(cfg)
+	if err != nil {
+		fatal("selfobs", err)
 	}
 	mp, mpShutdown, err := newSelfProvider(ctx, cfg, *identity)
 	if err != nil {
@@ -248,7 +255,13 @@ func main() {
 	// copies share every instrument with metrics.
 	ef := app.OTLPEmitterFactory(cfg.Queue.MaxBatchBytes, otlp.DefaultRetryPolicy(), logging.NewLimiter(time.Minute))
 	tf := func(tenant, pipeline string) app.PipelineTelemetry { return metrics.With(tenant, pipeline) }
-	a, err := app.BuildFromPlan(ctx, cfg, plan, cp, coord, ef, tf, app.Options{})
+	// A tenant-shape row's secret files are read under tenantSecretsRoot; a tenant whose secret cannot be
+	// read, or that shares an API key with another target, is left unbuilt and reported on tenant_blocked
+	// (a legacy plan names no secret file and has no tenant, so neither is ever used for it).
+	a, err := app.BuildFromPlan(ctx, cfg, plan, cp, coord, ef, tf, app.Options{
+		Secrets:         tenancy.DirSecretReader(tenantSecretsRoot),
+		OnTenantBlocked: metrics.TenantBlocked,
+	})
 	if err != nil {
 		fatal("build", err)
 	}
@@ -469,11 +482,9 @@ func newSelfProvider(ctx context.Context, cfg *config.Config, identity string) (
 	if err := app.ValidateConfig(cfg); err != nil {
 		return nil, nil, err
 	}
-	selfEP := cfg.Emit.Telemetry.OTLP
-	var selfInterval time.Duration // 0 => provider default (60s, 1DPM)
-	if cfg.Emit.Self != nil {
-		selfEP = cfg.Emit.Self.OTLP
-		selfInterval = time.Duration(cfg.Emit.Self.MetricInterval)
+	selfEP, selfInterval, err := selfOTLP(cfg) // a 0 interval => provider default (60s, 1DPM)
+	if err != nil {
+		return nil, nil, err
 	}
 	return selfobs.NewProvider(ctx, selfobs.ProviderConfig{
 		Endpoint: selfEP.Endpoint, InstanceID: selfEP.InstanceID, Token: selfEP.Token,
@@ -483,4 +494,18 @@ func newSelfProvider(ctx context.Context, cfg *config.Config, identity string) (
 		Interval: selfInterval,
 		MaxDPM:   cfg.Governance.MaxDPM,
 	})
+}
+
+// selfOTLP is where self-telemetry (metrics and traces) goes, with emit.self's metric interval (0 when
+// unset): emit.self, else, in the legacy shape only, emit.telemetry. In the tenant shape (a config with
+// tenants) self-telemetry never falls back (design §2): emit.self is required there and no tenant's
+// destination is ever used, so a missing emit.self is an error.
+func selfOTLP(cfg *config.Config) (config.OTLPConn, time.Duration, error) {
+	if cfg.Emit.Self != nil {
+		return cfg.Emit.Self.OTLP, time.Duration(cfg.Emit.Self.MetricInterval), nil
+	}
+	if len(cfg.Tenants) > 0 {
+		return config.OTLPConn{}, 0, errors.New("emit.self is required in the tenant shape: self-telemetry goes to emit.self only, never to a tenant's destination")
+	}
+	return cfg.Emit.Telemetry.OTLP, 0, nil
 }

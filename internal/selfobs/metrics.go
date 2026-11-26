@@ -23,7 +23,7 @@ type Metrics struct {
 	emitted, emittedLogs, skipped, emitErr, guardDropped, revised, newLabel, capped, sourceCapability, sourceDataIncomplete, authErr metric.Int64Counter
 	partialRejected                                                                                                                  metric.Int64Counter
 	scopeAssertion                                                                                                                   metric.Int64Counter
-	lastSuccess, windowLag, queueDepth, loopDegraded, leader, scopeState                                                             metric.Float64Gauge
+	lastSuccess, windowLag, queueDepth, loopDegraded, leader, scopeState, tenantBlocked                                              metric.Float64Gauge
 	upstreamDur, revisedAge, emitDur                                                                                                 metric.Float64Histogram
 	// extra are the pipeline labels (tenant, pipeline) a With copy appends to every per-pipeline series
 	// [#521]. Empty on the value NewMetrics returns and on With("", ""), so the legacy label sets hold.
@@ -98,6 +98,10 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	// shape), so a legacy install exports neither.
 	m.scopeState = mg("scope_state", "1 for the scope gate's current state (matched, unverified or mismatched) and 0 for the others; all 0 with no result, which is what a replica that is not leading reports", "")
 	m.scopeAssertion = mk("scope_assertion_total", "scope assertion calls by result: matched, mismatch, unverifiable or error")
+	// Whether a tenant was left unbuilt at assembly, by reason (design §8, §9). No unit, so its exported name
+	// has no suffix. Recorded only for a tenant-shape plan, so a legacy install exports none; every replica
+	// records it from its own read of the secrets.
+	m.tenantBlocked = mg("tenant_blocked", "1 while a tenant is not built for the reason (secret_unreadable or duplicate_key), else 0; recorded at assembly by every replica from its own read of the secrets", "")
 	// Per-replica leadership (0 standby, 1 leader), recorded by every replica from startup so a
 	// standby is observable; the gauges above exist only on a replica that has led.
 	m.leader = mg("leader", "1 while this replica holds leadership, 0 while it is a standby; recorded by every replica from startup", "1")
@@ -292,6 +296,20 @@ func (m *Metrics) ScopeState(state string) {
 // A With copy adds tenant and pipeline.
 func (m *Metrics) ScopeAssertion(result string) {
 	m.scopeAssertion.Add(context.Background(), 1, m.attrs(attribute.String("result", result)))
+}
+
+// TenantBlocked records whether reason blocks tenant at assembly: 1 when blocked, else 0, under exactly
+// {tenant, reason}. It never carries a pipeline, not even on a With copy: a blocked tenant has no
+// pipelines, and the gauge is per tenant (design §8). app.BuildFromPlan calls it, through
+// Options.OnTenantBlocked, once for every tenant of a tenant-shape plan and every reason, so a tenant that
+// is built records 0 under both reasons.
+func (m *Metrics) TenantBlocked(tenant, reason string, blocked bool) {
+	v := 0.0
+	if blocked {
+		v = 1.0
+	}
+	m.tenantBlocked.Record(context.Background(), v, metric.WithAttributes(
+		attribute.String("tenant", tenant), attribute.String("reason", reason)))
 }
 
 // ObserveEmitRequest records one outbound emit POST attempt: its latency bucketed by {plane,

@@ -1,0 +1,58 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: genai-otel-bridge-loop-degraded
+  annotations:
+    grafana.app/folder: genai-otel-bridge
+  labels:
+    grafana.app/folder: genai-otel-bridge
+spec:
+  title: GenaiOtelBridgeLoopDegraded
+  # A loop has been held in the degraded state (genai_otel_bridge_loop_degraded = 1, with the degrade
+  # reason as a label) for a sustained 15m. The gauge is the only non-flapping signal for this state:
+  # the error counter that triggers it ticks at most once per 10m degraded backoff. The gauge has OTLP
+  # unit 1, so the gateway exposes it as genai_otel_bridge_loop_degraded_ratio (the same _ratio suffix as
+  # queue_depth). The gauge is exported only while the loop is live: a gone process is LeaderAbsent's.
+  execErrState: Ok
+  noDataState: Ok
+  for: 15m
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "genai-otel-bridge {{ $labels.loop }} loop has been degraded for 15m ({{ $labels.reason }})"
+    description: "The {{ $labels.loop }} loop has been in the degraded state (reason {{ $labels.reason }}) for 15m: genai_otel_bridge_loop_degraded_ratio is 1. The loop backs off and is not advancing normally. Check the pod logs for the degrade reason and genai_otel_bridge_emit_errors_total. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 16m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio) == 1'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

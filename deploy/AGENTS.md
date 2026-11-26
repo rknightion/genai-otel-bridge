@@ -39,8 +39,6 @@
   strings; the verbatim-override path is `configOverride` (a string, since a `config:` string would
   be a map type-mismatch), which is what the e2e values use.
 
-## ecs/
-
 ## grafana/
 
 Alert rules, recording rules **and** dashboards are gcx-native resource manifests
@@ -52,11 +50,13 @@ name, because the two roles live on different stacks: `self-obs/` (the integrato
 telemetry).
 
 - **`noDataState` is `Ok` / `NoData`, not `OK`.** gcx returns 403 on `OK`.
-- **`PollerStale` is deliberately self-relative** (twice the loop's own 6h p90 staleness baseline).
+- **`PollerStale` is deliberately self-relative** (one arm at twice the loop's own 6h p90 staleness baseline above a 300s floor, plus a second
+  absolute arm at a 3h ceiling that a long stall cannot absorb into the baseline).
   A flat threshold false-positived roughly 100 times a day on the log-export loops. Do not "simplify"
   it back to a constant.
-- **`portkey_api_*` are per-bucket gauges**, emitted only at the analytics/groups loop cadence
-  (roughly 11 minutes). Aggregate them with `sum_over_time`, **never `rate()` or `increase()`**, and
+- **`portkey_api_*` are per-bucket gauges**, emitted every loop cadence (60s by default),
+  but the newest sample is about 11 minutes old because `bucket_settle` (10m) holds the query upper
+  bound back. Aggregate them with `sum_over_time`, **never `rate()` or `increase()`**, and
   wrap an instant lookup in `last_over_time(...[20m])` - otherwise a quick query between emits reads
   as "metric absent". `genai_otel_bridge_source_capability_total`,
   `genai_otel_bridge_source_data_incomplete_total`, and the

@@ -96,7 +96,8 @@ cycle, the loop errors loudly and does not advance its watermark.
 1. Check pod logs for the reported capability outcome or incomplete-data reason.
 2. For `workspace_scope` permission denial, compare the credential's workspace scope with the configured expectation.
 3. For export failure or a stuck export, inspect the export-job status plus retry/backoff behaviour.
-4. For `window_truncated`, increase `settings.max_pages_per_window` or reduce `settings.window`.
+4. For `window_truncated` (LangSmith `runs` only), increase `settings.max_pages_per_window` or reduce `settings.window`.
+5. For `window_oversize` (Portkey `logs_export`), the window is parked and nothing was dropped: shrink `settings.window`; the block clears when the window changes.
 
 ---
 
@@ -136,12 +137,17 @@ In production, check for crash-looping pods or a Deployment with `replicas: 1`. 
 
 **Symptom:** `GenaiOtelBridgeWindowTruncatedDroppingRecords` fires.
 
-A windowed log loop (`runs` or `logs_export`) hit its `max_pages_per_window` limit before
-draining all records in a window. Records beyond the page cap were dropped with a counted
-gap. The dropped count is not known precisely (the loop stops at the cap).
+The LangSmith `runs` loop hit its `max_pages_per_window` limit before draining all records in a
+window. Records beyond the page cap were dropped with a counted gap. The dropped count is not known
+precisely (the loop stops at the cap).
 
-**Fix:** raise `settings.max_pages_per_window` for the affected loop, or reduce
-`settings.window` to process smaller windows per cycle.
+**Fix:** raise `settings.max_pages_per_window`, or reduce `settings.window` to process smaller
+windows per cycle.
+
+The Portkey `logs_export` loop never emits `window_truncated`. When a window needs more pages than
+`max_pages_per_window` it parks the window (`reason="window_oversize"`, alerting through
+`GenaiOtelBridgeExportPipelineDataIncomplete`), drops nothing and stops advancing. **Fix:** shrink
+`settings.window`; the block clears when the window changes.
 
 ---
 

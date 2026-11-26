@@ -365,7 +365,7 @@ out-of-order / too-old accept window** — surviving a multi-hour outage means w
 **Memory is modelled and bounded to the container limit** (never OOM-killed): the dominant consumers
 are the largest in-flight payload per loop, because collection is single-flight and at most one batch per loop is queued or in flight (a Portkey logs-export can be 50k
 records — **streamed/chunked, never buffered whole**); `queue.*` sizes + `GOMEMLIMIT` are set against
-the k8s memory limit, and Go memstats are self-observed. Detail in `docs/DESIGN.md` §5.
+the k8s memory limit, and the LangSmith runs per-page decode cap (`max_response_bytes`, default 32 MiB) bounds its largest in-flight page. Process heap and limit gauges are not on `main` yet (PR #497). Detail in `docs/DESIGN.md` §5.
 
 ---
 

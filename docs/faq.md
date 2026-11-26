@@ -94,9 +94,11 @@ with `checkpoint: file` supports a fully local, single-replica run for dev. See
 ### My gauge shows nothing when I use `rate()` — why?
 
 Portkey analytics and groups metrics, and LangSmith session/usage metrics, are emitted as
-OTLP gauges, not counters. Use `sum_over_time(...)` to aggregate over a window; `rate()` or
-`increase()` on a gauge produces meaningless or negative values. See
-[Portkey](./portkey.md#analytics-loop).
+OTLP gauges, not counters; `rate()` or `increase()` on a gauge produces meaningless or negative
+values. Portkey gauges are per-bucket: use `sum_over_time(...)` to aggregate over a window. See
+[Portkey](./portkey.md#analytics-loop). The LangSmith gauges (`langsmith_runs`, `langsmith_tokens`,
+`langsmith_cost_usd`) are each poll's total over the trailing `stats_window` (default 1h): read the
+latest value (`last_over_time`) and do not `sum_over_time` them. See [LangSmith](./langsmith.md).
 
 ### A `quantile` or `token_type` label isn't showing up on a series — why?
 

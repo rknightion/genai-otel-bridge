@@ -310,7 +310,7 @@ spec:
       spec:
         id: 102
         title: Replicas emitting
-        description: Distinct service_instance_id self-reporting. <2 => no standby (GenaiOtelBridgeNoStandby). Both active+standby self-emit, so 2 is the healthy HA steady state.
+        description: Distinct service_instance_id self-reporting genai_otel_bridge_leader_ratio (every replica records it from startup). <2 => no standby (GenaiOtelBridgeNoStandby). 2 is the healthy HA steady state.
         links: []
         data:
           kind: QueryGroup
@@ -328,7 +328,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: count(group by (service_instance_id) (genai_otel_bridge_window_lag_seconds))
+                    expr: count(max by (service_instance_id) (last_over_time(genai_otel_bridge_leader_ratio[5m])))
                     legendFormat: ''
                     range: false
                     instant: true
@@ -853,7 +853,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: count(group by (service_instance_id) (genai_otel_bridge_window_lag_seconds))
+                    expr: count(max by (service_instance_id) (last_over_time(genai_otel_bridge_leader_ratio[5m])))
                     legendFormat: replicas
                     range: true
                     instant: false
@@ -2342,6 +2342,82 @@ spec:
             fieldConfig:
               defaults: {}
               overrides: []
+    panel-174:
+      kind: Panel
+      spec:
+        id: 174
+        title: Heap in use vs Go memory limit
+        description: genai_otel_bridge_go_heap_inuse_bytes against genai_otel_bridge_go_memory_limit_bytes (GOMEMLIMIT, 0.9 x the container limit; 0 = unset, not plotted). Heap approaching the limit is what GenaiOtelBridgeMemoryNearLimit fires on.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: max by (service_instance_id) (genai_otel_bridge_go_heap_inuse_bytes)
+                    legendFormat: heap {{service_instance_id}}
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: B
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: max by (service_instance_id) (genai_otel_bridge_go_memory_limit_bytes) > 0
+                    legendFormat: limit {{service_instance_id}}
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: bytes
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+              overrides: []
     panel-170:
       kind: Panel
       spec:
@@ -2813,3 +2889,8 @@ spec:
                   element:
                     kind: ElementReference
                     name: panel-173
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-174

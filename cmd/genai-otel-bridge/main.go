@@ -19,6 +19,7 @@ import (
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	awsddb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	corev1client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -177,24 +178,15 @@ func main() {
 		"log_level", cfg.Log.Level)
 
 	// Self-observability provider (distinct identity, H4). Falls back to the telemetry endpoint.
-	// NOTE [CP-M7]: this and the product emitter below are CONSTRUCTED here but do not emit until
-	// app.Run; cfg.Validate (inside app.Build, further down) runs the cleartext-credential gate before
-	// any network emit, so emit-bearing wiring must stay after that gate — don't reorder an actual emit
-	// above app.Build.
+	// NOTE [CP-M7]: newSelfProvider runs app.ValidateConfig (the cleartext-credential gate) BEFORE it
+	// builds the exporter, because the self instruments hold values at once and a PeriodicReader could
+	// export them with credentials before app.Build validates. Keep any other emit-bearing wiring behind
+	// that gate too.
 	selfEP := cfg.Emit.Telemetry.OTLP
-	var selfInterval time.Duration // 0 ⇒ provider default (60s, 1DPM)
 	if cfg.Emit.Self != nil {
 		selfEP = cfg.Emit.Self.OTLP
-		selfInterval = time.Duration(cfg.Emit.Self.MetricInterval)
 	}
-	mp, mpShutdown, err := selfobs.NewProvider(ctx, selfobs.ProviderConfig{
-		Endpoint: selfEP.Endpoint, InstanceID: selfEP.InstanceID, Token: selfEP.Token,
-		ServiceNamespace: cfg.Identity.ServiceNamespace + "-meta", Environment: cfg.Identity.DeploymentEnvironment,
-		Instance: *identity,        // [CP-H8] POD_NAME → per-replica self-metric identity
-		Version:  version.String(), // [#91] service.version on the self resource → correlate a regression to a build
-		Interval: selfInterval,
-		MaxDPM:   cfg.Governance.MaxDPM,
-	})
+	mp, mpShutdown, err := newSelfProvider(ctx, cfg, *identity)
 	if err != nil {
 		fatal("selfobs", err)
 	}
@@ -279,7 +271,10 @@ func main() {
 	if err != nil {
 		fatal("build", err)
 	}
-	if err := a.Run(ctx, health.Handler(), *healthAddr, health.MarkReady, health.Beat, health.SetLeader); err != nil && ctx.Err() == nil {
+	if err := a.Run(ctx, health.Handler(), *healthAddr, health.MarkReady, health.Beat, func(leader bool) {
+		health.SetLeader(leader)
+		metrics.SetLeader(leader)
+	}); err != nil && ctx.Err() == nil {
 		fatal("run", err)
 	}
 	gracefulShutdown(stop, mpShutdown, tpShutdown, profStop)
@@ -462,3 +457,28 @@ func livenessThreshold(cfg *config.Config) time.Duration {
 }
 
 func fatal(msg string, err error) { slog.Error(msg, "err", err); os.Exit(1) }
+
+// newSelfProvider builds the self-metrics provider from cfg. Its PeriodicReader can export as soon as
+// an instrument has a value (NewMetrics records leader=0 and observes runtime memory at once), so the
+// full config validation, which holds the cleartext-credential gate for every OTLP endpoint, runs
+// first: a rejected config must never see a request, or an http:// endpoint would receive the Basic
+// Authorization header before startup failed.
+func newSelfProvider(ctx context.Context, cfg *config.Config, identity string) (*sdkmetric.MeterProvider, func(context.Context) error, error) {
+	if err := app.ValidateConfig(cfg); err != nil {
+		return nil, nil, err
+	}
+	selfEP := cfg.Emit.Telemetry.OTLP
+	var selfInterval time.Duration // 0 => provider default (60s, 1DPM)
+	if cfg.Emit.Self != nil {
+		selfEP = cfg.Emit.Self.OTLP
+		selfInterval = time.Duration(cfg.Emit.Self.MetricInterval)
+	}
+	return selfobs.NewProvider(ctx, selfobs.ProviderConfig{
+		Endpoint: selfEP.Endpoint, InstanceID: selfEP.InstanceID, Token: selfEP.Token,
+		ServiceNamespace: cfg.Identity.ServiceNamespace + "-meta", Environment: cfg.Identity.DeploymentEnvironment,
+		Instance: identity,         // [CP-H8] POD_NAME -> per-replica self-metric identity
+		Version:  version.String(), // [#91] service.version on the self resource -> correlate a regression to a build
+		Interval: selfInterval,
+		MaxDPM:   cfg.Governance.MaxDPM,
+	})
+}

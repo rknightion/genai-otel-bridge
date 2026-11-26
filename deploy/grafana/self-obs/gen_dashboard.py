@@ -143,8 +143,8 @@ add(stat(100, "Loops healthy", "HEALTHY when no selected loop is staler than 2x 
          '(max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2) * (max(time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})) < bool 10800)', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=HEALTHY_MAP))
 add(stat(101, "Leader present", "1 (PRESENT) if any selected loop exported a timestamp in the last 15m. ABSENT => leader gone / never emitted (distinct from stale). Inline — no recording rule required.",
          'max(present_over_time(genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"}[15m]))', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=PRESENT_MAP))
-add(stat(102, "Replicas emitting", "Distinct service_instance_id self-reporting. <2 => no standby (GenaiOtelBridgeNoStandby). Both active+standby self-emit, so 2 is the healthy HA steady state.",
-         "count(group by (service_instance_id) (genai_otel_bridge_window_lag_seconds))", "short", color="value", steps_=steps((None, "red"), (2, "green"))))
+add(stat(102, "Replicas emitting", "Distinct service_instance_id self-reporting genai_otel_bridge_leader_ratio (every replica records it from startup). <2 => no standby (GenaiOtelBridgeNoStandby). 2 is the healthy HA steady state.",
+         "count(max by (service_instance_id) (last_over_time(genai_otel_bridge_leader_ratio[5m])))", "short", color="value", steps_=steps((None, "red"), (2, "green"))))
 add(stat(103, "Worst freshness ratio", "max(genai-otel-bridge:freshness_ratio): each loop's staleness over its OWN trailing-6h p90 baseline. <1.5 normal, >2 = much staler than this loop's normal. Uniform scale across loops of any cadence. Needs the recording rules pushed.",
          'max(genai-otel-bridge:freshness_ratio{loop=~"$loop"})', "none", color="background", graph="area", steps_=RATIO_STEPS))
 add(stat(104, "Max window lag", "now - watermark frontier, worst loop. Floors at ~bucket_settle+cadence by design; a sustained rise = a loop falling behind.",
@@ -164,7 +164,7 @@ add(ts(121, "Last-success age vs each loop's baseline", "Solid = time() - last_s
        "s", [('time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})', "{{loop}} age"),
              ('genai-otel-bridge:last_success_age:baseline6h{loop=~"$loop"}', "{{loop}} baseline")]))
 add(ts(122, "Replicas self-reporting over time", "Distinct service_instance_id. 2 = healthy active/passive HA; a drop to 1 = no standby (failover gap risk); a spike >2 sustained = leader overlap.",
-       "short", [('count(group by (service_instance_id) (genai_otel_bridge_window_lag_seconds))', "replicas")], calcs=["lastNotNull", "min"]))
+       "short", [('count(max by (service_instance_id) (last_over_time(genai_otel_bridge_leader_ratio[5m])))', "replicas")], calcs=["lastNotNull", "min"]))
 add(stat(123, "Freshness ratio", "Per-loop staleness vs the loop's own 6h baseline (repeats once per selected loop). Green <1.5, red >2.",
          'genai-otel-bridge:freshness_ratio{loop="$loop"}', "none", viz="gauge", steps_=RATIO_STEPS))
 
@@ -226,6 +226,9 @@ add(logs_panel(161, "Poller logs (warn+error)", "The integrator's own warn/error
                f'{SELF_LOGS} | detected_level=~"warn|error"'))
 
 # === Tab: Profiling (the poller's own runtime) ===============================
+add(ts(174, "Heap in use vs Go memory limit", "genai_otel_bridge_go_heap_inuse_bytes against genai_otel_bridge_go_memory_limit_bytes (GOMEMLIMIT, 0.9 x the container limit; 0 = unset, not plotted). Heap approaching the limit is what GenaiOtelBridgeMemoryNearLimit fires on.",
+       "bytes", [('max by (service_instance_id) (genai_otel_bridge_go_heap_inuse_bytes)', "heap {{service_instance_id}}"),
+                 ('max by (service_instance_id) (genai_otel_bridge_go_memory_limit_bytes) > 0', "limit {{service_instance_id}}")]))
 add(pyro_ts(170, "CPU usage (process_cpu)", "Continuous CPU profile of the integrator process (Pyroscope push). genai-otel-bridge is near-idle between ticks; spikes align with poll/emit cycles.",
             "short", "process_cpu:cpu:nanoseconds:cpu:nanoseconds"))
 add(pyro_ts(171, "Heap in-use", "Live heap (memory:inuse_space). Watch for a sustained climb (leak) vs the sawtooth of normal GC.",
@@ -276,7 +279,7 @@ tabs = [
         gi("panel-160"), gi("panel-162"), gi("panel-161"),
     ], cols=2)),
     tab("Profiling", auto_grid([
-        gi("panel-170"), gi("panel-171"), gi("panel-172"), gi("panel-173"),
+        gi("panel-170"), gi("panel-171"), gi("panel-172"), gi("panel-173"), gi("panel-174"),
     ], cols=2)),
 ]
 

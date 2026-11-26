@@ -4,8 +4,10 @@ package selfobs
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"runtime/debug"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +21,75 @@ import (
 )
 
 var _ schedule.Metrics = (*Metrics)(nil) // compile-time: satisfies the seam
+
+func gaugeValues(t *testing.T, reader metric.Reader, name string) []float64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	var out []float64
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			g, ok := m.Data.(metricdata.Gauge[float64])
+			if !ok {
+				t.Fatalf("%s is %T, want a float64 gauge", name, m.Data)
+			}
+			for _, dp := range g.DataPoints {
+				out = append(out, dp.Value)
+			}
+		}
+	}
+	return out
+}
+
+func TestStandbyExportsLeaderGauge(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	m, err := NewMetrics(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const name = "genai_otel_bridge_leader"
+	// AC1: no loop has ever run and nothing led: the replica still exports 0.
+	if got := gaugeValues(t, reader, name); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("never-elected replica exports %v, want [0]", got)
+	}
+	// AC2: promotion and demotion are both reflected.
+	m.SetLeader(true)
+	if got := gaugeValues(t, reader, name); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("leader exports %v, want [1]", got)
+	}
+	m.SetLeader(false)
+	if got := gaugeValues(t, reader, name); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("demoted replica exports %v, want [0]", got)
+	}
+}
+
+func TestRuntimeMemoryGauges(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	if _, err := NewMetrics(provider); err != nil {
+		t.Fatal(err)
+	}
+	if got := gaugeValues(t, reader, "genai_otel_bridge_go_heap_inuse_bytes"); len(got) != 1 || got[0] <= 0 {
+		t.Fatalf("heap in use = %v, want one positive value", got)
+	}
+	prev := debug.SetMemoryLimit(1 << 30)
+	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+	if got := gaugeValues(t, reader, "genai_otel_bridge_go_memory_limit_bytes"); len(got) != 1 || got[0] != 1<<30 {
+		t.Fatalf("memory limit = %v, want [1 GiB]", got)
+	}
+	debug.SetMemoryLimit(math.MaxInt64)
+	if got := gaugeValues(t, reader, "genai_otel_bridge_go_memory_limit_bytes"); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("unset memory limit = %v, want [0]", got)
+	}
+}
 
 func TestEmitRetryRecordsEachAttemptHistogramBothPlanes(t *testing.T) {
 	for _, plane := range []string{"metrics", "logs"} {

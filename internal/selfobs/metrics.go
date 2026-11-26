@@ -5,6 +5,9 @@ package selfobs
 import (
 	"context"
 	"fmt"
+	"math"
+	"runtime"
+	"runtime/debug"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -16,7 +19,7 @@ import (
 type Metrics struct {
 	emitted, emittedLogs, skipped, emitErr, guardDropped, revised, newLabel, capped, sourceCapability, sourceDataIncomplete, authErr metric.Int64Counter
 	partialRejected                                                                                                                  metric.Int64Counter
-	lastSuccess, windowLag, queueDepth, loopDegraded                                                                                 metric.Float64Gauge
+	lastSuccess, windowLag, queueDepth, loopDegraded, leader                                                                         metric.Float64Gauge
 	upstreamDur, revisedAge, emitDur                                                                                                 metric.Float64Histogram
 }
 
@@ -37,6 +40,16 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 			err = e
 		}
 		return g
+	}
+	mo := func(n, desc, unit string, read func() float64) {
+		_, e := me.Float64ObservableGauge("genai_otel_bridge_"+n, metric.WithDescription(desc), metric.WithUnit(unit),
+			metric.WithFloat64Callback(func(_ context.Context, o metric.Float64Observer) error {
+				o.Observe(read())
+				return nil
+			}))
+		if e != nil {
+			err = e
+		}
 	}
 	mh := func(n, desc, unit string) metric.Float64Histogram {
 		h, e := me.Float64Histogram("genai_otel_bridge_"+n, metric.WithDescription(desc), metric.WithUnit(unit))
@@ -73,12 +86,41 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	// 10m, making an increase[10m] alert flap. A 0/1 gauge answers it in one query and supports a
 	// non-flapping `== 1 for 15m` alert. Bounded cardinality: the reason attr is the fixed enterDegraded set.
 	m.loopDegraded = mg("loop_degraded", "1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends", "1")
+	// Per-replica leadership (0 standby, 1 leader), recorded by every replica from startup so a
+	// standby is observable; the gauges above exist only on a replica that has led.
+	m.leader = mg("leader", "1 while this replica holds leadership, 0 while it is a standby; recorded by every replica from startup", "1")
+	m.leader.Record(context.Background(), 0)
+	// Runtime memory, no labels: observed at each collection. heap_inuse against the GC memory limit
+	// (GOMEMLIMIT, 0 when unset) is the "approaching the limit" signal.
+	mo("go_heap_inuse_bytes", "bytes in in-use heap spans (runtime.MemStats.HeapInuse)", "By", func() float64 {
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		return float64(ms.HeapInuse)
+	})
+	mo("go_memory_limit_bytes", "the Go runtime soft memory limit (GOMEMLIMIT); 0 when no limit is set", "By", func() float64 {
+		l := debug.SetMemoryLimit(-1)
+		if l == math.MaxInt64 {
+			return 0
+		}
+		return float64(l)
+	})
 	// Histograms use the provider's base2 exponential view; no fixed upper latency boundary.
 	m.upstreamDur = mh("upstream_request_duration_seconds", "outbound request latency to upstream source APIs (time to response headers)", "s")
 	m.emitDur = mh("emit_request_duration_seconds", "outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs)", "s")
 	// Revision age pairs with the revision counter to support tuning bucket_settle.
 	m.revisedAge = mh("bucket_revised_after_settle_age_seconds", "age (now − bucketEnd) of a settled bucket observed to change after bucket_settle — how late the late arrival is", "s")
 	return m, err
+}
+
+// SetLeader records this replica's leadership: 1 while it holds the lease, 0 otherwise. Unlike the
+// per-loop gauges (recorded only by the scheduler, which only a leader runs), every replica calls
+// this, so a standby is visible. NewMetrics records the initial 0.
+func (m *Metrics) SetLeader(leader bool) {
+	v := 0.0
+	if leader {
+		v = 1.0
+	}
+	m.leader.Record(context.Background(), v)
 }
 
 // Reasons that a bundled alert under deploy/grafana/self-obs reads with increase(). A counter series

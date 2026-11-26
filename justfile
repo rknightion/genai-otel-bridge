@@ -131,7 +131,7 @@ secret-scan: _tools-gitleaks
 _tools-gitleaks:
     set -euo pipefail
     mkdir -p {{ tools_dir }}
-    if ! { test -x {{ tools_dir }}/gitleaks && {{ tools_dir }}/gitleaks version >/dev/null 2>&1; }; then
+    if ! { test -x {{ tools_dir }}/gitleaks && {{ tools_dir }}/gitleaks version 2>/dev/null | grep -Fqx -e "{{ gitleaks_version }}" -e "v{{ gitleaks_version }}"; }; then
       os="$({{ go }} env GOOS)"; arch="$({{ go }} env GOARCH)"
       case "$arch" in amd64) arch=x64 ;; esac
       asset="gitleaks_{{ gitleaks_version }}_${os}_${arch}.tar.gz"
@@ -315,27 +315,29 @@ _tools-e2e:
     set -euo pipefail
     mkdir -p {{ tools_dir }}
     os="$({{ go }} env GOOS)"; arch="$({{ go }} env GOARCH)"
-    if ! { test -x {{ tools_dir }}/helm && {{ tools_dir }}/helm version --short >/dev/null 2>&1; }; then
+    # Per-run download directory: concurrent installs on one host must not share file names.
+    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+    if ! { test -x {{ tools_dir }}/helm && {{ tools_dir }}/helm version --short 2>/dev/null | cut -d+ -f1 | grep -Fqx "{{ helm_version }}"; }; then
       tarball="helm-{{ helm_version }}-$os-$arch.tar.gz"
-      curl -sSfLo "/tmp/$tarball" "https://get.helm.sh/$tarball"
-      curl -sSfLo "/tmp/$tarball.sha256sum" "https://get.helm.sh/$tarball.sha256sum"
-      (cd /tmp && sha256sum -c "$tarball.sha256sum")
-      tar -xzf "/tmp/$tarball" -C /tmp
-      mv "/tmp/$os-$arch/helm" {{ tools_dir }}/helm
+      curl -sSfLo "$tmp/$tarball" "https://get.helm.sh/$tarball"
+      curl -sSfLo "$tmp/$tarball.sha256sum" "https://get.helm.sh/$tarball.sha256sum"
+      (cd "$tmp" && sha256sum -c "$tarball.sha256sum")
+      tar -xzf "$tmp/$tarball" -C "$tmp"
+      install -m 0755 "$tmp/$os-$arch/helm" {{ tools_dir }}/helm
     fi
-    if ! { test -x {{ tools_dir }}/k3d && {{ tools_dir }}/k3d version >/dev/null 2>&1; }; then
-      curl -sSfLo /tmp/k3d-checksums.txt "https://github.com/k3d-io/k3d/releases/download/{{ k3d_version }}/checksums.txt"
-      curl -sSfLo /tmp/k3d-bin "https://github.com/k3d-io/k3d/releases/download/{{ k3d_version }}/k3d-$os-$arch"
-      want="$(grep "k3d-$os-$arch\$" /tmp/k3d-checksums.txt | awk '{print $1}')"
+    if ! { test -x {{ tools_dir }}/k3d && {{ tools_dir }}/k3d version 2>/dev/null | awk '$1 == "k3d" && !seen { print $3; seen = 1 }' | grep -Fqx "{{ k3d_version }}"; }; then
+      curl -sSfLo "$tmp/k3d-checksums.txt" "https://github.com/k3d-io/k3d/releases/download/{{ k3d_version }}/checksums.txt"
+      curl -sSfLo "$tmp/k3d-bin" "https://github.com/k3d-io/k3d/releases/download/{{ k3d_version }}/k3d-$os-$arch"
+      want="$(grep "k3d-$os-$arch\$" "$tmp/k3d-checksums.txt" | awk '{print $1}')"
       test -n "$want" || { echo "k3d: no checksum entry for $os-$arch in checksums.txt"; exit 1; }
-      echo "$want  /tmp/k3d-bin" | sha256sum -c -
-      install -m 0755 /tmp/k3d-bin {{ tools_dir }}/k3d
+      echo "$want  $tmp/k3d-bin" | sha256sum -c -
+      install -m 0755 "$tmp/k3d-bin" {{ tools_dir }}/k3d
     fi
-    if ! { test -x {{ tools_dir }}/kubectl && {{ tools_dir }}/kubectl version --client >/dev/null 2>&1; }; then
-      curl -sSfLo /tmp/kubectl-bin "https://dl.k8s.io/release/v{{ envtest_k8s_version }}/bin/$os/$arch/kubectl"
-      curl -sSfLo /tmp/kubectl-bin.sha256 "https://dl.k8s.io/release/v{{ envtest_k8s_version }}/bin/$os/$arch/kubectl.sha256"
-      echo "$(cat /tmp/kubectl-bin.sha256)  /tmp/kubectl-bin" | sha256sum -c -
-      install -m 0755 /tmp/kubectl-bin {{ tools_dir }}/kubectl
+    if ! { test -x {{ tools_dir }}/kubectl && {{ tools_dir }}/kubectl version --client -o json 2>/dev/null | grep -Fq '"gitVersion": "v{{ envtest_k8s_version }}"'; }; then
+      curl -sSfLo "$tmp/kubectl-bin" "https://dl.k8s.io/release/v{{ envtest_k8s_version }}/bin/$os/$arch/kubectl"
+      curl -sSfLo "$tmp/kubectl-bin.sha256" "https://dl.k8s.io/release/v{{ envtest_k8s_version }}/bin/$os/$arch/kubectl.sha256"
+      echo "$(cat "$tmp/kubectl-bin.sha256")  $tmp/kubectl-bin" | sha256sum -c -
+      install -m 0755 "$tmp/kubectl-bin" {{ tools_dir }}/kubectl
     fi
 
 [private]
@@ -362,8 +364,9 @@ _tools-licensing:
 _tools-sbom:
     set -euo pipefail
     mkdir -p {{ tools_dir }}
-    { test -x {{ tools_dir }}/syft && {{ tools_dir }}/syft version >/dev/null 2>&1; } \
-      || GOBIN={{ tools_dir }} {{ go }} install github.com/anchore/syft/cmd/syft@{{ syft_version }}
+    if ! { test -x {{ tools_dir }}/syft && {{ go }} version -m {{ tools_dir }}/syft | awk '$1 == "mod" && !seen { print $3; seen = 1 }' | grep -Fqx "{{ syft_version }}"; }; then
+      GOBIN={{ tools_dir }} {{ go }} install github.com/anchore/syft/cmd/syft@{{ syft_version }}
+    fi
 
 # GitHub issues and the rknightion Project; maintainers only (needs the tracker tools and credentials)
 [group('tracker')]

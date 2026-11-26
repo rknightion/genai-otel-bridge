@@ -176,6 +176,18 @@ exclusive.
 `workspace_id` and `signed_url_allow_hosts` are required. The signed URL host must match
 Portkey's export download host (check your Portkey workspace for the correct value).
 
+### Memory and payload size
+
+`chunk_max_records` (default `5000`, a positive integer) sets how many records one `Collect` emits
+at a time. The export file is streamed and never held whole, so this bounds memory. Lower it if
+the emitter reports `payload_too_large` (see [Alerts](./alerts.md)).
+
+### Other settings
+
+This page describes the settings that need explanation, not every key. The complete set for each
+loop, with defaults and a one-line description each, is the generated example block in
+[`deploy/helm/values.yaml`](https://github.com/rknightion/genai-otel-bridge/blob/main/deploy/helm/values.yaml).
+
 ### Example logs export config
 
 ```yaml

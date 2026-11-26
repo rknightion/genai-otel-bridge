@@ -5,7 +5,7 @@ description: Complete reference for every genai-otel-bridge config key, with typ
 
 # Configuration reference
 
-This page lists every configuration key accepted by `genai-otel-bridge`, with types, defaults, and a brief description. The generated source of truth with inline comments is [`deploy/helm/values.yaml`](https://github.com/rknightion/genai-otel-bridge/blob/main/deploy/helm/values.yaml). The Go struct definitions and validation rules are in [`internal/config/config.go`](https://github.com/rknightion/genai-otel-bridge/blob/main/internal/config/config.go).
+This page lists the configuration keys outside the vendor `settings` maps, with types, defaults, and a brief description. The per-loop `settings` keys are vendor-specific: see [Portkey](./portkey.md) and [LangSmith](./langsmith.md), and the complete generated example block in `deploy/helm/values.yaml`. The generated source of truth with inline comments is [`deploy/helm/values.yaml`](https://github.com/rknightion/genai-otel-bridge/blob/main/deploy/helm/values.yaml). The Go struct definitions and validation rules are in [`internal/config/config.go`](https://github.com/rknightion/genai-otel-bridge/blob/main/internal/config/config.go).
 
 For a narrative walk-through, see [Configuration](./configuration.md).
 
@@ -19,8 +19,8 @@ For a narrative walk-through, see [Configuration](./configuration.md).
 | `emit.telemetry.otlp.instance_id` | string | `${GC_INSTANCE_ID}` | Grafana Cloud instance ID (Basic auth username). |
 | `emit.telemetry.otlp.token` | string | `${GC_OTLP_TOKEN}` | Grafana Cloud access-policy token (Basic auth password). |
 | `emit.telemetry.otlp.allow_insecure` | bool | `false` | Opt out of the https-only gate for an in-cluster cleartext OTLP receiver. Requires empty credentials and a private/DNS target. |
-| `emit.self.otlp.*` | — | _(optional)_ | Same structure as `emit.telemetry.otlp`. When unset, self-observability signals use the product endpoint. |
-| `emit.self.metric_interval` | duration | `60s` | Self-obs PeriodicReader export period. Must be ≥ 60s (1 DPM constraint). |
+| `emit.self.otlp.*` | — | _(optional)_ | Same structure as `emit.telemetry.otlp`. When the whole `emit.self` block is absent, self-observability signals use the product endpoint. A present `emit.self` block with an empty `otlp.endpoint` is rejected. |
+| `emit.self.metric_interval` | duration | `60s` | Self-obs PeriodicReader export period. Must be at least `60s / governance.max_dpm` (60s at the default `max_dpm` of 1); unset means 60s. |
 
 Self-observability histogram instruments use a code-owned base2 exponential aggregation view with
 `MaxSize: 160` and `MaxScale: 20`. The OTel-Go SDK also recognizes
@@ -52,7 +52,7 @@ the explicit view remains authoritative.
 | `ha.dynamodb.key_prefix` | string | — | Optional prefix prepended to every item key (shared-table isolation). |
 | `ha.dynamodb.lease_duration` | duration | `15s` | Leader lease TTL. Must be greater than `renew_deadline`. |
 | `ha.dynamodb.renew_deadline` | duration | `10s` | Deadline for the leader to renew its lease before giving it up. |
-| `ha.dynamodb.retry_period` | duration | `2s` | Poll interval for lock acquisition/renewal retries. Must be > 0. |
+| `ha.dynamodb.retry_period` | duration | `2s` | Poll interval for lock acquisition/renewal retries, and the renew cadence. Must be > 0 and less than `renew_deadline`. |
 
 ---
 
@@ -141,14 +141,18 @@ Each entry in the `sources` list has:
 
 ## Validation rules
 
-The config validator (`internal/config/config.go`) enforces these rules at startup:
+The validator, `Config.Validate` in `internal/config/config.go`, is the authoritative list and runs at startup. These are the main rules, not every check:
 
 - `emit.telemetry.otlp.endpoint` is required.
 - `queue.emit_workers` must be exactly 1.
 - `ha.checkpoint=file` with `ha.coordinator=lease` is rejected.
 - `ha.coordinator=dynamodb` requires `ha.checkpoint=dynamodb` (they share one table).
 - `ha.dynamodb.table` is required whenever `ha.coordinator` or `ha.checkpoint` is `dynamodb`.
-- `ha.dynamodb.lease_duration` must be greater than `ha.dynamodb.renew_deadline`, and `ha.dynamodb.retry_period` must be > 0 (checked when `ha.coordinator=dynamodb`).
+- `ha.dynamodb.lease_duration` must be greater than `ha.dynamodb.renew_deadline`, `ha.dynamodb.retry_period` must be > 0 and less than `renew_deadline`, and none of the three may be negative (all checked when `ha.coordinator=dynamodb`).
+- `emit.telemetry.metric_interval` is rejected (it is not honoured; use `emit.self.metric_interval`).
+- A present `emit.self` block needs `otlp.endpoint`, and `emit.self.metric_interval` must be at least `60s / governance.max_dpm`.
+- Each source needs a unique `source_instance`, `rate_limit.rps` > 0 and `rate_limit.burst` ≥ 1.
+- Enabled self-profiling is cross-checked: `selfobs.profiling.push.*` only with `mode: push`, `pull.addr` only with `mode: pull`.
 - `source_instance` must not contain `/`.
 - `source.base_url` must be `https://` unless `http.allow_private=true`.
 - `auth.header` and `auth.value` are required for every enabled source.

@@ -58,9 +58,9 @@ podDisruptionBudget:
 # terminationGracePeriodSeconds bounds the wait before SIGKILL. NOTE: SIGTERM hard-cancels the root
 # context, which aborts any in-flight emit and refuses any post-cancel checkpoint save — there is NO
 # drain. Correctness is preserved anyway: no watermark advances after cancel, so the next leader
-# re-pulls and re-emits the interrupted window byte-identically (idempotent). So this only needs to
-# cover the self-obs OTLP flush on the way out (seconds); 300s is a generous ceiling, not a required
-# drain window, and lowering it does not risk data loss.
+# re-pulls and re-emits the interrupted window byte-identically (idempotent). So this bounds the
+# time to SIGKILL and covers the emit-retry budget; it is not a drain window, and 300s is a generous
+# ceiling. Lowering it does not risk data loss.
 terminationGraceSeconds: 300
 
 # NetworkPolicy egress — DNS + API server are matched robustly (label selector / configurable CIDR);

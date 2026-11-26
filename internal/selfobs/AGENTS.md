@@ -95,7 +95,8 @@ Only a configured sub-floor value is clamped up, and that clamp is logged.
 
 ## Seeded alert series (#499)
 
-`Metrics.SeedLoop(id, hookLoop)` (called by `app.Build` once per loop, via an optional interface so
+`Metrics.SeedLoop(id, hookLoop)` (called by `app.BuildFromPlan` once per loop on that loop's row's
+telemetry, so a `With` copy seeds only its own pipeline's loops, via an optional interface so
 `schedule.Metrics` is unchanged) creates at 0 the series that a bundled alert reads with `increase()`:
 `samples_skipped_total` under the runner's `{source, loop, reason}` and `source_data_incomplete_total`
 under the hook's `{loop, reason}` (#387: a seed under any other attribute set is a different series). Without it the first event is a series born

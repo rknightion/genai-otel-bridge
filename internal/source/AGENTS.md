@@ -39,7 +39,9 @@ and the scheduler stretches the wait as for quota [#537].
 
 ## Guard
 
-One `*Guard` instance is shared across all loop runners and its `seen` map is mutex-protected. It is
+One `*Guard` instance per group is shared across the loop runners of that group (the rows that share a
+stack and an identity; a legacy install is one group, so one guard), and its `seen` map is
+mutex-protected. It is
 default-deny: an empty `AllowLabelKeys` denies **all** label keys (v1 no-label policy, CP-C6).
 `Sanitize` never poison-pills - over-budget or denied data is counted and fires `OnNewLabelValue`,
 never errored.

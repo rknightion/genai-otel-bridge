@@ -17,7 +17,7 @@ backend. Keep that ordering when adding to `main`.
   over 127.0.0.1, exits 0/1. `localHealthURL` rewrites a `0.0.0.0` / `[::]` bind, and accepts a bare
   port, into a dialable `127.0.0.1:<port>`. Task def: `["CMD","/genai-otel-bridge","-healthcheck"]`.
 - `-validate-config` - loads and schema/semantic-checks `-config` via `app.ValidateConfigFile`,
-  then runs `app.Build` with inert dependencies (construction checks: loop names, graphs, content
+  then runs `app.BuildFromPlan` on the resolved plan with inert dependencies (construction checks: loop names, graphs, content
   floor, label budget, series ownership; no network), so it fails wherever startup would. It
   placeholders unset `${ENV}` refs (endpoints get an https placeholder) so no secrets are
   needed. Does not cover the inline `GENAI_OTEL_BRIDGE_CONFIG` form. On success `runValidateConfig`
@@ -48,20 +48,22 @@ access to its own lease or checkpoint. Fixed names; the chart is single-instance
   ConfigMap, `file` to `-checkpoint-file`, `dynamodb` to table `ha.dynamodb.table` with pk prefix
   `<key_prefix>ckpt#`. coordinator: `lease` to the Lease (15s/10s/2s), `dynamodb` to lock item
   `<key_prefix>lock#<lock_name>`, `none` to `coordinate.Noop`. Construction is lazy (no DynamoDB call
-  here), which is what makes it safe to run before `cfg.Validate` inside `app.Build`.
+  here); `cfg.Validate` already ran in `app.Prepare`, and nothing reaches a backend before `app.Run`.
 - **A leadership lapse re-campaigns in-process, it does not exit.** Both coordinators rebuild and
   re-enter their acquire loop when leadership is lost while the root ctx is still alive, so a
   transient kube-apiserver or DynamoDB flap does not kill the process mid-pod-life; a standby may
   take over for the gap. `app.Run` therefore returns only on root-ctx cancellation (SIGTERM or
   rollout, clean exit 0) or a genuine construction error, which is fatal plus `os.Exit(1)`.
 - `selfobs.SetMemoryLimit(0.9, *memLimit)` runs **before** config load. No-op when the limit is <= 0.
-- **Validate, then plan.** Right after the log handler is installed, `main` runs
-  `app.ValidateConfig(cfg)` and then `tenancy.Resolve(cfg)`, each fatal with the log message `config`,
-  so an invalid config stops before the `config loaded` line and before any exporter exists. The
-  `config loaded` counts and the liveness threshold read `plan.Rows`, never `cfg.Sources`.
+- **Validate, then plan.** Right after the log handler is installed, `main` runs `app.Prepare(cfg)`
+  (`ValidateConfig`, then `tenancy.Resolve`), fatal with the log message `config`, so an invalid config
+  stops before the `config loaded` line and before any exporter exists. The same plan is what
+  `app.BuildFromPlan` assembles, and its hash and row count are logged (`leader elected`) each time the
+  replica becomes leader. The `config loaded` counts and the liveness threshold read `plan.Rows`,
+  never `cfg.Sources`.
   `newSelfProvider` keeps its own `ValidateConfig` call.
 - **Emitter and telemetry come from factories.** `main` builds no emitter and no `source.Deps`. It
-  passes `app.Build` `app.OTLPEmitterFactory(cfg.Queue.MaxBatchBytes, otlp.DefaultRetryPolicy(),
+  passes `app.BuildFromPlan` `app.OTLPEmitterFactory(cfg.Queue.MaxBatchBytes, otlp.DefaultRetryPolicy(),
   logging.NewLimiter(time.Minute))`, which owns the emit-leg observer, the partial-success counter
   and the rate-limited partial-reject warning, and a telemetry factory over `metrics.With`.
   `metrics.SetLeader` stays on the unlabelled `metrics` here; `leader` is never labelled.

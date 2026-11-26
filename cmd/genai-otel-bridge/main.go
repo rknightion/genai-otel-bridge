@@ -146,13 +146,10 @@ func main() {
 	}
 	slog.SetDefault(logger)
 
-	// Validate, then resolve the config into the plan the summary and the liveness threshold read. An
-	// invalid config stops here, before the summary and before any exporter exists. newSelfProvider
-	// keeps its own ValidateConfig call (a second run is harmless).
-	if err := app.ValidateConfig(cfg); err != nil {
-		fatal("config", err)
-	}
-	plan, err := tenancy.Resolve(cfg)
+	// Validate, then resolve the config into the plan the summary, the liveness threshold and assembly
+	// read (app.Prepare). An invalid config stops here, before the summary and before any exporter
+	// exists. newSelfProvider keeps its own ValidateConfig call (a second run is harmless).
+	plan, err := app.Prepare(cfg)
 	if err != nil {
 		fatal("config", err)
 	}
@@ -182,7 +179,7 @@ func main() {
 	// Self-observability provider (distinct identity, H4). Falls back to the telemetry endpoint.
 	// NOTE [CP-M7]: newSelfProvider runs app.ValidateConfig (the cleartext-credential gate) BEFORE it
 	// builds the exporter, because the self instruments hold values at once and a PeriodicReader could
-	// export them with credentials before app.Build validates. Keep any other emit-bearing wiring behind
+	// export them with credentials before app.Prepare validates. Keep any other emit-bearing wiring behind
 	// that gate too.
 	selfEP := cfg.Emit.Telemetry.OTLP
 	if cfg.Emit.Self != nil {
@@ -241,12 +238,13 @@ func main() {
 	// leader blocked in an intended emit-retry/backpressure, or a degraded loop on its slow backoff, is
 	// NOT killed — but a genuinely wedged scheduler (no beat at all) IS. See livenessThreshold.
 	health := selfobs.NewHealth(livenessThreshold(plan))
-	// The emitter, its request observers and the partial-reject warning (rate-limited per plane, #80),
-	// and the source hooks including the upstream-request observer, are built inside app.Build from these
-	// two factories. The telemetry factory's With copies share every instrument with metrics.
+	// Each pipeline's emitter, its request observers and the partial-reject warning (rate-limited per
+	// plane, #80), and its source hooks including the upstream-request observer, are built inside
+	// app.BuildFromPlan from these two factories, one pipeline per plan row. The telemetry factory's With
+	// copies share every instrument with metrics.
 	ef := app.OTLPEmitterFactory(cfg.Queue.MaxBatchBytes, otlp.DefaultRetryPolicy(), logging.NewLimiter(time.Minute))
 	tf := func(tenant, pipeline string) app.PipelineTelemetry { return metrics.With(tenant, pipeline) }
-	a, err := app.Build(ctx, cfg, cp, coord, ef, tf, app.Options{})
+	a, err := app.BuildFromPlan(ctx, cfg, plan, cp, coord, ef, tf, app.Options{})
 	if err != nil {
 		fatal("build", err)
 	}
@@ -292,7 +290,7 @@ func shutdownStep(what string, fn func(context.Context) error) {
 // buildHA constructs the checkpoint store + coordinator from cfg.HA. This is the ONLY place that knows
 // about a specific HA backend: K8s (lease/configmap, via an in-cluster client) or AWS (dynamodb, via the
 // SDK default credential chain → the ECS task role). No DynamoDB API call is made here — construction is
-// lazy; cfg.Validate (inside app.Build) runs before app.Run, so an empty/invalid table is rejected first.
+// lazy; cfg.Validate (inside app.Prepare) runs before app.Run, so an empty/invalid table is rejected first.
 func buildHA(ctx context.Context, cfg *config.Config, ns, identity, cpFile string) (checkpoint.Checkpointer, coordinate.Coordinator) {
 	needK8s := cfg.HA.Coordinator == "lease" || cfg.HA.Checkpoint == "configmap"
 	needDynamo := cfg.HA.Coordinator == "dynamodb" || cfg.HA.Checkpoint == "dynamodb"
@@ -367,7 +365,7 @@ func buildHA(ctx context.Context, cfg *config.Config, ns, identity, cpFile strin
 			time.Duration(d.LeaseDuration), time.Duration(d.RenewDeadline), time.Duration(d.RetryPeriod))
 	default: // "none" (or, pre-validation, any other value) → single-replica Noop
 		// [#45] The checkpoint keys aren't known here (the source graph is built later), so the stored
-		// epoch can't be read. app.Build completes the migration: it reads the max stored epoch across the
+		// epoch can't be read. app.BuildFromPlan completes the migration: it reads the max stored epoch across the
 		// built loops and re-constructs the Noop via NoopWithEpoch, so an HA→none downgrade stays writable;
 		// a fresh single-replica deployment stays at epoch 1. Build warns per key if that Load fails.
 		if cfg.HA.Checkpoint == "configmap" || cfg.HA.Checkpoint == "dynamodb" {
@@ -408,7 +406,7 @@ func runCleanup(ns string, retainCheckpoint bool) {
 // wedged scheduler (no tick-attempt beat) must be. (bucket_settle drives the window_lag staleness
 // ALERT, not this heartbeat — beats fire on tick attempts regardless of settle, so it is absent here.)
 //
-// [#88] Only ENABLED sources/loops contribute — mirroring the config-summary loop and app.Build. A
+// [#88] Only ENABLED sources/loops contribute — mirroring the config-summary loop and app.BuildFromPlan. A
 // disabled/parked slow loop (e.g. a 6h eval loop left in config) must NOT inflate the threshold, or a
 // wedged leader would pass liveness for hours instead of minutes before the orchestrator restarts it.
 // The plan holds a row only for an enabled source, so a disabled source is already absent here.

@@ -19,13 +19,19 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 )
 
-// knownSourceTypes builds the source-type registry exactly as Build does, so config validation matches
-// what the running binary would accept.
-func knownSourceTypes() map[string]struct{} {
+// newRegistry registers every source type: the extension point for a new source. BuildFromPlan builds
+// sources from it and knownSourceTypes validates against it, so the two cannot drift.
+func newRegistry() *source.Registry {
 	reg := source.NewRegistry()
 	portkey.Register(reg)
 	langsmith.Register(reg)
-	return reg.Known()
+	return reg
+}
+
+// knownSourceTypes is the source-type registry's known types, so config validation matches what the
+// running binary would accept.
+func knownSourceTypes() map[string]struct{} {
+	return newRegistry().Known()
 }
 
 // ValidateConfig runs the same semantic validation as Build (cfg.Validate against the registered source
@@ -45,8 +51,8 @@ var validateEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // + secret substitution + semantic Validate against the registered source types) WITHOUT requiring real
 // secrets: any `${ENV}` ref that is unset gets a placeholder so an overlay full of injected refs can be
 // checked in CI. Endpoints/URLs get an https placeholder to satisfy the endpoint gate; everything else
-// gets a non-empty token. After Validate it also runs app.Build with inert dependencies (no-op
-// checkpoint, emitter and coordinator; no network), so every check the source constructors and Build
+// gets a non-empty token. After Validate it resolves the plan and runs app.BuildFromPlan on it with inert
+// dependencies (no-op checkpoint, emitter and coordinator; no network), so every check the source constructors and Build
 // make at startup (unknown loop or graph, bootstrap_lookback, content-floor keys, stream-label budget,
 // series ownership, no enabled loops) fails here too. Only a file is checked, not the inline
 // GENAI_OTEL_BRIDGE_CONFIG form. For a valid config it returns the resolved plan's table and hash
@@ -97,13 +103,14 @@ func ValidateConfigFile(path string) (table, hash string, err error) {
 		return "", "", err
 	}
 	// Constructors only build clients; the first network call is the lazy first Collect, which never runs.
-	if _, err := Build(context.Background(), cfg, inertCheckpointer{}, coordinate.Noop{}, inertEmitterFactory, noopTelemetryFactory, Options{}); err != nil {
+	// The config is validated and resolved above, so assembly starts from that plan.
+	if _, err := BuildFromPlan(context.Background(), cfg, plan, inertCheckpointer{}, coordinate.Noop{}, inertEmitterFactory, noopTelemetryFactory, Options{}); err != nil {
 		return "", "", err
 	}
 	return plan.Table(), plan.Hash(), nil
 }
 
-// inertCheckpointer and inertEmitter let ValidateConfigFile run Build without any store or backend.
+// inertCheckpointer and inertEmitter let ValidateConfigFile run BuildFromPlan without any store or backend.
 type inertCheckpointer struct{}
 
 func (inertCheckpointer) Load(context.Context, model.CheckpointKey) (model.Watermark, error) {
@@ -118,7 +125,7 @@ type inertEmitter struct{}
 
 func (inertEmitter) Emit(context.Context, model.Batch) error { return nil }
 
-// inertEmitterFactory and noopTelemetryFactory are the factories ValidateConfigFile hands Build: no
+// inertEmitterFactory and noopTelemetryFactory are the factories ValidateConfigFile hands BuildFromPlan: no
 // emitter reaches a backend and no self-telemetry is recorded.
 func inertEmitterFactory(EmitterSpec, PipelineTelemetry) emit.Emitter { return inertEmitter{} }
 

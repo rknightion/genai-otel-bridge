@@ -61,8 +61,9 @@ type Guard struct {
 	// identity SanitizeLogs receives. A loop present here uses its own map; a loop absent falls back to
 	// `deny`. Written only at construction (read-only after), like allow/deny — no lock needed.
 	denyByLoop map[string]map[string]bool
-	// [ext-review-8] One *Guard is shared across all loop runners (composition root), each running its
-	// own emit-worker goroutine, so the mutable cardinality state must be locked. allow/deny/denyByLoop are
+	// [ext-review-8] One *Guard is shared across all loop runners of a group (the composition root builds
+	// one per group of rows sharing a stack and an identity; a legacy install is one group), each running
+	// its own emit-worker goroutine, so the mutable cardinality state must be locked. allow/deny/denyByLoop are
 	// written only at construction (read-only after) so they need no lock; seen is read+written here.
 	mu   sync.Mutex
 	seen map[string]*seriesSeen // series → admitted labelset signatures with their last-seen time

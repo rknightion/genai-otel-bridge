@@ -11,7 +11,7 @@ JUST_VERSION="1.59.0"
 # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.+)$
 TOFU_VERSION="1.10.6"
 # renovate: datasource=github-releases depName=terraform-linters/tflint extractVersion=^v(?<version>.+)$
-TFLINT_VERSION="0.59.1"
+TFLINT_VERSION="0.66.0"
 # renovate: datasource=pypi depName=checkov versioning=pep440
 CHECKOV_VERSION="3.4.11"
 

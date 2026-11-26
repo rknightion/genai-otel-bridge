@@ -14,10 +14,11 @@ self-telemetry across replicas, destroying the leader-overlap diagnostics.
 
 Switching `ha.coordinator` to `none` while keeping a durable shared checkpoint store
 (`configmap`/`dynamodb`) that a prior HA deployment advanced to epoch >= 2 permanently fences every
-watermark write. The fenced `Save` is benign (`ErrStaleWrite`, exempt from the degrade counter), so
-the loop never backs off: it re-collects and re-emits the same window at full cadence forever. It is
-alertable (`checkpoint_fenced` fires, `window_lag_seconds` climbs) but does not self-heal on its own;
-manual recovery is deleting the checkpoint objects.
+watermark write. The fenced `Save` returns `ErrStaleWrite`, which the runner classes as fenced: it
+counts `checkpoint_fenced` and degrades the loop (reason `checkpoint fenced`), so the loop re-collects
+on the 10-minute degraded backoff rather than at cadence. It is alertable (`checkpoint_fenced`,
+`loop_degraded`, a climbing `window_lag_seconds`) but does not self-heal on its own; manual recovery
+is deleting the checkpoint objects.
 
 - `NoopWithEpoch(e)` stamps `max(1, e)`, so a baseline at or above the surviving stored epoch lets
   writes succeed. Single-replica has exactly one writer, so a higher epoch carries no cross-writer

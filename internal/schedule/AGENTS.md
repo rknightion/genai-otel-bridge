@@ -17,9 +17,11 @@ implements.
   only on the full-completion path; interior commits carry an empty cursor.
 - Epoch-fenced commit. `commit()` re-checks `ctx.Err()` immediately before `Save()`, so nothing
   advances after leadership loss even if the checkpointer ignores ctx. On `ErrStaleWrite` where the
-  durable time is behind the attempt (a genuine fence, not a benign already-advanced write) it fires
-  `checkpoint_fenced` and resyncs the in-memory frontier to durable, so `Since()` can never run ahead
-  of a rejected write. With self tracing enabled, one `loop.commit` span covers the common
+  write would have made progress (durable time behind the attempt, or a same-time step to a new
+  non-empty cursor under a higher durable epoch: a genuine fence, not a benign already-advanced write)
+  it fires `checkpoint_fenced` and degrades the loop with reason `checkpoint fenced`, so the
+  scheduler backs off instead of re-emitting the same window at cadence. Either way it resyncs the
+  in-memory frontier to durable, so `Since()` can never run ahead of a rejected write. With self tracing enabled, one `loop.commit` span covers the common
   `Checkpointer.Save` path and records the fixed `outcome` set `committed`, `fenced`, `stale`, or
   `error`; the span never changes the live leadership context or commit semantics.
 - Leadership-loss race. A `select` can dequeue a batch in the same iteration `leaderCtx` is
@@ -29,7 +31,7 @@ implements.
 
 - Tick interval is cadence with 10% jitter, to de-align loops and replicas. On a terminal or degraded
   halt the scheduler backs off to 10 minutes, cleared on the next successful save. Five consecutive
-  checkpoint-save failures mark the loop degraded.
+  checkpoint-save failures mark the loop degraded, and so does one epoch-fenced write.
 - Snapshot loops (`LoopSpec.Window == 0`, for example langsmith sessions and portkey groups) gate out
   both catch-up acceleration and the `backfill_unstorable` count. A snapshot loop's watermark is a
   liveness heartbeat at `now`, not a replay frontier. Without the backfill gate, `MaxBackfill == 0`

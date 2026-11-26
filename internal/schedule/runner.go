@@ -363,19 +363,28 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 			}
 			return
 		}
-		// [round3-#3] ErrStaleWrite has two cases: benign already-advanced (durable Time ≥ our Time —
-		// an intervening/concurrent leader is ahead) vs a forward-write FENCED by epoch (durable Time
-		// BEHIND our Time yet rejected → a stale-epoch under-read, e.g. lease GET failed → epoch 0, or a
-		// concurrent higher-epoch leader). The fenced case must NOT be silent: it freezes durable
-		// progress while the loop looks healthy. Surface it loudly + counted, and re-sync the in-memory
-		// frontier to the durable truth either way so Since() never runs ahead of a rejected write.
+		// [round3-#3] ErrStaleWrite has two cases: benign already-advanced (the write makes no progress
+		// over durable — an intervening/concurrent leader is at or ahead of us) vs a write FENCED by epoch
+		// (it would have made progress yet was rejected → a stale-epoch under-read, e.g. lease GET failed
+		// → epoch 0, or a concurrent higher-epoch leader). The fenced case must NOT be silent: it freezes
+		// durable progress while the loop looks healthy. Surface it loudly + counted, and re-sync the
+		// in-memory frontier to the durable truth either way so Since() never runs ahead of a rejected write.
 		if stored, lerr := r.cp.Load(ctx, key); lerr == nil {
 			span.SetAttributes(attribute.String("outcome", "stale"))
-			if stored.Time.Before(w.Time) {
+			if isFencedWrite(stored, w) {
 				span.SetAttributes(attribute.String("outcome", "fenced"))
 				r.m.EmitError(r.name, "checkpoint_fenced")
 				slog.Warn("checkpoint forward-write fenced (stale-epoch or concurrent leader); not advancing",
-					"loop", r.name, "attempted", w.Time, "durable", stored.Time, "epoch", epoch)
+					"loop", r.name, "attempted", w.Time, "durable", stored.Time, "epoch", epoch, "durable_epoch", stored.Epoch)
+				// [#367] A fenced loop is stuck until the epoch situation changes, so back off instead of
+				// re-collecting and re-emitting the same window at full cadence. commit holds r.mu, so set the
+				// state directly (as the checkpoint-save-failures path does). A later successful commit clears
+				// it; Reset on re-election clears it too.
+				if !r.degraded {
+					r.degraded, r.degradeReason = true, "checkpoint fenced"
+					r.m.LoopDegraded(r.name, r.degradeReason, true)
+					slog.Error("loop degraded (loud halt, scheduler will back off)", "loop", r.name, "reason", r.degradeReason)
+				}
 			}
 			r.frontier, r.hasFront = stored, true
 		} else {
@@ -405,6 +414,18 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 	if !r.hasFront || w.Time.After(r.frontier.Time) || (w.Time.Equal(r.frontier.Time) && w.Cursor != "" && w.Cursor != r.frontier.Cursor) {
 		r.frontier, r.hasFront = w, true
 	}
+}
+
+// isFencedWrite reports whether a write rejected with ErrStaleWrite was FENCED (it would have made
+// progress over the durable value) rather than benign already-advanced. [#367] A forward Time is fenced
+// whatever the epochs. A same-Time step to a new non-empty Cursor (a logs-export job step) is fenced
+// when the durable epoch is higher: CheckMonotonic accepts that step at an equal epoch, so its rejection
+// is the epoch fence. An empty cursor at the durable Time (an interior-bucket commit) is not progress.
+func isFencedWrite(stored, w model.Watermark) bool {
+	if stored.Time.Before(w.Time) {
+		return true
+	}
+	return stored.Epoch > w.Epoch && stored.Time.Equal(w.Time) && w.Cursor != "" && w.Cursor != stored.Cursor
 }
 
 // Degrade lets the SCHEDULER mark a loop degraded for a collect-side terminal condition it detects

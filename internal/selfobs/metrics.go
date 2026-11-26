@@ -130,8 +130,9 @@ func (m *Metrics) WindowLag(loop string, lag time.Duration) {
 // LoopDegraded reports the loop's degraded state as a 0/1 gauge with the degrade reason as an
 // attribute. [#120] The caller (schedule.LoopRunner) records 1 with the reason on entering degraded
 // and 0 with the SAME reason on the clearing commit, so the {loop,reason} series returns to 0 rather
-// than sticking at 1. reason is the bounded enterDegraded set (terminal emit reject / checkpoint-save
-// failures) — never unbounded free text.
+// than sticking at 1. reason is the bounded set of fixed strings the runner and scheduler pass
+// (terminal emit reject / checkpoint-save failures / checkpoint fenced / granularity_unexpected) —
+// never unbounded free text.
 func (m *Metrics) LoopDegraded(loop, reason string, degraded bool) {
 	v := 0.0
 	if degraded {

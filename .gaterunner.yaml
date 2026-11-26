@@ -1,4 +1,4 @@
-# Remote gate runner contract (m7kni/gate-runner): see that repo's README.
+# Remote gate runner contract: read by the owner's remote gate runner tool (see its README).
 # Keep the pinned tools the recipes build into .tools across runs in a slot.
 persist: [.tools]
 env:

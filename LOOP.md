@@ -40,7 +40,9 @@ The tracker working model is `~/repos/agent-docs/docs/github-tracker.md` (mainta
 - `ci-success` is the only required check on `main`; Renovate PRs self-automerge once it is green.
 - `model.*`, `source.Source` and `source.Loop` are FROZEN seams: a change needs an `ARCHITECTURE.md`
   update. Do not weaken emit-once-after-settle, deterministic encoding or epoch-fenced checkpoints.
-- `*_review_test.go` files are regression guards for known attack and race scenarios: keep them.
+- Every `*_review_test.go` and `*_content_gate_test.go` file, and every test whose comment carries a review
+  tag (`[ext-review-N]`, `[adversarial-review *]`, `review-*`, `round*-#N`, `R*-N`, `CP-*`, `Cdx-*`, `[#N]`), is
+  a regression guard for a known attack or race scenario: keep them.
 - Third-party notices and SBOMs are release artifacts outside `just check`; do not gate on them.
 - Stack-side Grafana prerequisites are in `deploy/grafana/README.md` (GS1-GS4); the repo cannot set them.
 - A config knob exists in four files that move as one lane's job: `internal/config/config.go`
@@ -48,9 +50,9 @@ The tracker working model is `~/repos/agent-docs/docs/github-tracker.md` (mainta
   `deploy/ecs/terraform/config.example.yaml` and `test/eks/values-eks.yaml`. Config accepted but
   behaviour silently wrong is this codebase's worst failure: a new or changed knob owes a `Validate`
   case and a test asserting the rejection, not only the happy path.
-- Doc-vs-code drift is a defect class: a behaviour change sweeps the package `CLAUDE.md`,
+- Doc-vs-code drift is a defect class: a behaviour change sweeps the package `AGENTS.md`,
   `ARCHITECTURE.md`, `docs/DESIGN.md`, the `docs/*.md` page, the `values.yaml` comment and any alert
-  or dashboard naming the metric. The twelve package `CLAUDE.md` files load recursively only in
+  or dashboard naming the metric. The nested package `AGENTS.md` files load recursively only in
   Claude Code: give a Codex lane the package doc's path explicitly.
 - A diff touching `internal/source/guard.go`, the denylist wiring in `internal/app` or an
   `extra_*_fields` path is a content-egress change and is reviewed as one however small. The

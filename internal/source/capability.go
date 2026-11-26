@@ -5,9 +5,9 @@ package source
 // CapabilityState is the closed set of states a source capability can report.
 type CapabilityState string
 
-// endpoint-absent and plan-unsupported are enumerated but producerless because one 404 cannot
-// distinguish permanent absence, plan gate, or transient failure; steady/intermittent increments
-// remain a query-time property.
+// endpoint-absent, plan-unsupported, no-data and schema-changed are enumerated but producerless: one 404
+// cannot distinguish permanent absence, plan gate, or transient failure, an empty window is a normal quiet
+// result, and no code detects structural drift; steady/intermittent increments remain a query-time property.
 const (
 	CapabilityEndpointAbsent   CapabilityState = "endpoint-absent"
 	CapabilityPlanUnsupported  CapabilityState = "plan-unsupported"

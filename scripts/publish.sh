@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # Publish the container image + Helm chart to an OCI registry.
 #
-# NOT USED BY CI (as of commit 5e59ce5): the release pipeline is publish.yml → rknightion/.github's
+# NOT USED BY CI: the release pipeline is publish.yml → rknightion/.github's
 # shared container-publish.yml reusable (cosign signing + provenance attestation + syft SBOM on the
 # image). This script is a LOCAL/MANUAL-publish fallback only; its behaviour (v-prefixed image tags,
 # --provenance=false --sbom=false) deliberately differs from the CI pipeline. Editing it does NOT change
 # what CI publishes. Tagging is driven entirely by RELEASE_TAG:
 #
-#   RELEASE_TAG=v1.2.3   -> image :v1.2.3 + :latest, chart version 1.2.3
-#   (unset/empty)        -> image :main  + :<shortsha>, chart 0.0.0-main.t<unixts>.<shortsha>
+#   RELEASE_TAG=v1.2.3   -> image :1.2.3 + :latest, chart version 1.2.3, appVersion 1.2.3
+#   (unset/empty)        -> image :main + :<shortsha> + :main-<shortsha>, chart 0.0.0-main.t<unixts>.<shortsha>,
+#                           appVersion main-<shortsha>
+#
+# The chart defaults its image to ghcr.io/rknightion/genai-otel-bridge:<appVersion>, so appVersion is always
+# one of the pushed image tags (unprefixed for releases, like the CI path). The chart's default image
+# host is fixed, so a REGISTRY other than that one needs an explicit image override at install.
 #
 # The main-build chart version embeds a unix timestamp so the versions are time-SORTABLE, which lets
 # ArgoCD track main with a semver-range targetRevision (e.g. '>=0.0.0-0 <0.0.1-0') and reliably resolve
@@ -32,7 +37,10 @@
 #   IMAGE_REPO=genai-otel-bridge                  image repository path under the registry
 #   CHART_REPO=charts                  OCI namespace for the chart
 #   PLATFORMS=linux/amd64,linux/arm64  buildx target platforms
-#   HELM=helm                          helm binary (CI passes .tools/helm)
+#   HELM=helm                          helm binary (just publish passes .tools/helm)
+#   PUBLISH_DRY_RUN=1                  print the image tags, appVersion and chart version, then exit
+#                                      before any login, build or push (needs only REGISTRY, and GIT_SHA
+#                                      for main builds)
 #   SETUP_BUILDX=1                     install qemu + create a buildx builder
 set -euo pipefail
 
@@ -42,9 +50,6 @@ CHART_REPO="${CHART_REPO:-charts}"       # separate path from the image so the c
                                          # and container don't collide in one OCI package
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 HELM="${HELM:-helm}"
-
-: "${REGISTRY_USER:?REGISTRY_USER is required}"
-: "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD is required}"
 
 IMAGE="${REGISTRY}/${IMAGE_REPO}"
 # docker/helm login take a registry HOST (e.g. ghcr.io), not host/namespace (ghcr.io/owner). REGISTRY
@@ -57,9 +62,9 @@ if [ -n "${RELEASE_TAG:-}" ]; then
     v*) ;;
     *) echo "RELEASE_TAG must look like v1.2.3 (got: $RELEASE_TAG)" >&2; exit 1 ;;
   esac
-  app_version="$RELEASE_TAG"           # v1.2.3
   chart_version="${RELEASE_TAG#v}"     # 1.2.3 (helm wants bare semver)
-  image_tags="${RELEASE_TAG} latest"
+  app_version="$chart_version"         # 1.2.3, unprefixed like the CI image tags
+  image_tags="${chart_version} latest"
 else
   short="$(printf '%s' "${GIT_SHA:?GIT_SHA is required for main builds}" | cut -c1-12)"
   ts="$(date +%s)"                       # unix seconds (10-digit, fixed width) — sortable, monotonic
@@ -67,10 +72,18 @@ else
   # t<ts> is ALPHANUMERIC on purpose (see header): lexically dominates legacy 0.0.0-main.<sha> tags and
   # sorts newest-first. <short> is the tie-break/traceability tail.
   chart_version="0.0.0-main.t${ts}.${short}"
-  image_tags="main ${short}"
+  image_tags="main ${short} ${app_version}"
 fi
 
 echo "==> publishing image=${IMAGE} tags=[${image_tags}] app=${app_version} chart=${chart_version}"
+
+if [ "${PUBLISH_DRY_RUN:-}" = "1" ]; then
+  echo "==> dry run: nothing built, logged in to or pushed"
+  exit 0
+fi
+
+: "${REGISTRY_USER:?REGISTRY_USER is required}"
+: "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD is required}"
 
 # ── login (docker + helm OCI share the same registry creds) ───────────────────
 printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin

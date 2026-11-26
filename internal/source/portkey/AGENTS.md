@@ -19,7 +19,9 @@ sample or record.
   regardless of config. A request window over 59m flips Portkey to 10-minute buckets, so the widened
   revision-detection fetch is clamped to the same 55m bound.
 - `Collect`: `start = max(since.Time, now-max_backfill, bootstrap-if-zero)`;
-  `until = min(start+window, now-settle)`. If `until <= start` it returns an empty batch with the
+  `until = min(start+window, now-settle)` floored to the 1m granularity (F27), as is the detection
+  fetch's lower bound; `derive` takes `until` as its upper cutoff, so nothing past the committed
+  watermark is emitted and a catch-up window boundary never double-emits. If `until <= start` it returns an empty batch with the
   watermark unchanged - nothing has settled yet, and that is not a stall (CP-C2).
 - **`startSemantics = true`** (OP5e): Portkey stamps bucket-START times and `derive` converts to
   bucket-END by adding granularity. Samples are forward-only.

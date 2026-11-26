@@ -21,13 +21,25 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     steps:
+      # The docs hub repository is a repository variable, not a literal, so this
+      # public file does not name it. Fail before minting a token if it is unset.
+      - name: Check the docs hub target is configured
+        env:
+          DOCS_HUB_REPOSITORY: ${{ vars.DOCS_HUB_REPOSITORY }}
+        run: |
+          if [ -z "${DOCS_HUB_REPOSITORY}" ]; then
+            echo "::error::repository variable DOCS_HUB_REPOSITORY (owner/repo of the docs hub) is not set"
+            exit 1
+          fi
+
       # Mints a GitHub App installation token carrying contents:write on the docs
       # hub ONLY, replacing DOCS_SYNC_PAT. Nothing durable is stored in this repo.
       # contents:write really is what the dispatch endpoint wants -- actions:write
       # is the intuitive wrong answer.
       #
-      # Docs sync now depends on camden being up, unsealed and on the tailnet. The
-      # hub's daily 06:00 UTC cron rebuild remains the backstop if this fails.
+      # Docs sync now depends on the token broker host being up, unsealed and on
+      # the tailnet. The hub's daily 06:00 UTC cron rebuild remains the backstop
+      # if this fails.
       - name: Mint a scoped docs-sync token
         id: bao
         uses: rknightion/.github/.github/actions/broker-token@b31fba795a67b1a413ec1e11a7cd4ac9c2447f15 # v1.32.7
@@ -43,6 +55,6 @@ jobs:
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4
         with:
           token: ${{ steps.bao.outputs.token }}
-          repository: m7kni/m7kni-net-site
+          repository: ${{ vars.DOCS_HUB_REPOSITORY }}
           event-type: docs-update
           client-payload: '{"repository": "genai-otel-bridge"}'

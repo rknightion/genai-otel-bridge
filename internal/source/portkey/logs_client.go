@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,8 +39,10 @@ const (
 
 // Export lifecycle wire shapes (PoC §1/§2 — measured). Only the fields we use are decoded.
 type createExportResp struct {
-	ID    string `json:"id"`
-	Total int    `json:"total"` // matched count at create, fixed for the (settled) window
+	ID string `json:"id"`
+	// Total is a pointer so an ABSENT total (vendor rename/omission) is distinguishable from a genuine 0
+	// (an empty settled window). Absent is a loud schema-changed error, never an empty window.
+	Total *int `json:"total"` // matched count at create, fixed for the (settled) window
 }
 type exportDetailResp struct {
 	Status string `json:"status"`
@@ -76,7 +79,13 @@ func (l *logsExportLoop) createExport(ctx context.Context, winMin, winMax time.T
 	if err := l.lifecycle(ctx, http.MethodPost, "/logs/exports", body, &out); err != nil {
 		return "", 0, err
 	}
-	return out.ID, out.Total, nil
+	if out.ID == "" || out.Total == nil {
+		if l.onCapability != nil {
+			l.onCapability("logs_export", "logs/exports", source.CapabilitySchemaChanged)
+		}
+		return "", 0, fmt.Errorf("portkey logs_export: create response missing id/total (schema changed?)")
+	}
+	return out.ID, *out.Total, nil
 }
 
 func (l *logsExportLoop) startExport(ctx context.Context, jobID string) error {
@@ -106,6 +115,27 @@ func (l *logsExportLoop) getDownloadURL(ctx context.Context, jobID string) (stri
 // AB01). The caller ignores its error — cancel is a courtesy to stop a runaway job, never load-bearing.
 func (l *logsExportLoop) cancelExport(ctx context.Context, jobID string) error {
 	return l.lifecycle(ctx, http.MethodPost, "/logs/exports/"+url.PathEscape(jobID)+"/cancel", nil, nil)
+}
+
+// statusError is a non-2xx control-plane response. It renders exactly as the plain error did before it was
+// typed; the type lets the step machine tell a job the control plane no longer knows (404/410) from a
+// transient failure.
+type statusError struct {
+	method, path string
+	code         int
+	snippet      string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("portkey logs_export: %s %s status %d%s", e.method, e.path, e.code, errBodySuffix(e.snippet))
+}
+
+// isLostJob reports whether err says the export job id is unknown to the control plane: 404 Not Found or
+// 410 Gone (a corrected workspace_id, a key rotated to another workspace, a purged or expired export).
+// 401, 403, 429 and 5xx are not: they retry.
+func isLostJob(err error) bool {
+	var se *statusError
+	return errors.As(err, &se) && (se.code == http.StatusNotFound || se.code == http.StatusGone)
 }
 
 // lifecycle performs one control-plane call via the SHARED httpx client (rate-limited + egress-guarded),
@@ -140,7 +170,7 @@ func (l *logsExportLoop) lifecycle(ctx context.Context, method, path string, req
 		if source.IsAuthStatus(resp.StatusCode) && l.onAuthError != nil {
 			l.onAuthError(l.Key().Loop, l.sourceInstance)
 		}
-		return fmt.Errorf("portkey logs_export: %s %s status %d%s", method, path, resp.StatusCode, errBodySuffix(httpx.ErrSnippet(resp)))
+		return &statusError{method: method, path: path, code: resp.StatusCode, snippet: httpx.ErrSnippet(resp)}
 	}
 	if out != nil {
 		if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(out); err != nil {

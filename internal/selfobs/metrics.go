@@ -66,7 +66,7 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	// correlating log lines — and the 10m DegradedBackoff meant the triggering error counter ticked ≤1 per
 	// 10m, making an increase[10m] alert flap. A 0/1 gauge answers it in one query and supports a
 	// non-flapping `== 1 for 15m` alert. Bounded cardinality: the reason attr is the fixed enterDegraded set.
-	m.loopDegraded = mg("loop_degraded", "1 while a loop is degraded (reason attribute), 0 after the clearing commit", "1")
+	m.loopDegraded = mg("loop_degraded", "1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends", "1")
 	// Histograms use the provider's base2 exponential view; no fixed upper latency boundary.
 	m.upstreamDur = mh("upstream_request_duration_seconds", "outbound request latency to upstream source APIs (time to response headers)", "s")
 	m.emitDur = mh("emit_request_duration_seconds", "outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs)", "s")
@@ -129,9 +129,10 @@ func (m *Metrics) WindowLag(loop string, lag time.Duration) {
 
 // LoopDegraded reports the loop's degraded state as a 0/1 gauge with the degrade reason as an
 // attribute. [#120] The caller (schedule.LoopRunner) records 1 with the reason on entering degraded
-// and 0 with the SAME reason on the clearing commit, so the {loop,reason} series returns to 0 rather
-// than sticking at 1. reason is the bounded enterDegraded set (terminal emit reject / checkpoint-save
-// failures) — never unbounded free text.
+// and 0 with the SAME reason on the clearing commit or when leadership ends ([#369]), so the
+// {loop,reason} series returns to 0 rather than sticking at 1. reason is the bounded set of fixed strings the runner and scheduler pass
+// (terminal emit reject / checkpoint-save failures / checkpoint fenced / granularity_unexpected) —
+// never unbounded free text.
 func (m *Metrics) LoopDegraded(loop, reason string, degraded bool) {
 	v := 0.0
 	if degraded {

@@ -136,19 +136,13 @@ func (e *Emitter) emitSamples(ctx context.Context, samples []model.Sample) error
 	// reacting to a gateway 413 — bounds request size + memory before transmit.
 	if e.cfg.MaxBytes > 0 && len(gz) > e.cfg.MaxBytes && len(samples) > 1 {
 		mid := len(samples) / 2
-		if err := e.emitSamples(ctx, samples[:mid]); err != nil {
-			return err
-		}
-		return e.emitSamples(ctx, samples[mid:])
+		return splitResult(e.emitSamples(ctx, samples[:mid]), func() error { return e.emitSamples(ctx, samples[mid:]) })
 	}
 	rerr := e.post(ctx, e.url, gz)
 	var re *emit.RejectError
 	if errors.As(rerr, &re) && re.Reason == emit.ReasonPayloadTooLarge && len(samples) > 1 {
 		mid := len(samples) / 2
-		if err := e.emitSamples(ctx, samples[:mid]); err != nil {
-			return err
-		}
-		return e.emitSamples(ctx, samples[mid:])
+		return splitResult(e.emitSamples(ctx, samples[:mid]), func() error { return e.emitSamples(ctx, samples[mid:]) })
 	}
 	return rerr
 }
@@ -171,21 +165,39 @@ func (e *Emitter) emitLogs(ctx context.Context, logs []model.LogRecord) error {
 	// [CP-C11] Proactively split when the encoded payload exceeds MaxBytes.
 	if e.cfg.MaxBytes > 0 && len(gz) > e.cfg.MaxBytes && len(logs) > 1 {
 		mid := len(logs) / 2
-		if err := e.emitLogs(ctx, logs[:mid]); err != nil {
-			return err
-		}
-		return e.emitLogs(ctx, logs[mid:])
+		return splitResult(e.emitLogs(ctx, logs[:mid]), func() error { return e.emitLogs(ctx, logs[mid:]) })
 	}
 	rerr := e.post(ctx, e.logsURL, gz)
 	var re *emit.RejectError
 	if errors.As(rerr, &re) && re.Reason == emit.ReasonPayloadTooLarge && len(logs) > 1 {
 		mid := len(logs) / 2
-		if err := e.emitLogs(ctx, logs[:mid]); err != nil {
-			return err
-		}
-		return e.emitLogs(ctx, logs[mid:])
+		return splitResult(e.emitLogs(ctx, logs[:mid]), func() error { return e.emitLogs(ctx, logs[mid:]) })
 	}
 	return rerr
+}
+
+// splitResult combines the outcome of the first half of a split payload with the second half.
+// An advance-past reject on the first half must not stop the second half being attempted: the
+// gateway rejects per request, so the unsent chunks would otherwise be lost although nothing was
+// wrong with them. If the second half then fails with anything that is not an advance-past reject
+// (retryable or terminal), that error wins so the runner does not advance. Any other first error
+// (retryable, terminal, encoding) returns at once without sending the second half.
+func splitResult(first error, second func() error) error {
+	if first == nil {
+		return second()
+	}
+	if !advancesPast(first) {
+		return first
+	}
+	if err := second(); err != nil && !advancesPast(err) {
+		return err
+	}
+	return first
+}
+
+func advancesPast(err error) bool {
+	var re *emit.RejectError
+	return errors.As(err, &re) && re.AdvancesPast()
 }
 
 // post runs the retry loop and classifies the terminal outcome.

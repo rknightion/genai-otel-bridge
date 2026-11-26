@@ -27,14 +27,15 @@ import (
 // watermark (Watermark.Epoch), and CheckMonotonic rejects any Save whose epoch < the stored epoch.
 // Deleting only the Lease while keeping the checkpoint recreates the exact hazard the DynamoDB
 // coordinator is designed around (dynamodb.go: "auto-deletion of the lock would reset fence ...
-// permanently fencing all writes"): a reinstall's fresh Lease starts at LeaseTransitions=nil ⇒ epoch 0,
-// which is < the retained checkpoint's epoch N≥1, so every commit is fenced and the watermark stalls
+// permanently fencing all writes"): a reinstall's fresh Lease starts at 0 transitions ⇒ epoch 1 (the
+// lease epoch is LeaseTransitions+1, #375), which is < the retained checkpoint's epoch N+1 whenever the
+// prior install saw N≥1 leadership transitions, so every commit is fenced and the watermark stalls
 // (with duplicate log re-emits) until enough post-reinstall leadership transitions accrue past N. [#33]
 //
 // Retaining the Lease alongside the checkpoint keeps the two durable halves of the HA state
 // consistent: the epoch domain continues monotonically across the reinstall (the new leader's
-// acquisition of the retained Lease increments LeaseTransitions to N+1 ≥ N), so the first commit
-// advances instead of being fenced. This is the least-surprising, invariant-STRENGTHENING option
+// acquisition of the retained Lease increments LeaseTransitions to N+1, so its epoch N+2 is above the
+// stored N+1), so the first commit advances instead of being fenced. This is the least-surprising, invariant-STRENGTHENING option
 // (vs. zeroing the stored epoch, which would reset the fence domain and couple cleanup to the
 // backend record format). retainCheckpoint therefore means "retain the durable resume state",
 // mirroring Helm's deliberate non-deletion of PVCs on uninstall.

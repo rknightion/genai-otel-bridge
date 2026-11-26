@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -514,17 +515,29 @@ func redactSecretValues(err error, ph map[string]string) error {
 	if err == nil {
 		return nil
 	}
-	msg := err.Error()
+	var needles []string
 	for tok, v := range ph {
 		fromFile := strings.HasPrefix(tok, fileSecretKeyPrefix)
 		if v == "" || (len(v) <= 3 && !fromFile) {
 			continue
 		}
-		msg = strings.ReplaceAll(msg, v, "[redacted]")
+		needles = append(needles, v)
 		// yaml.v3 type errors print only the first 7 bytes plus "..." of a scalar longer than 10 bytes.
 		if len(v) > 10 {
-			msg = strings.ReplaceAll(msg, v[:7]+"...", "[redacted]")
+			needles = append(needles, v[:7]+"...")
 		}
+	}
+	// Longest first (ties by value) so a short secret that is a substring of a longer one cannot be
+	// replaced first and split the longer one into pieces that no longer match; map order is random.
+	sort.Slice(needles, func(i, j int) bool {
+		if len(needles[i]) != len(needles[j]) {
+			return len(needles[i]) > len(needles[j])
+		}
+		return needles[i] < needles[j]
+	})
+	msg := err.Error()
+	for _, n := range needles {
+		msg = strings.ReplaceAll(msg, n, "[redacted]")
 	}
 	return errors.New(msg)
 }

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,5 +113,24 @@ func TestReviewEnvSecretPreservesYAMLSpecialCharacters(t *testing.T) {
 	}
 	if got := cfg.Emit.Telemetry.OTLP.Token; got != want {
 		t.Fatalf("token corrupted during secret resolution: got %q want %q", got, want)
+	}
+}
+
+// [#381 review] redaction must not depend on map order: a short file secret that is a substring of a
+// longer secret (or of its printed 7-byte prefix) must not be replaced first and split the longer one.
+func TestRedactSecretValuesOverlappingIsOrderIndependent(t *testing.T) {
+	const long = "zq3Wk9LmXv7Rt2Bn8Hc5Dj1Fg4Ps6Ya0Eu3Ti9Ox" // contains "3"; prefix zq3Wk9L
+	ph := map[string]string{
+		"genai-otel-bridgeXsecretX0Xgenai-otel-bridge": long,
+		fileSecretKeyPrefix + "1":                      "3",
+		fileSecretKeyPrefix + "2":                      "zq3",
+	}
+	for i := 0; i < 300; i++ { // Go randomises map order per range, so a bad order is hit with near certainty
+		err := redactSecretValues(errors.New("cannot unmarshal !!str `"+long[:7]+"...` into x, also "+long), ph)
+		for _, l := range []string{"Wk9L", "Wk9", "Rt2Bn8", "Ox"} {
+			if strings.Contains(err.Error(), l) {
+				t.Fatalf("iteration %d leaks %q: %v", i, l, err)
+			}
+		}
 	}
 }

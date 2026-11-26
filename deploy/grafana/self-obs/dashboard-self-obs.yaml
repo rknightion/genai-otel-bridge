@@ -1119,7 +1119,7 @@ spec:
       spec:
         id: 133
         title: Queue depth by loop
-        description: "genai_otel_bridge_queue_depth_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). Sustained non-zero => emit can't keep up with collect (backpressure \u2192 GenaiOtelBridgeQueueBackpressure)."
+        description: genai_otel_bridge_queue_depth_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). 1 while a batch is in flight (collection is single-flight, so never more), else 0. Sustained 1 => the emit is slow or failing (GenaiOtelBridgeQueueBackpressure).
         links: []
         data:
           kind: QueryGroup

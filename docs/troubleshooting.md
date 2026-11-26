@@ -45,11 +45,11 @@ for one or more loops. `genai_otel_bridge_last_success_timestamp_seconds` is not
   `genai_otel_bridge_emit_errors_total` by `kind`. The `retryable_exhausted` reason means the
   retry budget was exhausted.
 - **Source API slow or unavailable:** `genai_otel_bridge_upstream_request_duration_seconds` shows
-  elevated latency or errors. A sustained outage fills the queue and blocks new collection.
+  elevated latency or errors.
 - **Checkpoint save failing:** `genai_otel_bridge_emit_errors_total{kind=~"checkpoint_(load|save|fenced)"}`
   is non-zero. The watermark was emitted but not saved — the loop appears stuck even though data
   is flowing. Check ConfigMap RBAC.
-- **Queue full:** `genai_otel_bridge_queue_depth_ratio > 0` sustained — see
+- **Batch stuck in flight:** `genai_otel_bridge_queue_depth_ratio > 0` sustained — see
   [Queue backpressure](#queue-backpressure).
 
 **For the log-export loops** (`logs_export`, `runs`): these loops legitimately take longer
@@ -63,10 +63,12 @@ than snapshot loops because they process windowed data page by page. The
 **Symptom:** `GenaiOtelBridgeQueueBackpressure` fires. `genai_otel_bridge_queue_depth_ratio`
 is non-zero for more than 15 minutes.
 
-**Cause:** the emit pipeline cannot drain the per-loop queue as fast as collection fills it.
-This is almost always caused by a slow or failing OTLP endpoint.
+**Cause:** one batch has been in flight for the whole period: its emit is slow or failing.
+Collection is single-flight with the emit, so at most one batch is ever queued or in flight per
+loop and the gauge reads 1 while it is emitted and committed. This is almost always caused by a
+slow or failing OTLP endpoint. No backlog is buffered meanwhile: the loop skips its ticks.
 
-On recovery from a sustained outage, the queue clears as the backlog is emitted. The loop
+On recovery from a sustained outage, the loop
 resumes from its last checkpointed watermark — bounded by `max_backfill`. Samples older than
 the Mimir `out_of_order_time_window` are skipped with a counted gap
 (`samples_skipped_total{reason="backfill_unstorable"}`).

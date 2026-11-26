@@ -122,6 +122,7 @@ func New(sc config.SourceConfig, deps source.Deps) (source.Source, error) {
 			return nil, err
 		}
 		lp.onAuthError = deps.OnAuthError // followup §9: 401/403 → own alertable signal
+		lp.onDataIncomplete = deps.OnDataIncomplete
 		loops = append(loops, lp)
 	}
 	if enR {
@@ -188,6 +189,7 @@ func newSource(cfg Config, deps source.Deps) (source.Source, error) {
 		return nil, err
 	}
 	lp.onAuthError = deps.OnAuthError // followup §9: 401/403 → own alertable signal
+	lp.onDataIncomplete = deps.OnDataIncomplete
 	return &sessionsSource{loops: []source.Loop{lp}}, nil
 }
 
@@ -252,6 +254,7 @@ type sessionsLoop struct {
 	pageLimit, maxSessions    int
 	deriveCfg                 deriveConfig
 	onAuthError               func(loop, source string)
+	onDataIncomplete          func(loop string, reason source.IncompleteReason)
 	now                       func() time.Time
 }
 
@@ -286,6 +289,17 @@ func (l *sessionsLoop) Key() model.CheckpointKey {
 // forward-only liveness cursor (Cursor/Epoch carried through).
 func (l *sessionsLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
+	// Emit at most once per sample timestamp: the backend rejects (does not last-write-wins) a changed
+	// value at an existing (series, ts), which the runner would count as lost samples. A same-stamp poll
+	// makes no vendor call and only advances the liveness watermark.
+	// "Already emitted" is read from the COMMITTED watermark (since.Time = the poll time of the last batch
+	// the runner committed), never from in-memory state set before delivery: a batch whose emit failed
+	// leaves the watermark unchanged, so the retry in the same minute still emits.
+	if sameStamp(since, now) {
+		wm := since
+		wm.Time = now
+		return model.Batch{Key: l.Key(), Watermark: wm}, nil
+	}
 	statsStart := now.Add(-l.statsWindow)
 
 	var sessions []tracerSession
@@ -329,16 +343,25 @@ func (l *sessionsLoop) Collect(ctx context.Context, since model.Watermark) (mode
 		}
 	}
 	if capped {
-		// Never silent: a bounded-coverage truncation is logged so a too-small MaxSessions vs a growing
-		// session population is observable (operationally honest).
+		// Never silent: a bounded-coverage truncation is counted (data-incomplete) and logged so a too-small
+		// MaxSessions vs a growing session population is observable (operationally honest).
 		slog.Warn("langsmith sessions truncated at MaxSessions cap",
 			"source", l.sourceInstance, "max_sessions", l.maxSessions)
+		if l.onDataIncomplete != nil {
+			l.onDataIncomplete("sessions", source.IncompleteSessionsTruncated)
+		}
 	}
 
 	samples := derive(sessions, l.deriveCfg, now)
 	wm := since
 	wm.Time = now
 	return model.Batch{Key: l.Key(), Samples: samples, Watermark: wm}, nil
+}
+
+// sameStamp reports whether the committed watermark already sits in now's minute, i.e. a batch stamped at
+// now.Truncate(time.Minute) was committed. A zero watermark (nothing committed) is never the same stamp.
+func sameStamp(since model.Watermark, now time.Time) bool {
+	return !since.Time.IsZero() && since.Time.Truncate(time.Minute).Equal(now.Truncate(time.Minute))
 }
 
 // fetchPage GETs one offset/limit page of /sessions with include_stats. Returns the decoded sessions,

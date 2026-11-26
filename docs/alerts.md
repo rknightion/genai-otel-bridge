@@ -97,7 +97,12 @@ alert firing until the loop recovers. It also catches a parked `logs_export` win
 2. Check `genai_otel_bridge_emit_errors_total` for that loop — failed emits prevent watermark advancement.
 3. Check `genai_otel_bridge_upstream_request_duration_seconds` — slow source API responses increase
    collect time, which can cause the window lag to grow.
-4. Check `genai_otel_bridge_queue_depth_ratio` — a full queue (ratio at or near 1) blocks collection.
+4. Check `genai_otel_bridge_queue_depth_ratio` — 1 means a batch is in flight; held at 1 the emit is
+   slow or failing, and the loop collects nothing new until it finishes.
+5. For `runs` or `logs_export` with no errors but a steadily rising lag, the loop may be at its
+   throughput ceiling: raise `governance.max_catchup_per_tick` or shorten `cadence` (shrinking
+   `window` does not help). See [LangSmith](./langsmith.md#throughput-ceiling) and
+   [Portkey](./portkey.md#throughput-ceiling).
 
 See also: [Troubleshooting — stale watermark](./troubleshooting.md#stale-watermark-and-window-lag).
 
@@ -266,13 +271,15 @@ See also: [Portkey — bucket settle](./portkey.md#bucket-settle-and-watermark).
 
 **Severity:** warning
 
-**Fires when:** `genai_otel_bridge_queue_depth_ratio > 0` is sustained for 15 minutes — the
-emit pipeline cannot drain the queue as fast as collection enqueues batches.
+**Fires when:** `genai_otel_bridge_queue_depth_ratio > 0` is sustained for 15 minutes — one
+batch has been in flight for the whole period, so its emit is slow or failing. Collection is
+single-flight with the emit: at most one batch is ever queued or in flight per loop, so the gauge
+is 1 while that batch is emitted and committed, else 0. `queue.max_batches` buffers nothing.
 
 **What to check:**
 
 1. Check `genai_otel_bridge_emit_errors_total` — repeated emit errors (OTLP 5xx / timeout)
-   fill the queue while workers are busy retrying.
+   hold the batch in flight while the emitter retries.
 2. Check the OTLP endpoint latency — slow responses reduce emit throughput.
 3. Under sustained outage, `window_lag` rises and `GenaiOtelBridgePollerStale` will eventually
    fire. On recovery, the loop resumes from its watermark — bounded by `max_backfill`.

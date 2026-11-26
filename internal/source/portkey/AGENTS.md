@@ -79,12 +79,21 @@ is not a re-parameterised graphs loop.
   `window_span` off the LOWER one, so an equal or larger settle inverts the query window
   (`time_of_generation_min > max`) into a silent-empty or nonsense result.
 - **1DPM comes from minute-truncated timestamps.** Gauges are stamped at `(now-settle).Truncate(1m)`
-  so two polls in the same wall-clock minute share a timestamp and Mimir dedups. The FETCH still uses
-  the precise `now-settle` bound.
+  so two polls in the same wall-clock minute share a timestamp. Mimir does not last-write-wins a changed
+  value at an existing timestamp: it rejects it, and the runner would count the batch as
+  `samples_skipped{reason=duplicate_timestamp}`. So `Collect` reads the committed watermark (`since.Time`, advanced only on commit, so a failed emit is retried) and a poll in an
+  already-emitted minute makes no vendor call, emits nothing and only advances the liveness watermark.
+  A failover or restart is covered too, as the watermark is checkpointed. The FETCH still uses the precise `now-settle` bound.
 - **Per-endpoint independent.** `ai-models` (always on), one `metadata/<key>` per configured
   `settings.metadata_keys`, and the prompt dimension (`emit_prompts`, on by default). A 404 endpoint
   emits nothing for itself, fires `Deps.OnCapability(loop, endpoint, CapabilityTransient404)`, and
   does NOT block the others. Only when EVERY endpoint fails does `Collect` error.
+- **A skipped endpoint or a truncation is counted.** Every failure arm except 404 (transport/decode error,
+  non-200, `is_quota_exceeded`, row parse error) fires `OnDataIncomplete(loop, endpoint_unavailable)` once for
+  that endpoint; `max_groups` and the page cap fire `window_truncated`. The first HTTP 429 of a poll
+  stops the poll (the remaining endpoints and passes are counted, not called), and when every endpoint
+  failed with at least one quota failure (429 or `is_quota_exceeded`) `Collect` returns
+  `source.ErrQuotaExceeded`. `page_size` above 1000 is rejected at construction (1 MiB decode cap).
 - **All-or-nothing across pages.** `current_page` is 0-indexed; discard the whole endpoint's set on
   any page error, non-200, `is_quota_exceeded` or parse failure - it is a snapshot, so re-fetching
   next poll is free. Terminate on an empty or short page; the page cap

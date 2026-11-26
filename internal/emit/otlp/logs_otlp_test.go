@@ -3,11 +3,15 @@
 package otlp
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -150,5 +154,48 @@ func TestLogs413SingleRecordSurfacesRejectError(t *testing.T) {
 	var re *emit.RejectError
 	if !errors.As(err, &re) || re.Reason != emit.ReasonPayloadTooLarge {
 		t.Errorf("single-record 413 must surface as ReasonPayloadTooLarge, got %v", err)
+	}
+}
+
+// TestLogsProactiveMaxBytesSplit [#395 / CP-C11] covers the proactive branch for the LOGS plane: with a
+// tiny MaxBytes the two-record gzipped payload exceeds the cap, so emitLogs must split BEFORE transmit
+// (no 413 needed) into two single-record POSTs to /v1/logs, delivering each record exactly once.
+func TestLogsProactiveMaxBytesSplit(t *testing.T) {
+	var mu sync.Mutex
+	var posts int
+	var acc []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/logs" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("gzip: %v", err)
+			w.WriteHeader(500)
+			return
+		}
+		b, _ := io.ReadAll(zr)
+		mu.Lock()
+		posts++
+		acc = append(acc, b...)
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	b := model.Batch{Logs: []model.LogRecord{
+		{Timestamp: time.Unix(1_700_000_000, 0).UTC(), RecordAttributes: map[string]string{"id": "rec_marker_0001"}},
+		{Timestamp: time.Unix(1_700_000_001, 0).UTC(), RecordAttributes: map[string]string{"id": "rec_marker_0002"}},
+	}}
+	if err := emitterWithMaxBytes(srv.URL, 1).Emit(context.Background(), b); err != nil {
+		t.Fatalf("proactive MaxBytes split should succeed, got %v", err)
+	}
+	if posts != 2 {
+		t.Fatalf("proactive MaxBytes split should POST each record alone (2 requests), got %d", posts)
+	}
+	for _, m := range []string{"rec_marker_0001", "rec_marker_0002"} {
+		if c := bytes.Count(acc, []byte(m)); c != 1 {
+			t.Fatalf("record %q delivered %d times, want exactly 1", m, c)
+		}
 	}
 }

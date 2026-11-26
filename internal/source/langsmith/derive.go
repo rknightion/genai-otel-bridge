@@ -66,9 +66,10 @@ func derive(sessions []tracerSession, cfg deriveConfig, now time.Time) []model.S
 	// [review-M3] Stamp at MINUTE resolution. This is a snapshot loop: it emits a fresh point each poll,
 	// so two polls in the same wall-clock minute (sub-minute cadence, or the ~60s+jitter edge) would emit
 	// two DISTINCT sub-minute timestamps and push >1 point/series/minute past Mimir (CoalesceDPM is
-	// per-batch, can't dedup across polls), violating 1DPM. Truncating makes same-minute re-polls share a
-	// timestamp (LWW/duplicate-ts dedup ⇒ exactly 1DPM); the watermark liveness cursor stays precise
-	// `now` (set in Collect). Mirrors the portkey groups loop. (followup §0 1DPM / §8 review-M3.)
+	// per-batch, can't dedup across polls), violating 1DPM. Truncating gives same-minute polls one shared
+	// timestamp, but the backend REJECTS a changed value at an existing (series, ts) rather than
+	// last-write-wins, so Collect itself emits at most once per stamp (decided from the committed watermark, sameStamp); the
+	// watermark liveness cursor stays precise `now`. Mirrors the portkey groups loop.
 	stamp := now.Truncate(time.Minute)
 	ordered := append([]tracerSession(nil), sessions...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })

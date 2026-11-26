@@ -51,6 +51,19 @@ func defaultUsageSettings() usageDefaults {
 	}
 }
 
+// parseStatsWindow parses settings.stats_window. A zero or negative window is rejected: the loop
+// constructors used to replace it silently with a default, hiding the operator's intent.
+func parseStatsWindow(v string) (time.Duration, error) {
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("stats_window must be > 0")
+	}
+	return d, nil
+}
+
 // validateSessionLabelValue enforces the {"id","name"} enum shared by the sessions AND usage apply
 // functions. The only consumer is `useName == "name"`, so ANY other value (incl. "Name"/"names"/"NAME")
 // silently degrades to "id" — a violation of the "malformed value = hard error, never hide operator
@@ -69,7 +82,7 @@ func applyUsageSettings(cfg *usageConfig, s map[string]string) error {
 		var err error
 		switch k {
 		case "stats_window":
-			cfg.StatsWindow, err = time.ParseDuration(v)
+			cfg.StatsWindow, err = parseStatsWindow(v)
 		case "session_filter":
 			cfg.SessionFilter = v
 		case "session_label_value":
@@ -106,7 +119,7 @@ func applySettings(cfg *Config, s map[string]string) error {
 		var err error
 		switch k {
 		case "stats_window":
-			cfg.StatsWindow, err = time.ParseDuration(v)
+			cfg.StatsWindow, err = parseStatsWindow(v)
 		case "use_approx_stats":
 			cfg.UseApproxStats, err = strconv.ParseBool(v)
 		case "session_filter":
@@ -268,7 +281,7 @@ func ExampleSource() config.SourceConfig {
 func ExampleSettingsComments() map[string]string {
 	return map[string]string{
 		// sessions loop knobs
-		"stats_window":        "sessions + usage: rolling aggregate window [now-stats_window, now] (snapshot; not time-bucketed). For usage, defaults to the cadence so windows tile (sum_over_time ≈ period total).",
+		"stats_window":        "sessions + usage: rolling aggregate window [now-stats_window, now] (snapshot; not time-bucketed); must be > 0. Defaults to 1h for sessions and 10m for usage; set it equal to the loop's `cadence` so successive windows tile (sum_over_time ≈ period total).",
 		"use_approx_stats":    "sessions: use approximate (cheaper) backend stats computation",
 		"session_label_value": "sessions + usage: per-session label value — \"id\" (default, bounded) or \"name\" (human-readable but potentially high-cardinality)",
 		"page_limit":          "sessions + usage: page size for the /sessions list endpoint (offset/limit pagination)",

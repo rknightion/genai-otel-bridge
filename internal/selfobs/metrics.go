@@ -76,9 +76,9 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	for _, plane := range []string{"metrics", "logs"} {
 		m.partialRejected.Add(context.Background(), 0, metric.WithAttributes(attribute.String("plane", plane)))
 	}
-	m.lastSuccess = mg("last_success_timestamp_seconds", "unix time of last successful emit", "s")
+	m.lastSuccess = mg("last_success_timestamp_seconds", "unix time of the last fully handled window", "s")
 	m.windowLag = mg("window_lag_seconds", "now minus the watermark frontier", "s")
-	m.queueDepth = mg("queue_depth", "per-loop queue depth", "1")
+	m.queueDepth = mg("queue_depth", "1 while a batch is queued or being emitted, else 0", "1")
 	// [#120] Degraded-state gauge: 1 while a loop is in the degraded state (with the degrade reason as an
 	// attribute), 0 after the clearing commit. The state machine previously only logged + flipped an
 	// internal bool, so "which loop has been degraded, since when, for what reason" was inferable only by
@@ -121,6 +121,31 @@ func (m *Metrics) SetLeader(leader bool) {
 		v = 1.0
 	}
 	m.leader.Record(context.Background(), v)
+}
+
+// Reasons that a bundled alert under deploy/grafana/self-obs reads with increase(). A counter series
+// born at its first event exports 1 as its first value, so increase() sees no rise and the alert
+// misses that event; SeedLoop creates each series at 0 so the first event is a measurable step.
+// TestSeededReasonsMatchBundledAlertRules derives the set from the rule files, so a rule that reads a
+// reason absent here (or a seeded reason no rule reads) fails the build.
+var (
+	alertedIncompleteReasons = []string{"export_failed", "export_stuck", "window_oversize", "window_truncated"}
+	alertedSkipReasons       = []string{"duplicate_timestamp", "payload_too_large", "too_old"}
+)
+
+// SeedLoop creates, at 0, every {loop, reason} series a bundled alert reads for the named loop. Call
+// it once per configured loop at startup (after app.Build). It adds no series for any other reason,
+// so the series count stays bounded by the alert rules.
+func (m *Metrics) SeedLoop(loop string) {
+	ctx := context.Background()
+	for _, reason := range alertedIncompleteReasons {
+		m.sourceDataIncomplete.Add(ctx, 0, metric.WithAttributes(
+			attribute.String("loop", loop), attribute.String("reason", reason)))
+	}
+	for _, reason := range alertedSkipReasons {
+		m.skipped.Add(ctx, 0, metric.WithAttributes(
+			attribute.String("loop", loop), attribute.String("reason", reason)))
+	}
 }
 
 func loopAttr(loop string) metric.MeasurementOption {

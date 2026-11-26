@@ -116,7 +116,7 @@ func (s *Scheduler) tickLoop(ctx context.Context, sp LoopSpec) {
 
 // tickOutcome is what one tick reports to the tick loop's wait planning.
 type tickOutcome struct {
-	more      bool // a windowed loop is still draining a backlog (catch-up)
+	more      bool // the loop is still draining: a windowed backlog, or a cursor mid-window [#374] (catch-up)
 	collected bool // Collect returned without error (the source answered)
 	quota     bool // Collect returned source.ErrQuotaExceeded
 }
@@ -301,8 +301,16 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	// [Cdx-C13/F44] Backlog detection: a windowed loop whose just-collected `until` (batch.Watermark.Time)
 	// is still more than one window behind `now` has further windows to drain → signal catch-up. A backlog
 	// only exists when max_backfill > window (e.g. raised per GS2); at steady state the lag is ~settle <
-	// window, so this is false. A snapshot loop (Window==0) is always current → never accelerates.
-	return tickOutcome{collected: true, more: sp.Window > 0 && !batch.Watermark.Time.IsZero() && now.Sub(batch.Watermark.Time) > sp.Window}
+	// window, so this is false. A snapshot loop (Window==0, no cursor) is always current → never accelerates.
+	backlog := sp.Window > 0 && !batch.Watermark.Time.IsZero() && now.Sub(batch.Watermark.Time) > sp.Window
+	// [#374] A cursor-driven loop (Window==0: langsmith runs, portkey logs_export) does one step per
+	// Collect, so at cadence its throughput is one page or chunk per cadence. While it is mid-window (the
+	// batch carries a non-empty cursor) AND the step emitted records, more pages are waiting now: signal
+	// catch-up, bounded by max_catchup_per_tick and the source's rate limiter like any backlog. A
+	// cursor-only lifecycle step (no records) and the window's last page (empty cursor) keep the cadence,
+	// and the busy path above still never accelerates a Window==0 loop on a slow emit.
+	draining := batch.Watermark.Cursor != "" && len(batch.Logs) > 0
+	return tickOutcome{collected: true, more: backlog || draining}
 }
 
 // jitter returns d ± frac (uniform), used on every tick to de-align loops/replicas.

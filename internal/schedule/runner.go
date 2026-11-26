@@ -160,13 +160,13 @@ func (r *LoopRunner) ClearDegradedGauge() {
 }
 
 // Enqueue marks the loop busy and hands the batch to the single worker (block-on-full backpressure).
+// It records no queue depth: the worker owns the gauge [#372] (a read here raced the worker's receive).
 func (r *LoopRunner) Enqueue(ctx context.Context, b model.Batch) error {
 	r.mu.Lock()
 	r.busy = true
 	r.mu.Unlock()
 	select {
 	case r.q <- queuedBatch{batch: b, parent: trace.SpanContextFromContext(ctx)}:
-		r.m.QueueDepth(r.name, len(r.q))
 		return nil
 	case <-ctx.Done():
 		r.mu.Lock()
@@ -189,11 +189,16 @@ func (r *LoopRunner) Run(leaderCtx context.Context) {
 			if leaderCtx.Err() != nil {
 				return
 			}
-			r.m.QueueDepth(r.name, len(r.q))
+			// [#372] Collection is single-flight with the emit (CP-C1), so at most one batch is ever queued
+			// or in flight per loop and len(r.q) is always 0 here. queue_depth therefore reports the batch in
+			// flight: 1 for the whole emit and commit, 0 once it is handled. A slow or failing emit holds it at
+			// 1, which is what GenaiOtelBridgeQueueBackpressure alerts on.
+			r.m.QueueDepth(r.name, 1)
 			ctx := trace.ContextWithSpanContext(leaderCtx, b.parent)
 			ctx, span := otel.Tracer(tracerName).Start(ctx, "loop.emit", trace.WithAttributes(attribute.String("loop", r.name)))
 			r.ProcessBatch(ctx, b.batch)
 			span.End()
+			r.m.QueueDepth(r.name, 0)
 		}
 	}
 }
@@ -296,7 +301,14 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 	// not yet started" cursor would otherwise never persist and the machine would loop on window 1
 	// forever. The same-Time/cursor-change relaxation in commit()+CheckMonotonic makes the write stick.
 	if target := b.Watermark.Time; advanced || !target.IsZero() || b.Watermark.Cursor != "" {
-		r.commit(leaderCtx, b.Key, target, b.Watermark.Cursor, epoch)
+		// [#371] last_success means "last fully handled window": a committed full completion stamps it at
+		// the committed Time, so a quiet source (empty windows, still committed per CP-C2) does not read
+		// as a stale poller. Stamped only when this commit landed (not failed, fenced or stale) and only at
+		// a non-zero Time (a cursor-only first-window step has no completed window). Interior partial
+		// commits above deliberately do not stamp.
+		if r.commit(leaderCtx, b.Key, target, b.Watermark.Cursor, epoch) && !target.IsZero() {
+			r.m.LastSuccess(r.name, target)
+		}
 	}
 }
 
@@ -319,14 +331,10 @@ func (r *LoopRunner) processLogs(leaderCtx context.Context, b model.Batch) bool 
 	switch {
 	case err == nil:
 		r.m.EmittedLogs(r.name, len(kept))
-		// [self-obs] Stamp last_success at the committed window-end (the same Time window_lag is measured
-		// against), so the logs loops (logs_export, runs) feed scrape_healthy and the poller-stale/
-		// leader-absent alerts — the metrics path does the equivalent at its per-bucket Time. Guarded on
-		// non-zero Time (mirrors scheduler.go WindowLag): the first cursor-only window has no completed
-		// Time and must not stamp an epoch-0 timestamp that would read as permanently stale.
-		if !b.Watermark.Time.IsZero() {
-			r.m.LastSuccess(r.name, b.Watermark.Time)
-		}
+		// [self-obs] last_success for the logs loops (logs_export, runs) is stamped at the shared commit in
+		// ProcessBatch [#371], at the committed window-end (the same Time window_lag is measured against)
+		// and only at a non-zero Time, so they feed scrape_healthy and the poller-stale/leader-absent
+		// alerts. Stamping here as well would record the same value twice, and before the commit landed.
 		return true
 	case isAdvancePast(err): // known per-record reject → skip-with-gap, advance
 		r.m.SamplesSkipped(r.name, rejectReason(err), len(kept))
@@ -352,7 +360,9 @@ func (r *LoopRunner) processLogs(leaderCtx context.Context, b model.Batch) bool 
 
 // commit persists the watermark once (monotonic + epoch-fenced) and updates the in-memory frontier
 // (the next `since`). [CP-C9] repeated save failures degrade the loop; a success clears it. [CP-C1]
-func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time.Time, cursor string, epoch int64) {
+// It reports whether the Save landed: false for a cancelled context, a failed save, or any stale write
+// (benign or fenced).
+func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time.Time, cursor string, epoch int64) (committed bool) {
 	// [ext-review-2] Re-check leadership immediately before the Save: the watermark must never
 	// advance (durably OR in-memory) once leadership is lost. The OTLP emitter and the prod ConfigMap
 	// checkpointer both honour ctx cancellation, so in the valid lease+configmap config a lost-mid-Emit
@@ -363,7 +373,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 	// is itself harmless — the next leader re-emits it deterministically — so the gate lives at the
 	// advance, not the emit.)
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "loop.commit", trace.WithAttributes(attribute.String("loop", r.name)))
 	defer span.End()
@@ -377,7 +387,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 			if ctx.Err() != nil {
 				// [#368] The save was cut short by leadership loss or shutdown: not a checkpoint failure, so
 				// no checkpoint_save count, no warn and no saveFails step towards the degrade threshold.
-				return
+				return false
 			}
 			r.saveFails++
 			r.m.EmitError(r.name, "checkpoint_save")
@@ -388,7 +398,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 			} else if r.lim.Allow("save:" + r.name) {
 				slog.Warn("checkpoint save failed", "loop", r.name, "fails", r.saveFails)
 			}
-			return
+			return false
 		}
 		// [round3-#3] ErrStaleWrite has two cases: benign already-advanced (the write makes no progress
 		// over durable — an intervening/concurrent leader is at or ahead of us) vs a write FENCED by epoch
@@ -419,7 +429,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 		} else {
 			span.SetAttributes(attribute.String("outcome", "error"))
 		}
-		return
+		return false
 	}
 	span.SetAttributes(attribute.String("outcome", "committed"))
 	r.saveFails = 0
@@ -443,6 +453,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 	if !r.hasFront || w.Time.After(r.frontier.Time) || (w.Time.Equal(r.frontier.Time) && w.Cursor != "" && w.Cursor != r.frontier.Cursor) {
 		r.frontier, r.hasFront = w, true
 	}
+	return true
 }
 
 // isFencedWrite reports whether a write rejected with ErrStaleWrite was FENCED (it would have made

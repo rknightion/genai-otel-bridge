@@ -9,13 +9,16 @@ import (
 )
 
 // SetLoopClockForTest overrides a loop's wall-clock so acceptance tests (in another package) can
-// drive deterministic snapshots. Returns false if lp is not a langsmith sessions loop. TEST-ONLY
+// drive deterministic snapshots. Returns false if lp is not a langsmith sessions or usage loop. TEST-ONLY
 // seam — the production clock is UTC time.Now (set in newSource); nothing in prod calls this.
 func SetLoopClockForTest(lp source.Loop, now func() time.Time) bool {
-	sl, ok := lp.(*sessionsLoop)
-	if !ok {
+	switch l := lp.(type) {
+	case *sessionsLoop:
+		l.now = now
+	case *usageLoop:
+		l.now = now
+	default:
 		return false
 	}
-	sl.now = now
 	return true
 }

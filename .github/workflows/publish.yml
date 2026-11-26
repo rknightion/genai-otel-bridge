@@ -33,14 +33,22 @@ on:
 permissions:
   contents: read
 
-# One publish at a time per commit. A release merge runs this workflow twice for the
-# same commit (its own push trigger and the release-please call), and a release
-# candidate runs it a third way through auto-rc; all of them push to the same image
-# repository and the edge and RC paths both write the :main tags. Serialise, never
-# cancel. Under workflow_run (auto-rc) github.sha is the default-branch head, so the
-# group keys on the commit CI ran on instead.
+# A release merge runs this workflow twice for one commit: its own push trigger (edge)
+# and the release-please call (release). Both push to the same image repository and
+# both write the :main tags, so they take turns, never cancelling. Only push-event
+# runs share a group, keyed on the pushed commit, and a group can hold at most those
+# two: one push of a commit to main means one edge run and at most one release-please
+# run, and a re-run attempt starts only after its earlier attempt has finished.
+# GitHub keeps one pending run per group and cancels an older pending one when a
+# third arrives, so any path that could add a third member must not join: the
+# auto-rc call (workflow_run) and a manual dispatch get a group of their own run.
+# They can still overlap an edge or release publish. That is safe: each run pushes
+# its own digests and a complete, signed index, every build of a commit passes the
+# same Trivy gate, and a tag both write (:main, main-<sha>) ends on one of those
+# complete indexes for the same commit. auto-rc never cuts an RC on a stable release
+# commit, so an RC and a release of one commit do not meet.
 concurrency:
-  group: publish-${{ github.event.workflow_run.head_sha || github.sha }}
+  group: publish-${{ github.event_name == 'push' && format('commit-{0}', github.sha) || format('run-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

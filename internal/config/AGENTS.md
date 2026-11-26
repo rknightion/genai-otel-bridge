@@ -148,7 +148,10 @@ either empty for a legacy install. In this version the shape loads and validates
   rule reports. References elsewhere (`emit.self`, say) work as before. Keys are resolved like values,
   so a top-level key that is itself a reference is refused in either shape (it could otherwise become
   `tenants` or `defaults` after the check), and an alias key is followed to its anchor before it is
-  compared or checked (`TestTenantRefAsKeyRejected`).
+  compared or checked (`TestTenantRefAsKeyRejected`). Before either check, `rejectComplexKeys` refuses any
+  mapping key that is not a scalar (a YAML complex key, flow or block, or an alias to a list or a
+  mapping), anywhere in the config: references inside it would otherwise resolve, and a file be read,
+  unchecked. No section takes such a key. `TestConfigKeyFormsChecked` has one case per key form.
 - **Defaults.** `LoadBytes` gives each target source the rate-limit defaults and each `defaults` loop
   block the `bucket_settle` default, as for a legacy source.
 - **Load rules** (`validateTenantShape`, one `TestTenantLoadRules` case each): `sources` empty;

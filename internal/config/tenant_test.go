@@ -588,3 +588,99 @@ func TestTenantRefAsKeyRejected(t *testing.T) {
 		t.Fatalf("legacy valid.yaml: %v", err)
 	}
 }
+
+// Repair of #554, round 2 (Codex P1): resolveSecretsNode resolves every scalar of the tree, keys included,
+// so a reference inside a complex key (a list or a mapping used as a key) was resolved without being
+// checked. Load now refuses any key that is not a scalar, anywhere in the config, before references
+// resolve, and the tenant reference check covers every scalar key form. One case per key form.
+func TestConfigKeyFormsChecked(t *testing.T) {
+	secretFile := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secretFile, []byte("file-secret-value-never-shown"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const teamBDestination = "          endpoint: https://otlp-b.example.com/otlp\n          instance_id: \"200002\"\n          token_file: otlp-token\n"
+	const complexKey = "a mapping key must be a single value, not a list or a mapping"
+	cases := []struct {
+		name  string
+		edits []tenantEdit
+		extra string
+		env   map[string]string
+		want  string
+	}{
+		// Complex keys, refused anywhere.
+		{name: "list key with a file ref under tenants", edits: []tenantEdit{{"\ntenants:\n", "\ntenants:\n  ? [file:" + secretFile + "]\n  : {}\n"}},
+			want: "config: tenants: " + complexKey},
+		{name: "mapping key with an env ref under defaults", edits: []tenantEdit{{"\ndefaults:\n", "\ndefaults:\n  ? {x: ${TENANT_FORM_REF}}\n  : {}\n"}},
+			env: map[string]string{"TENANT_FORM_REF": "env-secret-value-never-shown"}, want: "config: defaults: " + complexKey},
+		{name: "list key with a missing file ref, never read", edits: []tenantEdit{{"\ntenants:\n", "\ntenants:\n  ? [file:" + filepath.Join(t.TempDir(), "absent") + "]\n  : {}\n"}},
+			want: "config: tenants: " + complexKey},
+		{name: "flow list key under tenants", edits: []tenantEdit{{"  team-b:\n", "  team-b:\n    [file:" + secretFile + "]: {}\n"}},
+			want: "config: tenants.team-b: " + complexKey},
+		{name: "alias to a list as a key under tenants", edits: []tenantEdit{
+			{"graphs: [requests, cost, tokens, latency, errors]", "graphs: &graph_list [requests, cost, tokens, latency, errors]"},
+			{"  team-b:\n", "  *graph_list : {}\n  team-b:\n"},
+		}, want: "config: tenants: " + complexKey},
+		{name: "list key at the top level", extra: "? [file:" + secretFile + "]\n: {}\n", want: "config: (top level): " + complexKey},
+		{name: "mapping key in a legacy section", edits: []tenantEdit{{"  service_namespace: genai-otel-bridge\n", "  service_namespace: genai-otel-bridge\n  ? {k: v}\n  : x\n"}},
+			want: "config: identity: " + complexKey},
+
+		// Scalar keys in other forms, under tenants and defaults.
+		{name: "tagged key with an env ref", edits: []tenantEdit{{"  team-b:\n", "  !!str ${TENANT_FORM_REF}:\n"}},
+			env: map[string]string{"TENANT_FORM_REF": "team-b"}, want: "config: tenants (a key): an ${ENV} or file: reference is not allowed"},
+		{name: "quoted key with a file ref", edits: []tenantEdit{{"      service_namespace: team-b-llm\n", "      \"file:" + secretFile + "\": team-b-llm\n"}},
+			want: "config: tenants.team-b.identity (a key): an ${ENV} or file: reference is not allowed"},
+		{name: "flow mapping key with an env ref", edits: []tenantEdit{{"        scope:\n          name: example-scope-b1\n          id: example-scope-id-b1\n", "        scope: { \"${TENANT_FORM_REF}\": example-scope-b1, id: example-scope-id-b1 }\n"}},
+			env: map[string]string{"TENANT_FORM_REF": "name"}, want: "config: tenants.team-b.targets.prod.scope (a key): an ${ENV} or file: reference is not allowed"},
+		{name: "explicit-key indicator with a file ref under defaults", edits: []tenantEdit{{"    loops:\n      analytics:\n", "    loops:\n      ? file:" + secretFile + "\n      : {enabled: false}\n      analytics:\n"}},
+			want: "config: defaults.portkey.loops (a key): an ${ENV} or file: reference is not allowed"},
+		{name: "merge of a list of aliases carrying a ref", edits: []tenantEdit{
+			{"  self:\n    otlp:\n", "  self:\n    otlp: &self_otlp\n"},
+			{"ha:\n  coordinator", "ha: &ha_block\n  coordinator"},
+			{teamBDestination, "          <<: [*ha_block, *self_otlp]\n"},
+		}, want: "config: tenants.team-b.destinations.main.otlp[1].token: an ${ENV} or file: reference is not allowed"},
+		{name: "merge of a list of aliases carrying a ref under defaults", edits: []tenantEdit{
+			{"  self:\n    otlp:\n", "  self:\n    otlp: &self_otlp\n"},
+			{"      groups:\n        enabled: true\n", "      groups:\n        <<: [*self_otlp]\n        enabled: true\n"},
+		}, want: "config: defaults.portkey.loops.groups[0].token: an ${ENV} or file: reference is not allowed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := tenantFixture(t)
+			for _, e := range tc.edits {
+				body = tenantVariant(t, body, e.old, e.next)
+			}
+			body += tc.extra
+			t.Setenv(tenantFixtureSelfTokenEnv, "self-token-never-shown")
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load accepted the key form")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q\ndoes not contain %q", err, tc.want)
+			}
+			for _, secret := range []string{"self-token-never-shown", "file-secret-value-never-shown", "env-secret-value-never-shown"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("error carries a referenced value: %q", err)
+				}
+			}
+		})
+	}
+
+	// Legacy configs with ordinary keys, including a merge key, still load.
+	setEnv(t)
+	if _, err := Load("testdata/valid.yaml"); err != nil {
+		t.Fatalf("legacy testdata/valid.yaml: %v", err)
+	}
+	merged := strings.Replace(string(mustRead(t, "testdata/valid.yaml")), "queue:\n  max_batches: 256\n", "queue: &q\n  max_batches: 256\n", 1) +
+		"governance:\n  <<: {max_dpm: 1}\n"
+	if _, err := LoadBytes([]byte(merged)); err != nil {
+		t.Fatalf("a legacy config with an anchor and a merge key must load: %v", err)
+	}
+}

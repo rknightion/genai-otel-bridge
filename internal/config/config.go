@@ -483,6 +483,9 @@ func LoadBytes(raw []byte) (*Config, error) {
 	// Multi-tenancy design §2: every value under tenants and defaults is literal. Checked on the parsed
 	// tree before resolveSecretsNode, so a refused file: ref is never read and a refused ${ENV} value never
 	// enters the tree; an unset ${VAR} has already failed in injectEnvPlaceholders above.
+	if err := rejectComplexKeys(&root); err != nil {
+		return nil, err
+	}
 	if err := rejectTenantRefs(&root, placeholders); err != nil {
 		return nil, err
 	}
@@ -612,6 +615,56 @@ func rejectTenantRefs(root *yaml.Node, ph map[string]string) error {
 			walkTenantRefs(k, kv[1], ph, map[*yaml.Node]bool{}, &errs)
 		}
 	}
+	return errors.Join(errs...)
+}
+
+// rejectComplexKeys refuses a mapping key that is not a scalar (a list or a mapping, written as a YAML
+// complex key or reached through an alias), anywhere in the config. resolveSecretsNode resolves every
+// scalar of the tree, keys included, so a reference inside such a key would be resolved, and a file read,
+// before any check could see it; no config section takes a complex key, so refusing them all is safe. The
+// error names the path of the mapping that holds the key, never the key or a value.
+func rejectComplexKeys(root *yaml.Node) error {
+	var errs []error
+	var walk func(path string, n *yaml.Node, seen map[*yaml.Node]bool)
+	walk = func(path string, n *yaml.Node, seen map[*yaml.Node]bool) {
+		if n == nil || seen[n] {
+			return
+		}
+		seen[n] = true
+		switch n.Kind {
+		case yaml.DocumentNode:
+			for _, c := range n.Content {
+				walk(path, c, seen)
+			}
+		case yaml.AliasNode:
+			walk(path, n.Alias, seen)
+		case yaml.SequenceNode:
+			for i, c := range n.Content {
+				walk(fmt.Sprintf("%s[%d]", path, i), c, seen)
+			}
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				k, v := aliasTarget(n.Content[i]), n.Content[i+1]
+				if k.Kind != yaml.ScalarNode {
+					where := path
+					if where == "" {
+						where = "(top level)"
+					}
+					errs = append(errs, fmt.Errorf("config: %s: a mapping key must be a single value, not a list or a mapping", where))
+					continue
+				}
+				child := k.Value
+				if path != "" {
+					child = path + "." + k.Value
+				}
+				if k.Tag == "!!merge" {
+					child = path
+				}
+				walk(child, v, seen)
+			}
+		}
+	}
+	walk("", root, map[*yaml.Node]bool{})
 	return errors.Join(errs...)
 }
 

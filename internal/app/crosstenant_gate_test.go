@@ -321,13 +321,13 @@ func TestCrossTenantSeededFaults(t *testing.T) {
 // two targets send to its one destination, so they share one credential.
 func fixtureGateTenants() ([]gateTenant, map[[2]string]string) {
 	tenants := []gateTenant{
-		{Tenant: "team-a", Target: "prod", Workspace: "example-scope-a1", ScopeID: "example-scope-id-a1", Key: "fixture-key-a1", InstanceID: "200001", Token: "fixture-token-a", Marker: 5551},
-		{Tenant: "team-a", Target: "staging", Workspace: "example-scope-a2", ScopeID: "example-scope-id-a2", Key: "fixture-key-a2", InstanceID: "200001", Token: "fixture-token-a", Marker: 5552},
-		{Tenant: "team-b", Target: "prod", Workspace: "example-scope-b1", ScopeID: "example-scope-id-b1", Key: "fixture-key-b1", InstanceID: "200002", Token: "fixture-token-b", Marker: 5553},
+		{Tenant: "team-a", Target: "prod", Workspace: "example-scope-a1", ScopeID: "example-scope-id-a1", Key: "fxka1", InstanceID: "200001", Token: "fxta", Marker: 5551},
+		{Tenant: "team-a", Target: "staging", Workspace: "example-scope-a2", ScopeID: "example-scope-id-a2", Key: "fxka2", InstanceID: "200001", Token: "fxta", Marker: 5552},
+		{Tenant: "team-b", Target: "prod", Workspace: "example-scope-b1", ScopeID: "example-scope-id-b1", Key: "fxkb1", InstanceID: "200002", Token: "fxtb", Marker: 5553},
 	}
 	files := map[[2]string]string{
-		{"team-a", "otlp-token"}: "fixture-token-a", {"team-a", "prod-key"}: "fixture-key-a1", {"team-a", "staging-key"}: "fixture-key-a2",
-		{"team-b", "otlp-token"}: "fixture-token-b", {"team-b", "source-key"}: "fixture-key-b1",
+		{"team-a", "otlp-token"}: "fxta", {"team-a", "prod-key"}: "fxka1", {"team-a", "staging-key"}: "fxka2",
+		{"team-b", "otlp-token"}: "fxtb", {"team-b", "source-key"}: "fxkb1",
 	}
 	return tenants, files
 }

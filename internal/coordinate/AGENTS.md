@@ -41,10 +41,19 @@ manual recovery is deleting the checkpoint objects.
   grace window. `leaderCtx` is cancelled at once, in-flight collect/emit aborts, queued batches are
   dropped and the commit path refuses any post-cancel `Save`. Nothing new persists after cancel; the
   grace window only bounds how long SIGKILL takes to arrive.
-- `epoch()` reads `Lease.Spec.LeaseTransitions` once at election as a coarse fence. A transient GET
-  error is retried; only sustained failure returns 0, logged rather than guessed, which makes the
-  runner's forward-write fence loud instead of fabricating an epoch. The real in-flight fence is
-  leaderCtx cancellation.
+- `epoch()` reads `Lease.Spec.LeaseTransitions` once at election as a coarse fence and returns the
+  count plus one (`leaseEpoch`; nil counts as 0), so the first leader on a fresh Lease runs at
+  epoch 1 like `Noop` and the DynamoDB coordinator's first fence. A raw count would put that leader
+  at epoch 0, fenced by every watermark a single-replica deployment wrote (#375). The shift is upward
+  only, so stores written by older releases (epoch == count) stay writable, mixed-version rollouts
+  included.
+- A failed GET is retried every `epochReadBackoff` until it succeeds or the leader context is done,
+  with a rate-limited warning; the loops do not start until then (#376, which reversed the earlier
+  "fall back to epoch 0" choice: a leader at a guessed epoch is fenced for its whole term while it
+  blocks every standby). On ctx done it returns 0 and `onElected` runs under the cancelled ctx and
+  exits. Caveat: client-go's renew fast path is an `Update` with no `Get`, so a Lease that can be
+  updated but not read keeps this replica leading with no loops; `GenaiOtelBridgeLeaderAbsent` and
+  the warning are the signal. The real in-flight fence is leaderCtx cancellation.
 - Leadership loss re-campaigns in process. `Run` wraps one election term in a `for` loop and on a
   genuine renewal lapse builds a fresh elector, matching the `dynamodb/` acquire loop. It returns
   only when the root ctx is cancelled or the elector cannot be constructed. The drain barrier joins
@@ -59,6 +68,12 @@ manual recovery is deleting the checkpoint objects.
   would reset `fence` below a surviving checkpoint's epoch after a long outage. Expiry is by the
   `expiresAtMs` comparison alone.
 - `Run` retries acquire every `retry` period without returning, as long as the root ctx is alive.
+- The renew watchdog measures `renew_deadline` from the START of the last successful acquire or
+  renew request (#377), read just before that request's own clock read, so step-down always comes
+  before the `expiresAtMs` (start + lease) that request wrote. Measuring from the response let a
+  renew slower than `lease_duration - renew_deadline` keep leaderCtx alive after a standby had
+  acquired. client-go also starts its RenewDeadline before the request. The watchdog uses the real
+  monotonic clock; `setNow` only feeds `expiresAtMs`.
 - Failover here is clock-sensitive and not equivalent to the Lease path. `acquire` compares the
   candidate's wall clock against an `expiresAtMs` written from the leader's wall clock, so absolute
   inter-node skew (not just drift) shifts failover timing, bounded by roughly

@@ -136,51 +136,69 @@ func (c *Coordinator) campaign(ctx context.Context, onElected func(context.Conte
 	return nil
 }
 
-// epochReadAttempts / epochReadBackoff bound the retry on a TRANSIENT Lease Get error when reading
-// the LeaseTransitions epoch fence. Hardcoded (like the lease timings in main.go) — no config knob.
-// Total worst-case wait is (attempts-1)*backoff (~800ms), comfortably under the renew deadline, so a
-// brief API blip at election no longer forces the runner's forward-write fence (round3-#3). A
-// sustained failure still falls back to epoch 0 → the fence trips LOUDLY (never silent).
+// epochReadBackoff is the pause between attempts to read the Lease for the epoch fence, and
+// epochReadWarnEvery rate-limits the warning while the read keeps failing. Hardcoded, like the lease
+// timings in main.go; no config knob.
 const (
-	epochReadAttempts = 5
-	epochReadBackoff  = 200 * time.Millisecond
+	epochReadBackoff   = 200 * time.Millisecond
+	epochReadWarnEvery = 10 * time.Second
 )
 
-// epoch reads the Lease's LeaseTransitions (incremented on each leadership change) as a COARSE
-// monotonic fence epoch. [AR-C4] A transient GET error is retried (epochReadAttempts/Backoff); only
-// a sustained failure returns 0 — we log + fall back rather than guessing, which makes the runner's
-// forward-write fence LOUD (round3-#3) instead of silently fabricating an epoch. This epoch is read
-// ONCE at election (not re-checked before each Save). The real in-flight fence is leaderCtx
-// cancellation on lease loss (client-go cancels OnStartedLeading's ctx → aborts in-flight
-// Collect/Emit/Save); the durable fence is the monotonic-Time + epoch checkpoint write (DESIGN §9).
-// The value-changed-(series,ts) safety rests on emit-once-after-settle + monotonic Time, NOT on the
-// epoch being a per-write fence — LeaseTransitions is coarser than that.
+// leaseEpoch maps a Lease's LeaseTransitions count to the leader epoch: the count plus one, so the
+// first leader on a fresh Lease (0 transitions) runs at epoch 1. That lines the lease numbering up with
+// the no-op coordinator (epoch 1) and the DynamoDB coordinator (first fence 1): a single-replica
+// deployment's checkpoint, written at epoch 1, stays writable when HA is enabled over it [#375]. It is a
+// monotonic upward shift from the old numbering (epoch == count), so a checkpoint written by an older
+// release, or by an older replica in a mixed-version rollout, is never above the new epoch. A nil count
+// (client-go always writes one, but the API allows it) is treated as 0 transitions.
+func leaseEpoch(transitions *int32) int64 {
+	if transitions == nil {
+		return 1
+	}
+	return int64(*transitions) + 1
+}
+
+// epoch reads the Lease's LeaseTransitions (incremented on each leadership change) once at election
+// and returns it as a COARSE monotonic fence epoch (see leaseEpoch). [AR-C4, #376] A failed Get is retried
+// every epochReadBackoff until it succeeds or ctx (the leader context) is done; the scheduler is not
+// started until then, because a leader that starts at a guessed epoch below the stored one is fenced on
+// every write for its whole term while it keeps renewing the Lease, blocking every standby. On ctx done it
+// returns 0 and the caller's onElected runs under the cancelled context and exits without collecting.
+// client-go cancels the leader context when renewal fails, so the wait is bounded by the leadership
+// term. While it lasts the failure is logged at warning level, rate-limited by epochReadWarnEvery.
+//
+// This epoch is not re-checked before each Save. The real in-flight fence is leaderCtx cancellation on
+// lease loss (client-go cancels OnStartedLeading's ctx, aborting in-flight Collect/Emit/Save); the
+// durable fence is the monotonic-Time + epoch checkpoint write (DESIGN §9). The value-changed-(series,ts)
+// safety rests on emit-once-after-settle + monotonic Time, NOT on the epoch being a per-write fence:
+// LeaseTransitions is coarser than that.
 func (c *Coordinator) epoch(ctx context.Context) int64 {
-	var lastErr error
-	for attempt := 1; attempt <= epochReadAttempts; attempt++ {
+	began := time.Now()
+	var failures int
+	var lastWarn time.Time
+	for {
 		l, err := c.cs.CoordinationV1().Leases(c.ns).Get(ctx, c.name, metav1.GetOptions{})
 		if err == nil {
-			// nil LeaseTransitions is a legitimate epoch 0 (a fresh lease, no transitions yet) — not
-			// an error, so return immediately without retrying.
-			if l.Spec.LeaseTransitions == nil {
-				return 0
+			if failures > 0 {
+				slog.Info("lease: read LeaseTransitions for the epoch fence after failed attempts; starting loops",
+					"failed_attempts", failures, "waited", time.Since(began))
 			}
-			return int64(*l.Spec.LeaseTransitions)
+			return leaseEpoch(l.Spec.LeaseTransitions)
 		}
-		lastErr = err
-		if attempt == epochReadAttempts {
-			break
+		failures++
+		if lastWarn.IsZero() || time.Since(lastWarn) >= epochReadWarnEvery {
+			slog.Warn("lease: cannot read LeaseTransitions for the epoch fence; loops stay stopped until it is read or leadership ends",
+				"failed_attempts", failures, "waited", time.Since(began), "err", err)
+			lastWarn = time.Now()
 		}
 		select {
 		case <-ctx.Done():
-			slog.Warn("lease: epoch read cancelled before LeaseTransitions could be established; forward-write fence will trip", "err", ctx.Err())
+			slog.Warn("lease: leadership ended before LeaseTransitions could be read; loops not started",
+				"failed_attempts", failures, "waited", time.Since(began), "err", err)
 			return 0
 		case <-time.After(epochReadBackoff):
 		}
 	}
-	slog.Warn("lease: could not read LeaseTransitions for epoch fence after retries; forward-write fence will trip (round3-#3)",
-		"attempts", epochReadAttempts, "err", lastErr)
-	return 0
 }
 
 var _ coordinate.Coordinator = (*Coordinator)(nil)

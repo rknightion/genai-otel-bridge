@@ -7,12 +7,14 @@ NS="${E2E_NAMESPACE:-genai-otel-bridge-e2e}"
 IMAGE="${IMAGE:-genai-otel-bridge:dev}"
 E2E_HELPER_IMAGE="${E2E_HELPER_IMAGE:-genai-otel-bridge-e2e-helper:dev}"
 # No fallback tag: the pin lives only in the justfile (k3s_image), where Renovate can move it.
-K3S_IMAGE="${K3S_IMAGE:?K3S_IMAGE is not set: run via 'just e2e' or 'just k3d-up', or export K3S_IMAGE=rancher/k3s:<tag>}"
+# Only up() needs it, so down and verify-cleanup work without it.
+K3S_IMAGE="${K3S_IMAGE:-}"
 BUSYBOX_IMAGE="${BUSYBOX_IMAGE:-busybox:1.36}"
 TOOLS_DIR="${TOOLS_DIR:-$PWD/.tools}"
 export PATH="$TOOLS_DIR:$PATH"
 
 up() {
+  [ -n "$K3S_IMAGE" ] || { echo "K3S_IMAGE is not set: run via 'just e2e' or 'just k3d-up', or export K3S_IMAGE=rancher/k3s:<tag>" >&2; exit 1; }
   # Idempotent: clear any cluster left over from an interrupted/killed prior run
   # (e.g. a superseded CI run) so `cluster create` doesn't fail with "already exists".
   k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true

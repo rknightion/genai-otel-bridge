@@ -81,6 +81,31 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	return m, err
 }
 
+// Reasons that a bundled alert under deploy/grafana/self-obs reads with increase(). A counter series
+// born at its first event exports 1 as its first value, so increase() sees no rise and the alert
+// misses that event; SeedLoop creates each series at 0 so the first event is a measurable step.
+// TestSeededReasonsMatchBundledAlertRules derives the set from the rule files, so a rule that reads a
+// reason absent here (or a seeded reason no rule reads) fails the build.
+var (
+	alertedIncompleteReasons = []string{"export_failed", "export_stuck", "window_oversize", "window_truncated"}
+	alertedSkipReasons       = []string{"duplicate_timestamp", "payload_too_large", "too_old"}
+)
+
+// SeedLoop creates, at 0, every {loop, reason} series a bundled alert reads for the named loop. Call
+// it once per configured loop at startup (after app.Build). It adds no series for any other reason,
+// so the series count stays bounded by the alert rules.
+func (m *Metrics) SeedLoop(loop string) {
+	ctx := context.Background()
+	for _, reason := range alertedIncompleteReasons {
+		m.sourceDataIncomplete.Add(ctx, 0, metric.WithAttributes(
+			attribute.String("loop", loop), attribute.String("reason", reason)))
+	}
+	for _, reason := range alertedSkipReasons {
+		m.skipped.Add(ctx, 0, metric.WithAttributes(
+			attribute.String("loop", loop), attribute.String("reason", reason)))
+	}
+}
+
 func loopAttr(loop string) metric.MeasurementOption {
 	return metric.WithAttributes(attribute.String("loop", loop))
 }

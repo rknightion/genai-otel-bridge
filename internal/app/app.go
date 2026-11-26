@@ -226,6 +226,13 @@ func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, 
 				"epoch", maxStored)
 		}
 	}
+	// Seed the alerted {loop, reason} counters at 0 so the first event after startup is visible to
+	// increase() (#499). Optional capability: schedule.Metrics stays unchanged.
+	if s, ok := m.(interface{ SeedLoop(loop string) }); ok {
+		for _, l := range loops {
+			s.SeedLoop(l.loop.Key().Loop)
+		}
+	}
 	return &App{sched: schedule.NewScheduler(specs, m), coord: coord, specs: specs}, nil
 }
 

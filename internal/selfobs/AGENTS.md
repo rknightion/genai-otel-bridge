@@ -75,6 +75,14 @@ Only a configured sub-floor value is clamped up, and that clamp is logged.
   loop tick), so head-sampling everything is cheap and gives complete causal traces. Tracing itself is
   opt-in and default-off in config.
 
+## Seeded alert series (#499)
+
+`Metrics.SeedLoop(loop)` (called by `app.Build` once per loop, via an optional interface so `schedule.Metrics`
+is unchanged) creates the `{loop, reason}` series that a bundled alert reads with `increase()` at 0 for
+`source_data_incomplete_total` and `samples_skipped_total`. Without it the first event is a series born
+at 1 and the alert misses it. `TestSeededReasonsMatchBundledAlertRules` reads the rule files: a rule
+reading an unseeded reason, or a seeded reason no rule reads, fails. Edit the seed lists when you edit a rule.
+
 ## Logs do not take the OTLP path
 
 App logs go to stdout and are scraped by the k8s-monitoring chart into Loki. Only metrics and traces

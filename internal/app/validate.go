@@ -63,7 +63,9 @@ var validateEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // make at startup (unknown loop or graph, bootstrap_lookback, content-floor keys, stream-label budget,
 // series ownership, no enabled loops) fails here too. Only a file is checked, not the inline
 // GENAI_OTEL_BRIDGE_CONFIG form. For a valid config it returns the resolved plan's table and hash
-// (tenancy.Plan.Table and Hash; the table holds no secret) and a nil error; otherwise only the error.
+// (tenancy.Plan.Table and Hash; the table holds no secret) and a nil error; otherwise only the error,
+// except a valid tenant-shape config, which returns its table and hash with
+// tenancy.ErrTenantShapeNotEnabled before BuildFromPlan runs.
 // The hash of a config with an unset ${ENV} ref covers its placeholder, so it matches a running
 // leader's only when CI has the same environment.
 func ValidateConfigFile(path string) (table, hash string, err error) {
@@ -108,6 +110,11 @@ func ValidateConfigFile(path string) (table, hash string, err error) {
 	plan, err := tenancy.Resolve(cfg)
 	if err != nil {
 		return "", "", err
+	}
+	// A tenant-shape config that passes Validate is refused here, before it would build: this version
+	// does not run the shape. The table and hash come with the refusal.
+	if plan.TenantShape {
+		return plan.Table(), plan.Hash(), tenancy.ErrTenantShapeNotEnabled
 	}
 	// Constructors only build clients; the first network call is the lazy first Collect, which never runs.
 	// The config is validated and resolved above, so assembly starts from that plan.

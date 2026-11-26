@@ -1,7 +1,8 @@
 # internal/config - config model, secret substitution, validation
 
 `config.go` holds the config tree, `Load(path)` and `Validate(known)`. Fixtures in `testdata/`;
-`testdata/valid.yaml` is the canonical good config. Tests set env vars before `Load`.
+`testdata/valid.yaml` is the canonical good config and `testdata/tenants.yaml` the canonical good
+tenant-shape config. Tests set env vars before `Load`.
 
 ## This package generates two committed artifacts. Never hand-edit either.
 
@@ -121,6 +122,54 @@ render tags): `Load` leaves an omitted value at 0, so a time-bucketed source mus
 constructor, as `portkey.New` does. The 90m is sized to the Grafana Cloud Mimir
 `out_of_order_time_window` of 2h with margin for clock skew and catch-up walk. **Unrelated to the 55m
 `maxWindow` granularity clamp**, which is enforced separately.
+
+## The tenant shape (multi-tenancy design §2, unit 6a)
+
+A config with at least one `tenants` entry has the tenant shape; otherwise it is the legacy shape, checked
+exactly as before. An empty `tenants: {}` or `defaults: {}` counts as absent, so a chart can render
+either empty for a legacy install. In this version the shape loads and validates, and then `main` and
+`-validate-config` refuse it with `tenancy.ErrTenantShapeNotEnabled`.
+
+- **Keys.** `Config.Tenants` (`map[string]TenantConfig`) and `Config.Defaults` (`map[string]DefaultsConfig`),
+  with `TenantDestinationConfig`, `TenantOTLPConfig`, `TargetConfig`, `TenantSourceConfig` and
+  `TenantAuthConfig` under them; a target reuses `ScopeConfig`, `IdentityConfig` (a pointer: absent means
+  the tenant's), `RateLimitConfig` and `HTTPConfig`, and a defaults block reuses `LoopConfig`. Every
+  new field is `helm:"omit"`, so the generated chart and ECS files do not change. A tenant destination
+  has no `allow_insecure`, and a target source has no `enabled`, `source_instance`, `loops` or
+  `api_key_use_cases`: the strict decoder refuses them.
+- **The key paths are a published contract (G8).** `TestTenantConfigKeyPathsGolden` pins them by
+  reflection, and `TestTenantKeysVendorNeutral` (G9) fails on a key containing `portkey`, `workspace`
+  or `langsmith`. Renaming a key needs a migration.
+- **No reference under `tenants` or `defaults`.** `rejectTenantRefs` runs in `LoadBytes` after
+  placeholder injection and parsing and before `resolveSecretsNode`: a scalar there (a map key
+  included, aliases and `<<` merges followed) that holds a placeholder token or starts with `file:` is an
+  error naming the key path, never the value, and the file is never read. Under `Load` an unset `${VAR}`
+  fails first, in `injectEnvPlaceholders`; under `app.ValidateConfigFile` it gets a placeholder, so this
+  rule reports. References elsewhere (`emit.self`, say) work as before. Keys are resolved like values,
+  so a top-level key that is itself a reference is refused in either shape (it could otherwise become
+  `tenants` or `defaults` after the check), and an alias key is followed to its anchor before it is
+  compared or checked (`TestTenantRefAsKeyRejected`). Before either check, `rejectComplexKeys` refuses any
+  mapping key that is not a scalar (a YAML complex key, flow or block, or an alias to a list or a
+  mapping), anywhere in the config: references inside it would otherwise resolve, and a file be read,
+  unchecked. No section takes such a key. `TestConfigKeyFormsChecked` has one case per key form.
+- **Defaults.** `LoadBytes` gives each target source the rate-limit defaults and each `defaults` loop
+  block the `bucket_settle` default, as for a legacy source.
+- **Load rules** (`validateTenantShape`, one `TestTenantLoadRules` case each): `sources` empty;
+  `emit.telemetry` wholly empty; `emit.self` present; the top-level `identity` with both fields;
+  `ha` lease plus configmap; `defaults` keys known source types, each enabled loop block passing the
+  legacy loop rules (`validateLoop`, shared with legacy sources, so their messages are unchanged); tenant
+  ids and destination and target names matching `[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?`; a tenant identity
+  with both fields and at least one target; a destination with an https-or-loopback `endpoint`, an
+  `instance_id` and a `token_file`; a target with a `destination`, a source whose type is known and has
+  a `defaults.<type>` block, the legacy `base_url` rule (with its `allow_private` exception), an
+  `auth.header`, a `value_file` and a positive rate limit; a target identity, when present, with both
+  fields; `scope.name` and `scope.id` present and free of control characters, and neither used by two
+  tenants (one tenant may use one scope in two targets). `token_file` and `value_file` are bare names:
+  no `/`, not `.` or `..`.
+- **Not here.** Resolve-phase rules (a target's destination exists, the two stack-sharing rules, the
+  self-telemetry rule) belong to `internal/tenancy`; assemble-phase rules (scope assertion support,
+  duplicate API keys, log-emitting loops) to `internal/app`. No rule names a vendor setting: Portkey
+  refuses `settings.expected_workspace` on a scoped source itself.
 
 ## Other keys
 

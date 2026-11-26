@@ -3,11 +3,14 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 )
 
 const validCfg = `
@@ -135,5 +138,74 @@ func TestValidateConfigFile_PrintsPlan(t *testing.T) {
 	bad := strings.Replace(validCfg, "emit_workers: 1", "emit_workers: 2", 1)
 	if table, hash, err := ValidateConfigFile(writeCfg(t, bad)); err == nil || table != "" || hash != "" {
 		t.Errorf("invalid config: table=%q hash=%q err=%v, want only an error", table, hash, err)
+	}
+}
+
+// AC5 (#530): the config check validates a tenant-shape config, then refuses it as not enabled in this
+// version, with the plan's table and hash (no rows yet). main's half is TestTenantShapeRefused in
+// cmd/genai-otel-bridge.
+func TestTenantShapeRefused(t *testing.T) {
+	t.Setenv("TENANT_FIXTURE_SELF_TOKEN", "") // ValidateConfigFile placeholders it; t.Setenv restores it
+	const fixture = "../config/testdata/tenants.yaml"
+	table, hash, err := ValidateConfigFile(fixture)
+	if !errors.Is(err, tenancy.ErrTenantShapeNotEnabled) {
+		t.Fatalf("ValidateConfigFile(%s) = %v, want ErrTenantShapeNotEnabled", fixture, err)
+	}
+	if !strings.HasPrefix(table, "tenant") || !regexp.MustCompile("^[0-9a-f]{64}$").MatchString(hash) {
+		t.Errorf("refusal carries table %q and hash %q, want the plan's", table, hash)
+	}
+
+	// A tenant-shape config that breaks a load rule reports that rule, not the refusal.
+	raw, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(string(raw), "  coordinator: lease\n", "  coordinator: none\n", 1)
+	if bad == string(raw) {
+		t.Fatal("test case did not alter the fixture")
+	}
+	_, _, err = ValidateConfigFile(writeCfg(t, bad))
+	if err == nil || errors.Is(err, tenancy.ErrTenantShapeNotEnabled) || !strings.Contains(err.Error(), "ha.coordinator must be lease") {
+		t.Fatalf("an invalid tenant config: got %v, want its load-rule error", err)
+	}
+}
+
+// AC2 (#530), the ValidateConfigFile half: the config check gives an unset variable a placeholder, so the
+// tenant reference rule, not the unset-variable error, reports an ${ENV} reference under tenants or
+// defaults; a file: reference is refused by key path without the file being read.
+func TestTenantRefsRejected(t *testing.T) {
+	raw, err := os.ReadFile("../config/testdata/tenants.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretFile := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secretFile, []byte("file-secret-value-never-shown"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, old, next, envVar, wantPath string
+	}{
+		{"env ref under tenants", "value_file: source-key }", "value_file: ${TENANT_VCF_KEY} }", "TENANT_VCF_KEY", "tenants.team-b.targets.prod.source.auth.value_file"},
+		{"env ref under defaults", "        metric_prefix: portkey_api\n", "        metric_prefix: ${TENANT_VCF_PREFIX}\n", "TENANT_VCF_PREFIX", "defaults.portkey.loops.analytics.metric_prefix"},
+		{"file ref under tenants", "          id: example-scope-id-b1\n", "          id: file:" + secretFile + "\n", "", "tenants.team-b.targets.prod.scope.id"},
+		{"file ref under defaults", "        metric_prefix: portkey_api\n", "        metric_prefix: file:" + secretFile + "\n", "", "defaults.portkey.loops.analytics.metric_prefix"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if strings.Count(string(raw), tc.old) != 1 {
+				t.Fatalf("anchor %q is not unique in the fixture", tc.old)
+			}
+			t.Setenv("TENANT_FIXTURE_SELF_TOKEN", "")
+			if tc.envVar != "" {
+				t.Setenv(tc.envVar, "") // unset as far as the check is concerned; restored after the test
+			}
+			_, _, err := ValidateConfigFile(writeCfg(t, strings.Replace(string(raw), tc.old, tc.next, 1)))
+			if err == nil || !strings.Contains(err.Error(), tc.wantPath+": an ${ENV} or file: reference is not allowed under tenants or defaults") {
+				t.Fatalf("got %v, want the reference at %s refused", err, tc.wantPath)
+			}
+			if strings.Contains(err.Error(), "file-secret-value-never-shown") {
+				t.Fatalf("error carries the file's value: %v", err)
+			}
+		})
 	}
 }

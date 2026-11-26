@@ -153,6 +153,10 @@ func main() {
 	if err != nil {
 		fatal("config", err)
 	}
+	// A tenant-shape config validates but does not run in this version (multi-tenancy unit 6a).
+	if err := refuseTenantShape(plan); err != nil {
+		fatal("config", err)
+	}
 
 	// Config-loaded summary: a one-line "what am I running" signal at startup (Info, so it shows at the
 	// default level). Endpoint HOST only — never the token/instance_id (separate credential fields, not in
@@ -432,6 +436,15 @@ func livenessThreshold(plan tenancy.Plan) time.Duration {
 }
 
 func fatal(msg string, err error) { slog.Error(msg, "err", err); os.Exit(1) }
+
+// refuseTenantShape returns tenancy.ErrTenantShapeNotEnabled for a tenant-shape plan: this version parses
+// and validates the tenant shape but does not run it. A legacy plan gives nil.
+func refuseTenantShape(plan tenancy.Plan) error {
+	if plan.TenantShape {
+		return tenancy.ErrTenantShapeNotEnabled
+	}
+	return nil
+}
 
 // runValidateConfig is the -validate-config mode: on success it prints the plan table, then
 // "validate-config: OK (<path>) plan <hash>", and returns exit code 0; on failure it prints

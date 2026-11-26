@@ -23,8 +23,8 @@ backend. Keep that ordering when adding to `main`.
   needed. Does not cover the inline `GENAI_OTEL_BRIDGE_CONFIG` form. On success `runValidateConfig`
   prints the plan table (`tenancy.Plan.Table`, no secrets) and then
   `validate-config: OK (<path>) plan <hash>` (the SHA-256 of the table) and exits 0; on failure it
-  prints `validate-config: FAIL: <err>` to stderr and exits 1. For pre-deploy or external-overlay
-  validation.
+  prints `validate-config: FAIL: <err>` to stderr and exits 1. A valid tenant-shape config fails with
+  `the tenant shape is not enabled in this version`. For pre-deploy or external-overlay validation.
 - `-cleanup` (with `-cleanup-retain-checkpoint`) - the chart's `post-delete` uninstall hook. Deletes
   the app-created Lease and the checkpoint ConfigMap via `internal/cleanup.Run`; with the retain flag
   it deletes neither, because the Lease carries the epoch fence the retained checkpoint was written
@@ -61,7 +61,9 @@ access to its own lease or checkpoint. Fixed names; the chart is single-instance
   `app.BuildFromPlan` assembles, and its hash and row count are logged (`leader elected`) each time the
   replica becomes leader. The `config loaded` counts and the liveness threshold read `plan.Rows`,
   never `cfg.Sources`.
-  `newSelfProvider` keeps its own `ValidateConfig` call.
+  `newSelfProvider` keeps its own `ValidateConfig` call. Right after `Prepare`, `refuseTenantShape(plan)`
+  stops a tenant-shape config with `tenancy.ErrTenantShapeNotEnabled` (fatal, message `config`): this
+  version validates the shape but does not run it.
 - **Emitter and telemetry come from factories.** `main` builds no emitter and no `source.Deps`. It
   passes `app.BuildFromPlan` `app.OTLPEmitterFactory(cfg.Queue.MaxBatchBytes, otlp.DefaultRetryPolicy(),
   logging.NewLimiter(time.Minute))`, which owns the emit-leg observer, the partial-success counter

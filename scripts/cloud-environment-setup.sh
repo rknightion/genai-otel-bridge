@@ -9,7 +9,7 @@ set -euo pipefail
 # renovate: datasource=github-releases depName=casey/just
 JUST_VERSION="1.59.0"
 # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.+)$
-TOFU_VERSION="1.10.6"
+TOFU_VERSION="1.13.10"
 # renovate: datasource=github-releases depName=terraform-linters/tflint extractVersion=^v(?<version>.+)$
 TFLINT_VERSION="0.66.0"
 # renovate: datasource=pypi depName=checkov versioning=pep440

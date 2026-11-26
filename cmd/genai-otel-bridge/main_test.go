@@ -8,6 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +21,7 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 	"github.com/rknightion/genai-otel-bridge/internal/selfobs"
+	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 )
 
 // TestGracefulShutdownOrderAndBounding pins the [#129] fixes: signal reset runs FIRST, the self-metrics
@@ -175,9 +179,94 @@ func TestLivenessThreshold(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := livenessThreshold(tc.cfg); got != tc.want {
+			// [#522] The threshold reads the resolved plan, so each config case goes through Resolve.
+			plan, err := tenancy.Resolve(tc.cfg)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if got := livenessThreshold(plan); got != tc.want {
 				t.Errorf("livenessThreshold = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// validateCfgLiteral is a complete legacy config with literal values only, so the config check sets
+// no placeholder environment variable in this test binary.
+const validateCfgLiteral = `
+emit:
+  telemetry:
+    otlp:
+      endpoint: https://otlp.example/otlp
+      instance_id: "100"
+      token: sentinel-token-not-printed
+identity:
+  service_namespace: genai-otel-bridge
+  deployment_environment: test
+ha:
+  coordinator: lease
+  checkpoint: configmap
+queue:
+  max_batches: 256
+  max_batch_bytes: 1048576
+  emit_workers: 1
+sources:
+  - type: portkey
+    enabled: true
+    base_url: https://api.portkey.ai/v1
+    source_instance: portkey-validate-test
+    auth: { header: x-portkey-api-key, value: sentinel-key-not-printed }
+    rate_limit: { rps: 1, burst: 3 }
+    loops:
+      analytics:
+        enabled: true
+        cadence: 60s
+        window: 50m
+        bucket_settle: 10m
+        bootstrap_lookback: 50m
+        max_backfill: 90m
+        metric_prefix: portkey_api
+        graphs: [requests, cost, tokens, latency, errors]
+`
+
+// [#522] -validate-config prints the plan table, then "validate-config: OK (<path>) plan <hash>",
+// and exits 0; a bad config prints FAIL to stderr, nothing to stdout, and exits 1.
+func TestRunValidateConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.yaml")
+	if err := os.WriteFile(path, []byte(validateCfgLiteral), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	if code := runValidateConfig(path, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("stdout has %d lines, want table header, one row and the OK line:\n%s", len(lines), stdout.String())
+	}
+	if !strings.HasPrefix(lines[0], "tenant") || !strings.Contains(lines[1], "portkey-validate-test") {
+		t.Errorf("stdout does not start with the plan table:\n%s", stdout.String())
+	}
+	ok := regexp.MustCompile("^validate-config: OK \\(" + regexp.QuoteMeta(path) + "\\) plan [0-9a-f]{64}$")
+	if !ok.MatchString(lines[2]) {
+		t.Errorf("last line = %q, want validate-config: OK (<path>) plan <hash>", lines[2])
+	}
+	for _, s := range []string{"sentinel-token-not-printed", "sentinel-key-not-printed"} {
+		if strings.Contains(stdout.String(), s) {
+			t.Errorf("stdout prints the secret %q", s)
+		}
+	}
+
+	bad := filepath.Join(t.TempDir(), "bad.yaml")
+	if err := os.WriteFile(bad, []byte(strings.Replace(validateCfgLiteral, "emit_workers: 1", "emit_workers: 2", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runValidateConfig(bad, &stdout, &stderr); code != 1 {
+		t.Fatalf("bad config: exit %d, want 1", code)
+	}
+	if stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), "validate-config: FAIL: ") {
+		t.Errorf("bad config: stdout %q stderr %q", stdout.String(), stderr.String())
 	}
 }

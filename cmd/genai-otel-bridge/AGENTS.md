@@ -20,7 +20,11 @@ backend. Keep that ordering when adding to `main`.
   then runs `app.Build` with inert dependencies (construction checks: loop names, graphs, content
   floor, label budget, series ownership; no network), so it fails wherever startup would. It
   placeholders unset `${ENV}` refs (endpoints get an https placeholder) so no secrets are
-  needed. Does not cover the inline `GENAI_OTEL_BRIDGE_CONFIG` form. Prints `validate-config: OK/FAIL`. For pre-deploy or external-overlay validation.
+  needed. Does not cover the inline `GENAI_OTEL_BRIDGE_CONFIG` form. On success `runValidateConfig`
+  prints the plan table (`tenancy.Plan.Table`, no secrets) and then
+  `validate-config: OK (<path>) plan <hash>` (the SHA-256 of the table) and exits 0; on failure it
+  prints `validate-config: FAIL: <err>` to stderr and exits 1. For pre-deploy or external-overlay
+  validation.
 - `-cleanup` (with `-cleanup-retain-checkpoint`) - the chart's `post-delete` uninstall hook. Deletes
   the app-created Lease and the checkpoint ConfigMap via `internal/cleanup.Run`; with the retain flag
   it deletes neither, because the Lease carries the epoch fence the retained checkpoint was written
@@ -51,9 +55,14 @@ access to its own lease or checkpoint. Fixed names; the chart is single-instance
   take over for the gap. `app.Run` therefore returns only on root-ctx cancellation (SIGTERM or
   rollout, clean exit 0) or a genuine construction error, which is fatal plus `os.Exit(1)`.
 - `selfobs.SetMemoryLimit(0.9, *memLimit)` runs **before** config load. No-op when the limit is <= 0.
-- **Self-observability** falls back to the telemetry endpoint when `cfg.Emit.Self` is nil; identity and self-profiling are in `internal/selfobs/AGENTS.md`.
+- **Validate, then plan.** Right after the log handler is installed, `main` runs
+  `app.ValidateConfig(cfg)` and then `tenancy.Resolve(cfg)`, each fatal with the log message `config`,
+  so an invalid config stops before the `config loaded` line and before any exporter exists. The
+  `config loaded` counts and the liveness threshold read `plan.Rows`, never `cfg.Sources`.
+  `newSelfProvider` keeps its own `ValidateConfig` call.
+- **Self-observability** falls back to the telemetry endpoint when `cfg.Emit.Self` is nil; identity and self-profiling are in `internal/selfobs/AGENTS.md`. The self `service.namespace` is `identity.service_namespace` plus `config.SelfNamespaceSuffix` (`-meta`), never a literal.
 - **Liveness threshold** is derived, not a literal:
-  `max(schedule.DegradedBackoff, slowest enabled cadence) + emitRetryBudget(2m) + livenessMargin(4m)`.
+  `max(schedule.DegradedBackoff, slowest enabled loop cadence over the plan's rows) + emitRetryBudget(2m) + livenessMargin(4m)`.
   A leader in retry or backpressure survives; a wedged scheduler does not. `bucket_settle` drives the
   `window_lag` alert, not this beat.
 - **Replica double-emit guard.** The chart refuses to render `ha.coordinator=none` with

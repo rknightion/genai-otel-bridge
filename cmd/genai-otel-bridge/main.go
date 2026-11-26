@@ -6,6 +6,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -39,6 +40,7 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 	"github.com/rknightion/genai-otel-bridge/internal/selfobs"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 	"github.com/rknightion/genai-otel-bridge/internal/version"
 )
 
@@ -76,12 +78,7 @@ func main() {
 	// Config-validation path: load + schema/semantic-check the -config file and exit. No wiring, no
 	// secrets required (unset ${ENV} refs get placeholders). For pre-deploy / CI overlay validation.
 	if *validateConfigMode {
-		if err := app.ValidateConfigFile(*cfgPath); err != nil {
-			fmt.Fprintf(os.Stderr, "validate-config: FAIL: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("validate-config: OK (%s)\n", *cfgPath)
-		return
+		os.Exit(runValidateConfig(*cfgPath, os.Stdout, os.Stderr))
 	}
 
 	// Uninstall cleanup path (chart post-delete hook). Self-contained: build a client and delete the
@@ -151,6 +148,17 @@ func main() {
 	}
 	slog.SetDefault(logger)
 
+	// Validate, then resolve the config into the plan the summary and the liveness threshold read. An
+	// invalid config stops here, before the summary and before any exporter exists. newSelfProvider
+	// keeps its own ValidateConfig call (a second run is harmless).
+	if err := app.ValidateConfig(cfg); err != nil {
+		fatal("config", err)
+	}
+	plan, err := tenancy.Resolve(cfg)
+	if err != nil {
+		fatal("config", err)
+	}
+
 	// Config-loaded summary: a one-line "what am I running" signal at startup (Info, so it shows at the
 	// default level). Endpoint HOST only — never the token/instance_id (separate credential fields, not in
 	// the URL). Gives operators a positive confirmation the process came up with the expected config.
@@ -158,13 +166,9 @@ func main() {
 	if u, perr := url.Parse(cfg.Emit.Telemetry.OTLP.Endpoint); perr == nil && u.Host != "" {
 		telemetryHost = u.Host
 	}
-	enabledSources, enabledLoops := 0, 0
-	for _, sc := range cfg.Sources {
-		if !sc.Enabled {
-			continue
-		}
-		enabledSources++
-		for _, lp := range sc.Loops {
+	enabledLoops := 0
+	for _, row := range plan.Rows {
+		for _, lp := range row.Source.Loops {
 			if lp.Enabled {
 				enabledLoops++
 			}
@@ -172,7 +176,7 @@ func main() {
 	}
 	slog.Info("config loaded",
 		"version", version.String(), // [#91] which build is this pod running — observable in logs, not just the image tag
-		"sources_enabled", enabledSources, "loops_enabled", enabledLoops,
+		"sources_enabled", len(plan.Rows), "loops_enabled", enabledLoops,
 		"telemetry_endpoint", telemetryHost, "self_endpoint", cfg.Emit.Self != nil,
 		"profiling", cfg.Selfobs.Profiling.Enabled, "tracing", cfg.Selfobs.Tracing.Enabled,
 		"log_level", cfg.Log.Level)
@@ -205,7 +209,7 @@ func main() {
 		PushEndpoint:          cfg.Selfobs.Profiling.Push.Endpoint,
 		PushInstanceID:        cfg.Selfobs.Profiling.Push.InstanceID,
 		PushToken:             cfg.Selfobs.Profiling.Push.Token,
-		ServiceNamespace:      cfg.Identity.ServiceNamespace + "-meta", // [H4] distinct self identity
+		ServiceNamespace:      cfg.Identity.ServiceNamespace + config.SelfNamespaceSuffix, // [H4] distinct self identity
 		DeploymentEnvironment: cfg.Identity.DeploymentEnvironment,
 		Instance:              *identity, // POD_NAME — per-replica
 	})
@@ -222,7 +226,7 @@ func main() {
 	if cfg.Selfobs.Tracing.Enabled {
 		tp, shutdown, err := selfobs.NewTracerProvider(ctx, selfobs.TracingConfig{
 			Endpoint: selfEP.Endpoint, InstanceID: selfEP.InstanceID, Token: selfEP.Token,
-			ServiceNamespace: cfg.Identity.ServiceNamespace + "-meta", Environment: cfg.Identity.DeploymentEnvironment,
+			ServiceNamespace: cfg.Identity.ServiceNamespace + config.SelfNamespaceSuffix, Environment: cfg.Identity.DeploymentEnvironment,
 			Instance: *identity,        // POD_NAME — per-replica
 			Version:  version.String(), // [#91] service.version on the self trace resource
 		})
@@ -261,7 +265,7 @@ func main() {
 	// [CP-C5] /healthz liveness threshold = the worst LEGITIMATE gap between two tick-ATTEMPT beats, so a
 	// leader blocked in an intended emit-retry/backpressure, or a degraded loop on its slow backoff, is
 	// NOT killed — but a genuinely wedged scheduler (no beat at all) IS. See livenessThreshold.
-	health := selfobs.NewHealth(livenessThreshold(cfg))
+	health := selfobs.NewHealth(livenessThreshold(plan))
 	// Wire the upstream-request self-obs histogram into every source's HTTP client (decoupled: httpx
 	// emits a RequestInfo, selfobs records it; neither imports the other).
 	deps := source.Deps{UpstreamObserver: func(i httpx.RequestInfo) {
@@ -432,7 +436,8 @@ func runCleanup(ns string, retainCheckpoint bool) {
 // [#88] Only ENABLED sources/loops contribute — mirroring the config-summary loop and app.Build. A
 // disabled/parked slow loop (e.g. a 6h eval loop left in config) must NOT inflate the threshold, or a
 // wedged leader would pass liveness for hours instead of minutes before the orchestrator restarts it.
-func livenessThreshold(cfg *config.Config) time.Duration {
+// The plan holds a row only for an enabled source, so a disabled source is already absent here.
+func livenessThreshold(plan tenancy.Plan) time.Duration {
 	const (
 		// Slack for a tick that is mid-emit. The default emit retry policy allows up to MaxElapsed (5m), but
 		// beats come from tick attempts, not emits, so this need not cover the whole retry budget.
@@ -440,11 +445,8 @@ func livenessThreshold(cfg *config.Config) time.Duration {
 		livenessMargin  = 4 * time.Minute // headroom for scheduling jitter / clock skew
 	)
 	base := schedule.DegradedBackoff
-	for _, sc := range cfg.Sources {
-		if !sc.Enabled {
-			continue
-		}
-		for _, lp := range sc.Loops {
+	for _, row := range plan.Rows {
+		for _, lp := range row.Source.Loops {
 			if !lp.Enabled {
 				continue
 			}
@@ -457,6 +459,20 @@ func livenessThreshold(cfg *config.Config) time.Duration {
 }
 
 func fatal(msg string, err error) { slog.Error(msg, "err", err); os.Exit(1) }
+
+// runValidateConfig is the -validate-config mode: on success it prints the plan table, then
+// "validate-config: OK (<path>) plan <hash>", and returns exit code 0; on failure it prints
+// "validate-config: FAIL: <err>" to stderr and returns 1.
+func runValidateConfig(path string, stdout, stderr io.Writer) int {
+	table, hash, err := app.ValidateConfigFile(path)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "validate-config: FAIL: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprint(stdout, table)
+	_, _ = fmt.Fprintf(stdout, "validate-config: OK (%s) plan %s\n", path, hash)
+	return 0
+}
 
 // newSelfProvider builds the self-metrics provider from cfg. Its PeriodicReader can export as soon as
 // an instrument has a value (NewMetrics records leader=0 and observes runtime memory at once), so the
@@ -475,7 +491,7 @@ func newSelfProvider(ctx context.Context, cfg *config.Config, identity string) (
 	}
 	return selfobs.NewProvider(ctx, selfobs.ProviderConfig{
 		Endpoint: selfEP.Endpoint, InstanceID: selfEP.InstanceID, Token: selfEP.Token,
-		ServiceNamespace: cfg.Identity.ServiceNamespace + "-meta", Environment: cfg.Identity.DeploymentEnvironment,
+		ServiceNamespace: cfg.Identity.ServiceNamespace + config.SelfNamespaceSuffix, Environment: cfg.Identity.DeploymentEnvironment,
 		Instance: identity,         // [CP-H8] POD_NAME -> per-replica self-metric identity
 		Version:  version.String(), // [#91] service.version on the self resource -> correlate a regression to a build
 		Interval: selfInterval,

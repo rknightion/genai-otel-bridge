@@ -91,7 +91,7 @@ func TestDocsExampleConfigsBuild(t *testing.T) {
 			if err := os.WriteFile(p, []byte(blk), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := ValidateConfigFile(p); err != nil {
+			if _, _, err := ValidateConfigFile(p); err != nil {
 				t.Fatalf("%s: ValidateConfigFile: %v", ex.path, err)
 			}
 			cfg, err := config.Load(p)

@@ -16,6 +16,7 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/source/langsmith"
 	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
+	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 )
 
 // knownSourceTypes builds the source-type registry exactly as Build does, so config validation matches
@@ -48,11 +49,14 @@ var validateEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // checkpoint, emitter and coordinator; no network), so every check the source constructors and Build
 // make at startup (unknown loop or graph, bootstrap_lookback, content-floor keys, stream-label budget,
 // series ownership, no enabled loops) fails here too. Only a file is checked, not the inline
-// GENAI_OTEL_BRIDGE_CONFIG form. Returns nil if the config is valid.
-func ValidateConfigFile(path string) error {
+// GENAI_OTEL_BRIDGE_CONFIG form. For a valid config it returns the resolved plan's table and hash
+// (tenancy.Plan.Table and Hash; the table holds no secret) and a nil error; otherwise only the error.
+// The hash of a config with an unset ${ENV} ref covers its placeholder, so it matches a running
+// leader's only when CI has the same environment.
+func ValidateConfigFile(path string) (table, hash string, err error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
+		return "", "", fmt.Errorf("read %s: %w", path, err)
 	}
 	// Placeholder any unset ${VAR} (scan raw text — refs can appear anywhere, even in comments, which
 	// config.Load also resolves). Never clobber a real value the caller has set. [#112] Classify a var
@@ -83,16 +87,20 @@ func ValidateConfigFile(path string) error {
 	}
 	cfg, err := config.Load(path)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	if err := cfg.Validate(knownSourceTypes()); err != nil {
-		return err
+		return "", "", err
+	}
+	plan, err := tenancy.Resolve(cfg)
+	if err != nil {
+		return "", "", err
 	}
 	// Constructors only build clients; the first network call is the lazy first Collect, which never runs.
 	if _, err := Build(context.Background(), cfg, inertCheckpointer{}, coordinate.Noop{}, inertEmitter{}, schedule.NoopMetrics{}, source.Deps{}); err != nil {
-		return err
+		return "", "", err
 	}
-	return nil
+	return plan.Table(), plan.Hash(), nil
 }
 
 // inertCheckpointer and inertEmitter let ValidateConfigFile run Build without any store or backend.

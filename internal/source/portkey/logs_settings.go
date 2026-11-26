@@ -68,6 +68,13 @@ var hardDeniedLogFields = func() map[string]bool {
 	return m
 }()
 
+// isHardDeniedLogField reports whether k may never be opted in: the content floor by PREFIX
+// (source.IsContentFloorKey, the rule the guard applies, so a flattened gen_ai.prompt.0.content is
+// rejected at load rather than dropping whole records) or a member of hardDeniedLogFields.
+func isHardDeniedLogField(k string) bool {
+	return source.IsContentFloorKey(k) || hardDeniedLogFields[k]
+}
+
 // contentRequestKeys are fields that must NEVER be named in requested_data (defence-in-depth beyond the
 // egress strip): message bodies + the PoC §3 injected PII/config blobs. Requesting them can't widen what
 // we EMIT (the strip allow-list is authoritative), but asking for them at all is a content-minimisation
@@ -195,22 +202,22 @@ func validateLogsSettings(ls *logsSettings) error {
 		}
 	}
 	for _, f := range ls.extraRecordFields {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: extra_record_fields cannot include %q — it is a hard-denied content/PII field (the guard would drop the whole record or it would leak)", f)
 		}
 	}
 	for _, f := range ls.extraIndexedFields {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: extra_indexed_fields cannot include %q — it is a hard-denied content/PII field (a body must never become a Loki stream label)", f)
 		}
 	}
 	for _, f := range ls.metadataRecordFields {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: metadata_record_fields cannot include %q — it is a hard-denied content/PII field (only content-free metadata sub-keys may be lifted out of the metadata blob)", f)
 		}
 	}
 	if f := ls.metadataTraceIDField; f != "" {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: metadata_trace_id_field cannot be %q — it is a hard-denied content/PII field", f)
 		}
 		if strings.Contains(f, ",") {
@@ -218,7 +225,7 @@ func validateLogsSettings(ls *logsSettings) error {
 		}
 	}
 	if f := ls.traceIDField; f != "" {
-		if hardDeniedLogFields[f] {
+		if isHardDeniedLogField(f) {
 			return fmt.Errorf("portkey logs_export: trace_id_field cannot be %q — it is a hard-denied content/PII field", f)
 		}
 		if strings.Contains(f, ",") {

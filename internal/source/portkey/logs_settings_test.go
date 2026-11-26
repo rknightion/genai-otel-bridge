@@ -242,3 +242,78 @@ func TestLogsExportIndexedKeys(t *testing.T) {
 		t.Fatalf("IndexedKeys = %v, want %v", got, want)
 	}
 }
+
+// TestLogsSettingsRejectsWindowNotAboveSettle: window <= settle (or max_backfill <= settle) never creates an
+// export from a fresh watermark and reports nothing, so it is rejected at config load, naming both keys.
+func TestLogsSettingsRejectsWindowNotAboveSettle(t *testing.T) {
+	cases := []struct {
+		name     string
+		set      map[string]string
+		wantKeys []string
+	}{
+		{"window below settle", map[string]string{"window": "5m", "settle": "10m"}, []string{"window", "settle"}},
+		{"window equals settle", map[string]string{"window": "10m", "settle": "10m"}, []string{"window", "settle"}},
+		{"max_backfill below settle", map[string]string{"max_backfill": "5m", "settle": "10m"}, []string{"max_backfill", "settle"}},
+		{"max_backfill equals settle", map[string]string{"max_backfill": "10m", "settle": "10m"}, []string{"max_backfill", "settle"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ls := defaultLogsSettings()
+			s := baseLogsSettings()
+			for k, v := range c.set {
+				s[k] = v
+			}
+			err := applyLogsSettings(&ls, s)
+			if err == nil {
+				t.Fatal("expected the config to be rejected")
+			}
+			for _, k := range c.wantKeys {
+				if !strings.Contains(err.Error(), k) {
+					t.Fatalf("error %q does not name %q", err, k)
+				}
+			}
+		})
+	}
+	// The defaults and a settle of 0 still load.
+	for _, set := range []map[string]string{{}, {"settle": "0s"}, {"window": "11m", "settle": "10m"}} {
+		ls := defaultLogsSettings()
+		s := baseLogsSettings()
+		for k, v := range set {
+			s[k] = v
+		}
+		if err := applyLogsSettings(&ls, s); err != nil {
+			t.Fatalf("settings %v must load: %v", set, err)
+		}
+	}
+}
+
+// TestLogsSettingsTrimsSingleValues: a stray space around a single-value setting must not silently disable
+// the trace-id mapping (an untrimmed " correlation_id" never matches an export field).
+func TestLogsSettingsTrimsSingleValues(t *testing.T) {
+	ls := defaultLogsSettings()
+	s := baseLogsSettings()
+	s["workspace_id"] = "  ws-test "
+	s["metadata_trace_id_field"] = " correlation_id "
+	if err := applyLogsSettings(&ls, s); err != nil {
+		t.Fatal(err)
+	}
+	if ls.workspaceID != "ws-test" || ls.metadataTraceIDField != "correlation_id" {
+		t.Fatalf("workspace_id=%q metadata_trace_id_field=%q, want both trimmed", ls.workspaceID, ls.metadataTraceIDField)
+	}
+	ls = defaultLogsSettings()
+	s = baseLogsSettings()
+	s["trace_id_field"] = " trace_id "
+	if err := applyLogsSettings(&ls, s); err != nil {
+		t.Fatal(err)
+	}
+	if ls.traceIDField != "trace_id" {
+		t.Fatalf("trace_id_field=%q, want trimmed", ls.traceIDField)
+	}
+	// A blank workspace_id is still required.
+	ls = defaultLogsSettings()
+	s = baseLogsSettings()
+	s["workspace_id"] = "   "
+	if err := applyLogsSettings(&ls, s); err == nil {
+		t.Fatal("a whitespace-only workspace_id must still be rejected as missing")
+	}
+}

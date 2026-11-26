@@ -143,13 +143,13 @@ func applyLogsSettings(ls *logsSettings, s map[string]string) error {
 		case "metadata_record_fields":
 			ls.metadataRecordFields = splitCSV(v)
 		case "metadata_trace_id_field":
-			ls.metadataTraceIDField = v
+			ls.metadataTraceIDField = strings.TrimSpace(v)
 		case "trace_id_field":
-			ls.traceIDField = v
+			ls.traceIDField = strings.TrimSpace(v)
 		case "signed_url_allow_hosts":
 			ls.signedURLAllowHosts = splitCSV(v)
 		case "workspace_id":
-			ls.workspaceID = v
+			ls.workspaceID = strings.TrimSpace(v)
 		default:
 			slog.Warn("portkey logs_export: ignoring unknown setting", "key", k)
 		}
@@ -167,6 +167,15 @@ func applyLogsSettings(ls *logsSettings, s map[string]string) error {
 func validateLogsSettings(ls *logsSettings) error {
 	if ls.window <= 0 {
 		return fmt.Errorf("portkey logs_export: window must be positive, got %s", ls.window)
+	}
+	// A window no larger than settle never settles from a fresh watermark: winMax = min(winMin+window,
+	// now-settle) <= winMin on every tick, so no export is created and nothing is reported. max_backfill <=
+	// settle has the same effect through the floor clamp. Same rule as the LangSmith runs and groups loops.
+	if ls.settle >= ls.window {
+		return fmt.Errorf("portkey logs_export: settle (%s) must be < window (%s)", ls.settle, ls.window)
+	}
+	if ls.settle >= ls.maxBackfill {
+		return fmt.Errorf("portkey logs_export: settle (%s) must be < max_backfill (%s)", ls.settle, ls.maxBackfill)
 	}
 	if ls.pageSize > portkeyPageSizeMax {
 		return fmt.Errorf("portkey logs_export: page_size %d exceeds Portkey max %d", ls.pageSize, portkeyPageSizeMax)

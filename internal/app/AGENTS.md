@@ -34,10 +34,18 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
   observer and the settle-exceedance, capability, data-incompleteness and auth-error hooks. One
   auth-warning limiter serves every row; its key carries the source instance.
 - `ValidateConfigFile` validates and resolves the plan itself, then passes it to `BuildFromPlan`
-  with an inert emitter factory and `noopTelemetry`. A valid tenant-shape plan stops before
-  `BuildFromPlan`: it returns the plan's table and hash with `tenancy.ErrTenantShapeNotEnabled`.
+  with an inert emitter factory and `noopTelemetry`. A tenant-shape plan is assembled with
+  `placeholderSecrets` (no file is read; a value distinct per tenant and file), so every assemble
+  rule that needs no secret (scope assertion support, the reserved `scope-match` loop, no loop that
+  emits log records, per-group series ownership) fails the check, its error returned as it is. Only
+  a tenant-shape plan that assembles gets the plan's table and hash with
+  `tenancy.ErrTenantShapeNotEnabled`. An unreadable secret and a duplicate API key are found only
+  when a pod reads the files.
 - `Options.Secrets` (`tenancy.SecretReader`) reads the secret files a row names. A legacy row names
   none, so `nil` is fine for it. `Options.Now` is the clock of every scope gate (nil: `time.Now`).
+  `Options.OnTenantBlocked(tenant, reason, blocked)` is called for every tenant of the plan and both
+  reasons (`secret_unreadable`, `duplicate_key`), in tenant order; `main` passes
+  `selfobs.Metrics.TenantBlocked`. A legacy plan has no tenant, so it is never called.
 
 ## Build order (three passes, and the order is load-bearing)
 
@@ -46,10 +54,24 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
    `cfg.Validate`. `BuildFromPlan` reads only install-wide settings (governance, queue) from `cfg`.
 2. Reject a content-floor key in `governance.allow_label_keys` or any row's
    `extra_indexed_fields` (below), before any source is built.
-3. **Pass 1, per row:** read the row's secret files (`readRowSecrets`: `AuthValueFile` into
-   `Source.Auth.Value`, `TokenFile` into `Destination.Token`, on a copy of the row) through
-   `opts.Secrets`; a read error, or a nil reader for a row that names a file, fails the build with the
-   tenant and file named and no value. Then the row's telemetry, its `source.Deps` (a source takes its
+3. **Pass 1, secrets, over the whole plan** (`readPlanSecrets`, `pipeline.go`; design §5.5, §9):
+   every row's secret files are read through `opts.Secrets` onto a copy of the row
+   (`readRowSecrets`: `AuthValueFile` into `Source.Auth.Value`, `TokenFile` into
+   `Destination.Token`; both are tried, and a read error, an empty value or a nil reader is an error
+   naming the tenant and the file, never a value). A tenant row is one with a tenant id:
+   - a tenant with any unreadable secret is blocked (`secret_unreadable`);
+   - the `source.KeyFingerprint` of every API key read from a file is compared across every target of
+     every tenant, a blocked tenant's included, and every tenant with a target whose fingerprint
+     another target also has is blocked with all its targets (`duplicate_key`). Fingerprints are
+     compared, never logged or returned;
+   - one error line per unreadable tenant (tenant and the reader's error) and one per duplicate set
+     (`pipelines`, the set's pipeline ids only); `opts.OnTenantBlocked` for every tenant and reason;
+   - a blocked tenant's rows are not built at all (no telemetry, emitter or loop); when every tenant
+     is blocked the build fails with each tenant's reasons (tenant, file, pipeline ids).
+   A legacy row names no file; one that did and could not read it still fails the build, and legacy
+   rows are never compared for duplicate keys (G6). `TestTenant*`, `TestDuplicateKey*` and
+   `TestAllTenantsBlockedFails` in `tenant_assembly_test.go` cover this.
+   **Pass 1, per row that is built:** the row's telemetry, its `source.Deps` (a source takes its
    hooks when it is built), its source and loops, the loop-name typo check, the row's scope gate
    (`rowScopeGate`, `pipeline.go`) and the stream-label budget. `rowScopeGate` refuses, in every row, a
    loop named `scope-match` (the reserved remembered-match loop name, design §7). A row with no scope
@@ -57,7 +79,8 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
    unless its source is a `source.ScopeAsserter`, so a scope is never collected unchecked, and gets one
    gate: `Store` the checkpointer, `Digest` `ScopeMatchDigest(KeyFingerprint(Auth.Value), name, id)` of
    the key read in this pass, `Now` `opts.Now`, and its hooks the row's `ScopeAssertion` and
-   `ScopeState`.
+   `ScopeState`. Then `refuseLogsLoops`: a row with a pipeline id (every tenant-shape row) fails if
+   any of its loops implements `source.IndexedKeyDeclarer` (a loop that emits log records, design §2).
    Loops are built **before** the guards so the per-loop content denylist can be keyed by each loop's
    real identity (`CheckpointKey.String()`), which `SanitizeLogs` receives.
 4. **Pass 2, per group** of rows sharing a stack (`tenancy.StackKey` of endpoint and instance id)
@@ -142,8 +165,22 @@ rows by hand through `BuildFromPlan` and `OTLPEmitterFactory`, every destination
 on one fake receiver's URL, and drives each leadership with one `RunOnceForTest` tick per loop. Its
 four checks (delivery, slug, self endpoint, self identity) return findings; `TestCrossTenantScenarios`
 needs none in any scenario, and `TestCrossTenantSeededFaults` needs each seeded fault reported by
-exactly the checks it names. A new seeded fault (unit 6b-2 adds the duplicate key) is another
-`faultCase`.
+exactly the checks it names. A new seeded fault is another `faultCase`; unit 6b-2 added the duplicate key (tenant-b's key
+file holds tenant-a's key: both unbuilt, both reported `duplicate_key` on `OnTenantBlocked` and the
+self `tenant_blocked`, tenant-c delivers). `TestCrossTenantFromFixture` runs the gate on plans from
+`internal/config/testdata/tenants.yaml` and `tenants-reordered.yaml` through `config.Load` and
+`tenancy.Resolve`, with only each row's base URL and endpoint rewritten to the fakes (and private
+addresses allowed): both orders need one plan hash and the same deliveries. A credential may be held
+by two pipelines (two targets of one tenant on one destination); the delivery check then judges each
+resource by the pipeline id it carries.
+
+`tenant_golden_test.go` holds the tenant shape's G8 goldens as literals, from the fixture's
+`team-a.prod`: the pipeline id, the checkpoint keys (`mt.team-a.prod/analytics/<fp>`, `.../groups/<fp>`,
+`mt.team-a.prod/scope-match/v1`), the OTLP bytes of one analytics cycle
+(`testdata/tenant-payload.bin`, regenerated only with `-update-tenant-payload` for a deliberate wire
+change) and the label set of every self-metric recorded through `With("team-a", "team-a.prod")`. Their
+ConfigMap data keys are in `internal/checkpoint/configmap/datakey_test.go`. A change to any is a
+migration, not a test update.
 
 `isolation_test.go` (`TestIsolation*`) drives three pipelines on simulated time (`isoStart` and `step`:
 `Options.Now`, the loop clocks and `RunOnceForTest` move together, fast retry policy) and fails one: a

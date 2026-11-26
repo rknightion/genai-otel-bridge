@@ -51,6 +51,16 @@ labelled. `With("", "")` records exactly the receiver's label sets, which is wha
 series unchanged (`TestWithEmptyMatchesUnlabelled`). Both labels appear only in the tenant shape, and
 `signals.go` lists them on every instrument except those three.
 
+## `tenant_blocked` (#532)
+
+`TenantBlocked(tenant, reason, blocked)` records the `genai_otel_bridge_tenant_blocked` gauge (no
+unit, so no suffix): 1 when the reason blocks the tenant, else 0, under exactly `{tenant, reason}`. It
+ignores a `With` copy's labels, so it never carries `pipeline`: a blocked tenant has no pipelines
+(design §8). `main` passes it as `app.Options.OnTenantBlocked`; assembly calls it for every tenant
+and both reasons (`secret_unreadable`, `duplicate_key`), so a built tenant is 0 under both. It is not
+seeded and a legacy install never records it, so `TestWithEmptyMatchesUnlabelled` and the unit 1
+label-set golden are unchanged.
+
 ## `signals.go` is a gate, not documentation
 
 It is the static catalogue the docs generator renders into `docs/telemetry.md`, and

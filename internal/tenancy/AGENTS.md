@@ -29,7 +29,8 @@ imports `internal/config` only.
   `graphs` slice, so no two rows (and no row and the config) share one. `TestRowsDoNotShareLoopMaps`
   guards this. `main` and `app.ValidateConfigFile` still refuse the shape with
   `ErrTenantShapeNotEnabled` ("the tenant shape is not enabled in this version"); the config check
-  returns the table and hash with the refusal. A tenant with no targets gives no rows.
+  first assembles the plan (no secret file read) and returns the table and hash with the refusal
+  only when assembly passes. A tenant with no targets gives no rows.
 - **Resolve-phase rules** (design sections 2 and 3), checked by `Resolve` for the tenant shape. Every
   broken rule is reported (`errors.Join`, in tenant and target order) and the plan is then empty:
   - a target's `destination` names a destination of its own tenant;
@@ -44,7 +45,7 @@ imports `internal/config` only.
   assertion support, log-emitting loops) belong to `internal/app`.
 
 `Row`, `Plan`, `Resolve`, `StackKey`, `PipelineID`, `SourceInstance`, `PipelineAttribute`,
-`ErrTenantShapeNotEnabled` and `SecretReader` are seams later work depends on: keep their names and shapes. Add nothing to `Plan` beyond `Rows` and
+`ErrTenantShapeNotEnabled`, `SecretReader` and `DirSecretReader` are seams later work depends on: keep their names and shapes. Add nothing to `Plan` beyond `Rows` and
 `TenantShape` without a design change.
 
 ## Table and hash
@@ -70,8 +71,16 @@ imports `internal/config` only.
 
 `SecretReader.Read(tenant, file)` returns one tenant's secret file value. `app.BuildFromPlan` calls it
 in assembly pass 1 for a row's `AuthValueFile` and `TokenFile` and puts the values on a copy of the
-row, never on the plan. Its error names the tenant and the file and never carries a value. This
-package defines only the interface; the file-backed reader comes later.
+row, never on the plan. Its error names the tenant and the file and never carries a value.
+
+`DirSecretReader(root)` (`secrets.go`) is the file-backed reader `main` uses, rooted at
+`/var/run/secrets/genai-otel-bridge/tenants`: it reads `<root>/<tenant>/<file>` (symlinks followed, as
+a Kubernetes Secret volume needs) and trims surrounding white space as the legacy `file:` resolver
+does. It fails closed: a tenant or file that is not one bare path element (empty, `.`, `..`, a `/`,
+a `\` or a NUL), a missing or unreadable file, a file over 64 KiB and a value empty after trimming are
+all errors. Every error reads `tenant "<t>": secret file "<f>": <cause>` and carries neither a value
+nor the path; a missing file still matches `fs.ErrNotExist`. `TestDirSecretReaderErrorsNameTenantAndFileOnly`
+guards this.
 
 ## StackKey
 

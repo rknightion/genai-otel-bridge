@@ -1,7 +1,7 @@
 # Multi-tenancy for genai-otel-bridge
 
-*   **Status:** Draft. Work after the test harness depends on open questions Q1 and Q2; later
-    units also depend on Q3, Q5, Q6 and Q9.
+*   **Status:** Approved for implementation. Every question is settled (see "Questions and
+    answers"). The units are issues #520 to #536.
 *   **Date:** 2026-11-26. Revised for the rule that one API key serves exactly one workspace.
 
 ## Overview
@@ -14,17 +14,19 @@ its LLM gateway gets its own install.
 This design lets one install serve many teams. A central observability team runs it. Each team hands
 over an API key for its workspace in Portkey, an LLM gateway, and names that workspace. That
 workspace's telemetry is sent to that team's own OTLP destination under that team's own credentials.
-One API key serves exactly one workspace. A key that can read several workspaces (a Portkey
-organisation key) is accepted, but only for the one workspace its configuration names. Portkey is
+One API key serves exactly one workspace. The launch supports Portkey workspace keys. A key that
+can read several workspaces (a Portkey organisation key) will be accepted for the one workspace
+its configuration names once question Q6 is run; the design already sends that workspace on every
+request. Portkey is
 the first source. The expected size is 10 to 20 teams at launch and about 250 later.
 
-This document specifies the launch: one leader-elected install that runs many isolated pipelines.
-It does not specify shards (a second install with a different list of tenants). It checks only
-that nothing decided here has to be undone for them. One install has a ceiling, because a restart
-pauses every tenant in it and because every checkpoint save goes through one object. The working
-ceiling is set at about 25 tenants. That figure is an estimate. Questions Q3 and Q5 test it,
-taking one pipeline with two loops per tenant. The size of 250 is a forecast and is not tested
-here.
+This document specifies the launch: one leader-elected install that runs many isolated pipelines. It
+does not specify shards (a second install with a different list of tenants). It checks only that
+nothing decided here has to be undone for them. One install has a ceiling, because a restart pauses
+every tenant in it and because every checkpoint save goes through one object. The working ceiling is
+set at about 25 tenants. That figure is an estimate, taking one pipeline with two loops per tenant,
+and the author accepted it without measurement (Q3, Q5). The size of 250 is a forecast and is not
+tested here.
 
 ### How the bridge works today
 
@@ -152,8 +154,8 @@ Each goal states how it is checked.
     the checkpoint keys for the three checkpoint backends (ConfigMap, DynamoDB and file), the
     emitted OTLP bytes and the self-metric label sets of the legacy shape. An upgrade test starts
     the new binary on a checkpoint store written by the current version.
-*   **G7. The launch fits the pod guide.** Check: the launch install runs at most two pods, and
-    question Q5 passes.
+*   **G7. The launch fits the pod guide.** Check: the launch install runs two pods, a leader and a
+    hot standby (Q8).
 *   **G8. Formats that reach durable state or tenant stacks do not change after the first
     tenant-shape version.** These are the checkpoint key format, the pipeline id format, the name
     of the pipeline attribute on product telemetry, the self-metric labels `tenant` and
@@ -167,8 +169,10 @@ Each goal states how it is checked.
 *   **LangSmith in the tenant shape.** The tenant config must not rule it out, but this design
     does not specify it.
 *   **One API key serving several targets.** A key serves exactly one target, and so one scope.
-    An organisation key, which can read several workspaces, is accepted for the one scope its
-    target names. Pointing it at a second scope is a second key.
+    An organisation key, once supported (Q6), is accepted for the one scope its target names.
+    Pointing it at a second scope is a second key.
+*   **Organisation keys at launch.** The launch supports workspace keys only. Nothing in the
+    binary tells the two kinds apart, so the operator documentation states it.
 *   **Log records in the tenant shape.** A loop that emits log records is rejected until question
     Q7 shows an API key cannot export another scope's logs.
 *   **Per-API-key use-case labels in the tenant shape.** The legacy `api_key_use_cases` setting is
@@ -195,23 +199,22 @@ Each goal states how it is checked.
     for tenant teams is in scope in its place.
 *   **A self-service API or UI.**
 
-## Open Questions
+## Questions and answers
 
-The implementation is staged as units, listed under "Order of work" at the end of this
-document. Unit 1 is a tests-only harness. Each question has a pass criterion and the unit or event
-it must be answered before. Questions are listed in the order they are needed.
+Every question the design depended on was settled on 2026-11-26, by research, a live probe or the
+author's decision. None gates a unit.
 
-| Id | Question | Pass | Needed before |
-| --- | --- | --- | --- |
-| Q1 | What is Portkey's request budget, and is it per API key, per organisation or per client IP address? The repository records "about 10 requests per 10 seconds" for Portkey in one place and for LangSmith in another. This design makes 7 requests per tenant per minute at a 60-second cadence (5 graph requests and 2 group requests) plus one scope assertion every ten minutes. Just after a restart each tenant makes 8: one assertion, then the 7. An organisation key serves one target only, so a per-key budget is never shared between tenants. | The investigation reports the largest tenant count the budget supports at a 60-second and at a 5-minute cadence, including the requests after a restart and during catch-up after a 30-minute pause of every tenant, when each loop reads back several windows. The count at a 5-minute cadence is at least 20. If only that count reaches 20, the launch default cadence becomes 5 minutes. If the budget is shared across API keys and supports fewer than 20 at a 5-minute cadence, this design is stopped and reassessed: no number of installs raises a shared budget. | Unit 2 |
-| Q2 | Would Portkey's own OpenTelemetry export replace polling? It would only if all four hold: (a) it is available on the deployment in use; (b) it carries cost, tokens, latency and errors per workspace; (c) it carries no prompt or completion content; (d) it loses no more than the lookback of 90 minutes when the receiver is down. | Polling stays: at least one of the four does not hold. If all four hold, this design is stopped and reassessed. | Unit 2 |
-| Q6 | Does every analytics endpoint the Portkey package calls honour `workspace_slug` for an organisation key? The endpoints are the five graphs, the model and metadata groups, the prompt dimension and the workspace grouping the assertion reads (`/analytics/groups/workspace`, which Portkey does not document). Portkey documents that an organisation key with no slug reads its default workspace. Also: can an organisation key be limited to the `analytics.view` scope? | With an organisation key over two workspaces that both have traffic, each endpoint given workspace A's slug returns the same rows as a workspace key for A over the same range, and a slug that names no workspace returns an error or no rows, never another workspace's rows. If it does not hold for every endpoint, organisation keys are not supported and the operator documentation says so. Q6 is run again for each version that changes the Portkey package. | Unit 6e |
-| Q9 | What does a workspace key return when sent a slug for another workspace, and does any analytics response carry a workspace id as well as its slug? | Answered for the first part on 2026-11-26 against a live workspace key: the slug is ignored. The graph, model-group and workspace-grouping endpoints returned 200 and the same rows with no slug, the right slug, a slug naming no workspace, `include_all_workspaces` and `exclude_workspace_slugs` naming its own workspace. So a wrong slug cannot serve as a check that works without traffic. The workspace grouping returns a slug and no id. Open: whether a slug is unique across organisations, and whether Portkey issues more than one workspace key per workspace (needed for a second destination). Pass for the open part: the answer is recorded. If slugs are unique only inside an organisation, the residual case in section 5.1 is accepted in Risks. | Unit 6e |
-| Q3 | What are the memory and CPU of a leader and a standby with 1, 20 and 50 pipelines, each at its full cardinality budget? | The leader's working set at 20 pipelines fits the chart's memory limit with half to spare. | Unit 6b |
-| Q5 | What checkpoint save rate does one install sustain at 50, 150 and 300 loops, against a real Kubernetes API server, and are lease renewals delayed by checkpoint traffic? | 50 loops each save a checkpoint once per 60-second cadence for 30 minutes, no loop's tick starts late, and no lease renewal is delayed. If saves are the limit, the first response is Alternative L, not a partitioned store. If renewals are delayed, the lease gets its own Kubernetes client. | Unit 6b |
-| Q4 | On each destination's stack, do the three identity attributes become metric labels, and is the pipeline attribute kept and searchable? Section 6 assumes both from Grafana Cloud's documented behaviour; this checks each stack. | Yes for both. | Each tenant's onboarding |
-| Q7 | Can a workspace API key export another workspace's logs, and does an export record carry its workspace? | A foreign workspace id is refused, or records carry a workspace the package can check. | Log records in the tenant shape |
-| Q8 | Does the launch run a hot standby? A standby takes the lease about 15 seconds after the leader stops. It does not add correctness, because recovery is from checkpoints either way. It doubles the pod count. | A decision by the author. The design works with one replica or two. | Launch |
+| Id | Question | Answer |
+| --- | --- | --- |
+| Q1 | What is Portkey's request budget for the analytics API, and is it per key, per organisation or per client IP? | Not documented: Portkey's API reference gives no figure, no scope and no rate-limit headers for the analytics endpoints, and documents 429 only for the rate-limit policies a customer sets on gateway traffic. Accepted by the author without a probe. The launch uses the design's defaults (7 requests per tenant per minute at a 60-second cadence, a per-target rate limiter) and the scheduler's existing quota backoff. Quota errors in production size the install; a five-minute cadence is the first response, because one analytics request returns up to 55 one-minute buckets. |
+| Q2 | Would Portkey's own OpenTelemetry export replace polling? | No; polling stays. Portkey documents its OTLP push for Enterprise and self-hosted gateways only, not the cloud API. Its metrics export documents no workspace attribute. Its trace export carries prompt and completion content with no documented way to turn it off. Failed exports are not retried and are lost while the receiver is down. |
+| Q3 | What are the memory and CPU of a leader and a standby with 1, 20 and 50 pipelines? | Not measured. The author accepted the design's estimates for a launch of 10 to 20 tenants. Heap use is watched in production. |
+| Q4 | On each destination's stack, do the identity attributes become labels, and is the pipeline attribute kept and searchable? | Yes, by Grafana Cloud's documentation: `service.namespace` and `service.name` form the `job` label, `deployment.environment.name` is promoted by default, and every other resource attribute, the pipeline attribute included, is kept on `target_info`. A stack can change its promoted set, so each tenant's onboarding still checks its stack. |
+| Q5 | What checkpoint save rate does one install sustain, and are lease renewals delayed? | Not measured. The author accepted the estimate of under one save a second at 20 tenants. Alternative L is the first response if saves become the limit. |
+| Q6 | Does every analytics endpoint honour `workspace_slug` for an organisation key? | Deferred with organisation keys. The launch supports workspace keys only (Alternative Q). The slug is still sent on every request, so organisation keys need no code change once Q6 is run with an organisation key over two workspaces that both have traffic. |
+| Q7 | Can a workspace API key export another workspace's logs? | Open. Log records stay out of the tenant shape until it is answered. |
+| Q8 | Does the launch run a hot standby? | Yes, by the author: two replicas, a leader and a hot standby. |
+| Q9 | What does a workspace key return when sent a slug for another workspace? Is a slug unique across organisations? Can a workspace have several keys? | A live probe on 2026-11-26 showed a workspace key ignores the slug: the graph, model-group and workspace-grouping endpoints returned the same rows for no slug, the right slug, a slug naming no workspace, `include_all_workspaces` and `exclude_workspace_slugs`. The workspace grouping returns a slug and no id. Portkey does not document whether slugs are unique across organisations, and its documented slugs carry a random suffix; the residual case is accepted in Risks. Several keys per workspace is implied by Portkey's documentation (a service key can create others) but not stated. |
 
 ## Critical User Journeys (CUJs)
 
@@ -820,7 +823,7 @@ string.
     warning at start when a legacy `source_instance` begins with `mt.`.
 
 **Record format, store and Kubernetes client.** Unchanged. One ConfigMap, the existing one, by its
-existing name. Question Q5 decides whether the lease needs its own client.
+existing name. The lease keeps the shared Kubernetes client; Q5 was not measured.
 
 **Remembered scope match.** Each pipeline has one more checkpoint key: its source instance, the
 reserved loop name `scope-match` and the fingerprint field `v1`. No vendor loop may use that
@@ -1004,9 +1007,9 @@ The checkpoint key contains no shard name, so a later shard design does not rewr
 | A bug pairs a loop with the wrong emitter. | One place of assembly; the release gate with seeded faults. | A test proves the code against a fake, not against production. |
 | One process holds every team's source API key and destination token. | Secrets are files in one directory per tenant and are never placed in the config tree, so a config error cannot contain one. Each emitter already removes its own credentials from error text. Teams should issue a destination token limited to writing metrics. | Anyone who can read Secrets in the install's namespace, or exec into its pods, can read every tenant's credentials. Access to that namespace is the central team's alone. The author accepted this. |
 | A restart or a bad version pauses every tenant in the install. | Recovery is from checkpoints with no gap inside the lookback; `maxUnavailable: 0`; a ceiling of about 25 tenants per install. | A pause of up to a minute per rollout. A tenant that needs more isolation gets its own install (Alternative B). |
-| The vendor's request budget is shared across keys. | Q1 is answered before change 2. Cadence is the first control: one analytics request returns up to 55 one-minute buckets, so a five-minute cadence makes about a fifth of the requests with no loss of data. | If the shared budget supports fewer than 20 tenants the design is stopped. |
-| The vendor's own OpenTelemetry export makes polling unnecessary. | Q2 is answered before change 2. | None after Q2. |
-| Every checkpoint save rewrites one ConfigMap. | Q5 measures it before change 6. Alternative L is the first response. | The store holds every key ever written until an offline prune exists. |
+| The vendor's request budget is shared across keys, or smaller than the design's load. | Not documented (Q1). The per-target rate limiter and the scheduler's quota backoff. Cadence is the first control: one analytics request returns up to 55 one-minute buckets, so a five-minute cadence makes about a fifth of the requests with no loss of data. | If the shared budget supports fewer than 20 tenants the design is stopped. |
+
+| Every checkpoint save rewrites one ConfigMap. | Estimated at under one save a second at 20 tenants, not measured (Q5). Alternative L is the first response. | The store holds every key ever written until an offline prune exists. |
 | The change breaks an existing single-team install. | Golden tests and an upgrade test land first and stay green through every change. Changes 2 to 5 do not alter a legacy install's emitted telemetry, checkpoint keys or self-metric label sets. | A legacy install with two sources sharing a loop name keeps today's overwritten lag gauge. |
 | A newly added tenant, or one with a rotated key, looks broken because nothing is emitted. | An explicit unverified state, left out of outage alerts, with its own low-severity alert; stated in the tenant data contract. | A stack shows no data, not zeros, until the workspace's first traffic under the current key. |
 | Every tenant's assertion reads one endpoint Portkey does not document (`/analytics/groups/workspace`). | Matched pipelines ride out up to 20 minutes of failures (section 5.1). The stale-poller alert fires for every matched pipeline past that. | A change or removal of that endpoint stops every tenant at once, and no other endpoint is known to replace it. |
@@ -1152,8 +1155,8 @@ One organisation key, with one target per workspace, each sending its own `works
 
 *   **Pros**: Push from the vendor would need no polling, no watermark and no rate budget.
 *   **Cons**: Not assessed. Push has no replay, so loss while the receiver is down is permanent.
-*   **Reason for Rejection**: Open, not rejected. It is question Q2, which must be answered before
-    change 2.
+*   **Reason for Rejection**: Rejected after research (Q2): cloud availability is not documented,
+    failed exports are lost, and the trace export carries prompt content.
 
 ### Alternative O: Assert again after every collect, before the batch is queued
 
@@ -1171,9 +1174,8 @@ The first draft's design: an assertion before the collect, and another after it 
 *   **Pros**: The launch rests only on Portkey binding a workspace key, which Portkey documents
     and Q9 observed. No organisation-wide credential is held.
 *   **Cons**: A team that can only issue an organisation key cannot be onboarded.
-*   **Reason for Rejection**: Rejected by author: organisation keys are accepted from launch,
-    with their workspace named. Q6 remains the gate, and if it fails the launch falls back to this
-    alternative.
+*   **Reason for Rejection**: Adopted by the author on 2026-11-26 for the launch, with Q6
+    deferred. Organisation keys follow once Q6 is run.
 
 ### Alternative R: Stop the install on a duplicate API key
 
@@ -1218,12 +1220,12 @@ The first draft's behaviour for an idle workspace.
 
 **Performance.**
 
-*    Expected steady state at 20 tenants with two loops each at a 60-second cadence: under one
-    checkpoint save a second, and between two and three vendor requests a second. After a restart
-    each tenant makes 8 requests in its first minute, paced by its own rate limiter. Q1, Q3 and Q5
-    test whether one install sustains this.
+*     Expected steady state at 20 tenants with two loops each at a 60-second cadence: under one
+     checkpoint save a second, and between two and three vendor requests a second. After a restart
+     each tenant makes 8 requests in its first minute, paced by its own rate limiter. These are
+     estimates the author accepted (Q1, Q3, Q5).
 *   Each pipeline's guard holds its own seen-values set, up to the cardinality budget per metric
-    name. Q3 measures the footprint at the full budget.
+    name. Its footprint at the full budget is not measured (Q3).
 
 **Rollout and rollback.**
 
@@ -1288,21 +1290,21 @@ The first draft's behaviour for an idle workspace.
 
 ## Order of work
 
-The work lands in six changes, in this order. Some changes are more than one pull request. Each
-row below is one issue and one pull request. The step-by-step implementation plan is not part of
-this document: it is written into the issues.
+The work lands in this order. Each unit is one issue and one pull request: #520 to #536. Units
+3b, 4, 5b, 6b and 6e are each split into two issues (for example 3b-1 and 3b-2). The
+step-by-step plan is not part of this document: it is written into the issues.
 
 | Unit | What it is | Implements | Needs first |
 | --- | --- | --- | --- |
 | 1 | Compatibility harness, tests only | Section 10, goal G6 | Nothing. Can start at once. |
-| 2 | Tenant and pipeline labels in self-telemetry | The labels and log attributes of section 8, goal G4 | Q1 and Q2 pass |
+| 2 | Tenant and pipeline labels in self-telemetry | The labels and log attributes of section 8, goal G4 | Unit 1 |
 | 3a | The plan package and the config check's output | Section 3 | Unit 2 |
 | 3b | The three passes of assembly and the two factories | Sections 4, 5.2 and 6 | Unit 3a |
-| 4 | The scope gate, the slug on every request and the remembered match | Sections 5.1 and 7 and their signals in section 8 | Unit 3b. Q6 decides whether organisation keys are accepted, not whether the unit lands. |
+| 4 | The scope gate, the slug on every request and the remembered match | Sections 5.1 and 7 and their signals in section 8 | Unit 3b |
 | 5a | The race detector on the acceptance recipe | Verification | Unit 3b |
 | 5b | The release gate and the isolation tests | Section 5.3, goals G2 and G5, the run-time cases of G3 | Units 4 and 5a |
 | 6a | The tenant config schema and its load rules | Section 2 (load phase), goal G9 | Unit 3b |
-| 6b | Resolving, secrets, the duplicate-key check and assembly for tenant rows | Sections 2 (resolve and assemble phases), 5.5, 7 and 9, goal G8 | Units 5b and 6a; Q3 and Q5 pass |
+| 6b | Resolving, secrets, the duplicate-key check and assembly for tenant rows | Sections 2 (resolve and assemble phases), 5.5, 7 and 9, goal G8 | Units 5b and 6a |
 | 6c | The chart | Section 11 | Unit 6a |
 | 6d | Alert rules and the dashboard | The alerts of section 8 | Units 4 and 6b |
 | 6e | Switching the tenant shape on | Goals G1 and G7, the unreadable-secret case of G3, the evidence query of section 5.4, the documentation and the design record | Units 6b, 6c and 6d |

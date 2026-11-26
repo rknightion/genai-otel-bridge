@@ -20,10 +20,10 @@ spec:
       relativeTimeRange: {from: 5m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        # Fleet run volume over a trailing 5m. langsmith_* are per-bucket GAUGES (one point per 1-minute
-        # bucket) — aggregate with sum_over_time, NEVER rate()/increase(). The raw metric carries a
-        # high-cardinality `session` label (~700 series); this rule sums across sessions to a per-env
-        # fleet total (drop `session`) — query the raw metric for per-session drilldown.
+        # DEPRECATED: use langsmith:runs:window_total. This rule is kept for one release and then removed.
+        # It is mis-named: langsmith_runs is an aggregate-now gauge (each poll emits the trailing
+        # settings.stats_window total, default 1h), so sum_over_time over 5m adds overlapping window totals
+        # and overstates the value (about 5x at a 1m cadence), and is NOT a 5 minute sum.
         expr: 'sum by (deployment_environment_name, service_namespace) (sum_over_time(langsmith_runs[5m]))'
         instant: true
         range: false

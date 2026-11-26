@@ -6,12 +6,16 @@ CLUSTER="${E2E_CLUSTER:-genai-otel-bridge-e2e}"
 NS="${E2E_NAMESPACE:-genai-otel-bridge-e2e}"
 IMAGE="${IMAGE:-genai-otel-bridge:dev}"
 E2E_HELPER_IMAGE="${E2E_HELPER_IMAGE:-genai-otel-bridge-e2e-helper:dev}"
-K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.35.1-k3s1}"
-BUSYBOX_IMAGE="${BUSYBOX_IMAGE:-busybox:1.36}"
+# No fallback tag: the pin lives only in the justfile (k3s_image), where Renovate can move it.
+# Only up() needs it, so down and verify-cleanup work without it.
+K3S_IMAGE="${K3S_IMAGE:-}"
+# Exported so the Go suite's kubectl-debug freeze uses the same (imported) utility image.
+export BUSYBOX_IMAGE="${BUSYBOX_IMAGE:-busybox:1.36}"
 TOOLS_DIR="${TOOLS_DIR:-$PWD/.tools}"
 export PATH="$TOOLS_DIR:$PATH"
 
 up() {
+  [ -n "$K3S_IMAGE" ] || { echo "K3S_IMAGE is not set: run via 'just e2e' or 'just k3d-up', or export K3S_IMAGE=rancher/k3s:<tag>" >&2; exit 1; }
   # Idempotent: clear any cluster left over from an interrupted/killed prior run
   # (e.g. a superseded CI run) so `cluster create` doesn't fail with "already exists".
   k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true
@@ -43,8 +47,15 @@ EOF
   k3d image import "$IMAGE" "$E2E_HELPER_IMAGE" "$BUSYBOX_IMAGE" -c "$CLUSTER"
   export KUBECONFIG; KUBECONFIG="$(k3d kubeconfig write "$CLUSTER")"
   kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
-  kubectl apply -f test/e2e/manifests/
-  helm install genai-otel-bridge deploy/helm -n "$NS" -f test/e2e/values-e2e.yaml --wait --timeout 180s
+  # The manifests carry no namespace: -n puts them in $NS, so E2E_NAMESPACE moves them with the release.
+  kubectl apply -n "$NS" -f test/e2e/manifests/
+  # Install the images this run built and imported, so IMAGE and E2E_HELPER_IMAGE override the
+  # defaults in values-e2e.yaml (extraContainers[0] is the OTLP sink, [1] the mock Portkey).
+  helm install genai-otel-bridge deploy/helm -n "$NS" -f test/e2e/values-e2e.yaml \
+    --set image="$IMAGE" \
+    --set "extraContainers[0].image=$E2E_HELPER_IMAGE" \
+    --set "extraContainers[1].image=$E2E_HELPER_IMAGE" \
+    --wait --timeout 180s
   kubectl -n "$NS" rollout status deploy/genai-otel-bridge --timeout 120s
 }
 
@@ -59,14 +70,16 @@ run_tests() {
 
 # Exercise the post-delete cleanup hook: a real `helm uninstall` (NOT the cluster-delete teardown,
 # which bypasses helm) must leave no orphaned app-created HA objects (lease + checkpoint ConfigMap).
-# Run AFTER run_tests so it doesn't disturb the failover suite. The leader-election lease is always
-# present by now; the checkpoint ConfigMap is present once the leader has emitted at least once.
+# Run AFTER run_tests so it doesn't disturb the failover suite. By then the leader-election lease and
+# the checkpoint ConfigMap must both exist: if either is absent its half of the cleanup check would
+# pass vacuously, so that is a failure.
 uninstall_verify() {
   export KUBECONFIG; KUBECONFIG="$(k3d kubeconfig write "$CLUSTER")"
   kubectl -n "$NS" get lease genai-otel-bridge-leader >/dev/null 2>&1 \
     || { echo "PRE-FAIL: lease genai-otel-bridge-leader absent before uninstall (cleanup test would be vacuous)" >&2; exit 1; }
-  local had_cp="no"; kubectl -n "$NS" get configmap genai-otel-bridge-checkpoints >/dev/null 2>&1 && had_cp="yes"
-  echo "pre-uninstall: lease present, checkpoint present=${had_cp}"
+  kubectl -n "$NS" get configmap genai-otel-bridge-checkpoints >/dev/null 2>&1 \
+    || { echo "PRE-FAIL: configmap genai-otel-bridge-checkpoints absent before uninstall (cleanup test would be vacuous)" >&2; exit 1; }
+  echo "pre-uninstall: lease and checkpoint ConfigMap present"
   # --wait blocks on the post-delete hook Job (genai-otel-bridge -cleanup) completing.
   helm uninstall genai-otel-bridge -n "$NS" --wait --timeout 120s
   local fail=0

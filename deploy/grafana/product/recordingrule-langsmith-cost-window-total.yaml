@@ -1,0 +1,35 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: RecordingRule
+metadata:
+  name: genai-otel-bridge-langsmith-cost-window-total
+  annotations:
+    grafana.app/folder: genai-otel-bridge
+  labels:
+    grafana.app/folder: genai-otel-bridge
+spec:
+  title: langsmith:cost_usd:window_total
+  metric: langsmith:cost_usd:window_total
+  targetDatasourceUID: grafanacloud-prom
+  trigger:
+    interval: 1m
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      source: true
+      relativeTimeRange: {from: 3m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        # Fleet LLM spend (USD) over the trailing settings.stats_window (default 1h), summed across sessions.
+        # langsmith_cost_usd is an AGGREGATE-NOW gauge (a trailing-window snapshot): every poll re-emits the whole
+        # trailing-stats_window total for each session, stamped at the poll time. So take the latest
+        # point (last_over_time) and sum across sessions; sum_over_time would add overlapping
+        # windows (about 5x at a 1m cadence, 60x over an hour). The 3m lookback bridges a missed poll.
+        # The raw metric carries a high-cardinality `session` label (~700 series); this rule drops it
+        # (per-environment total) - query the raw metric for per-session drilldown.
+        expr: 'sum by (deployment_environment_name, service_namespace) (last_over_time(langsmith_cost_usd[3m]))'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query

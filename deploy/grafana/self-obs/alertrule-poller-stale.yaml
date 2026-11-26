@@ -8,11 +8,17 @@ metadata:
     grafana.app/folder: genai-otel-bridge
 spec:
   title: GenaiOtelBridgePollerStale
-  # A loop is still exporting its self-metrics (process up) but its last-success age has exceeded 2x its
-  # own trailing-6h p90 baseline AND the 300s absolute floor — it is staler than normal for THIS loop.
-  # The threshold is self-relative so fast loops (e.g. analytics at ~60s cadence) fire quickly while
-  # slow loops (e.g. log-export at ~5m) don't false-positive. The "leader entirely gone" case (no series
-  # at all) is covered by GenaiOtelBridgeLeaderAbsent, hence noData=Ok here.
+  # A loop is still exporting its self-metrics (process up) but it is stale. Two arms, either one fires:
+  #  1. relative: last-success age > 2x its own trailing-6h p90 baseline AND the 300s floor — staler than
+  #     normal for THIS loop. Self-relative so fast loops fire quickly while slow log-export loops don't
+  #     false-positive.
+  #  2. absolute: last-success age > 10800s (3h). A permanent stall drags the trailing p90 up with it
+  #     (once the stall passes ~36m the p90 is itself a stalled sample, so arm 1 turns false at about
+  #     72m of stall and the alert would resolve with the loop still dead). The ceiling sits above the
+  #     slowest healthy sawtooth of any loop (tens of minutes; a 50m sawtooth is covered by
+  #     sim_poller_stale.py) and is the backstop arm 1 cannot erase.
+  # The "leader entirely gone" case (no series at all) is covered by GenaiOtelBridgeLeaderAbsent, hence
+  # noData=Ok here.
   execErrState: Ok
   noDataState: Ok
   for: 15m
@@ -22,7 +28,7 @@ spec:
     severity: warning
   annotations:
     summary: "genai-otel-bridge {{ $labels.loop }} loop is stale vs its own baseline"
-    description: "The {{ $labels.loop }} loop's last-success age has exceeded 2x its own trailing-6h p90 baseline AND the 300s absolute floor — it is staler than normal for this loop (not a flat threshold, so it won't false-positive on the slow log-export loops). The loop is not advancing its watermark: collect/emit is wedged or the source is failing. Check genai_otel_bridge_emit_errors_total / genai_otel_bridge_window_lag_seconds and the pod logs. See deploy/grafana/README.md."
+    description: "The {{ $labels.loop }} loop's last-success age has exceeded 2x its own trailing-6h p90 baseline AND the 300s floor (staler than normal for this loop, so it won't false-positive on the slow log-export loops), OR exceeded the 3h absolute ceiling (a long stall absorbs the relative baseline, so the ceiling keeps the alert firing). The loop is not advancing its watermark: collect/emit is wedged or the source is failing. Check genai_otel_bridge_emit_errors_total / genai_otel_bridge_window_lag_seconds and the pod logs. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -30,7 +36,7 @@ spec:
       relativeTimeRange: {from: 6h0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: '(time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > (2 * quantile_over_time(0.9, (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])) and (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 300'
+        expr: '(((time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > (2 * quantile_over_time(0.9, (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])) and (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 300) or (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 10800)'
         instant: true
         range: false
         intervalMs: 1000

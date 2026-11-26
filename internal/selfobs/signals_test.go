@@ -11,16 +11,18 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/docs/signal"
 )
 
-// instrumentNamesFromSource extracts the string-literal first arg of every mk/mg/mh/mo(...) call in
-// metrics.go and prefixes "genai_otel_bridge_" (the constructors add that prefix at runtime).
-func instrumentNamesFromSource(t *testing.T) []string {
+// instrumentUnitsFromSource extracts the string-literal first arg of every mk/mg/mh/mo(...) call in
+// metrics.go, prefixed "genai_otel_bridge_" (the constructors add that prefix at runtime), mapped to
+// the unit the instrument is created with: mk counters are created with no unit (""), mg/mh take it
+// as their third argument. This is the wire unit the gateway sees.
+func instrumentUnitsFromSource(t *testing.T) map[string]string {
 	t.Helper()
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "metrics.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse metrics.go: %v", err)
 	}
-	var names []string
+	units := map[string]string{}
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -34,14 +36,37 @@ func instrumentNamesFromSource(t *testing.T) []string {
 		if !ok || lit.Kind != token.STRING {
 			return true
 		}
-		names = append(names, "genai_otel_bridge_"+lit.Value[1:len(lit.Value)-1])
+		unit := ""
+		if id.Name != "mk" {
+			if len(call.Args) < 3 {
+				t.Fatalf("%s call for %s has no unit argument", id.Name, lit.Value)
+			}
+			ulit, ok := call.Args[2].(*ast.BasicLit)
+			if !ok || ulit.Kind != token.STRING {
+				t.Fatalf("%s call for %s: unit argument is not a string literal", id.Name, lit.Value)
+			}
+			unit = ulit.Value[1 : len(ulit.Value)-1]
+		}
+		units["genai_otel_bridge_"+lit.Value[1:len(lit.Value)-1]] = unit
 		return true
 	})
+	return units
+}
+
+func instrumentNamesFromSource(t *testing.T) []string {
+	var names []string
+	for n := range instrumentUnitsFromSource(t) {
+		names = append(names, n)
+	}
 	sort.Strings(names)
 	return names
 }
 
+// TestSelfObsSignalsParity holds the catalogue to the instruments by name AND unit: the unit decides
+// the Prometheus-exposed name (a unit-"1" gauge gains "_ratio"), so a catalogue unit that differs from
+// the one the instrument is created with prints a name nobody can query.
 func TestSelfObsSignalsParity(t *testing.T) {
+	units := instrumentUnitsFromSource(t)
 	want := instrumentNamesFromSource(t)
 	gotSet := map[string]bool{}
 	for _, s := range Signals() {
@@ -50,6 +75,9 @@ func TestSelfObsSignalsParity(t *testing.T) {
 				t.Errorf("self-obs metric %q has plane %q", s.Name, s.Plane)
 			}
 			gotSet[s.Name] = true
+			if u, ok := units[s.Name]; ok && u != s.Unit {
+				t.Errorf("descriptor %q has unit %q but the instrument is created with unit %q", s.Name, s.Unit, u)
+			}
 		}
 	}
 	for _, n := range want {

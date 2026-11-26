@@ -20,8 +20,10 @@ spec:
       relativeTimeRange: {from: 5m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        # Fleet LLM spend (USD) over a trailing 5m. Per-bucket gauge → sum_over_time (NOT rate()).
-        # Summed across the ~700 per-session series to a per-env total; raw metric retains `session`.
+        # DEPRECATED: use langsmith:cost_usd:window_total. This rule is kept for one release and then removed.
+        # It is mis-named: langsmith_cost_usd is an aggregate-now gauge (each poll emits the trailing
+        # settings.stats_window total, default 1h), so sum_over_time over 5m adds overlapping window totals
+        # and overstates the value (about 5x at a 1m cadence), and is NOT a 5 minute sum.
         expr: 'sum by (deployment_environment_name, service_namespace) (sum_over_time(langsmith_cost_usd[5m]))'
         instant: true
         range: false

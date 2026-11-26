@@ -429,3 +429,43 @@ func findHistogram(rm *metricdata.ResourceMetrics, name string) (metricdata.Expo
 	}
 	return metricdata.ExponentialHistogram[float64]{}, false
 }
+
+// The partial-success reject counter is alerted with increase(), which cannot see a series' first
+// sample: a series that appears at its first rejection has no earlier point to rise from. NewMetrics
+// therefore creates both plane series at 0 so the first rejection is a visible increase.
+func TestPartialRejectCounterExistsAtZeroForBothPlanes(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	if _, err := NewMetrics(provider); err != nil {
+		t.Fatal(err)
+	}
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "genai_otel_bridge_emit_partial_success_rejected_total" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("unexpected data type %T", m.Data)
+			}
+			for _, dp := range sum.DataPoints {
+				v, _ := dp.Attributes.Value("plane")
+				got[v.AsString()] = dp.Value
+			}
+		}
+	}
+	for _, plane := range []string{"metrics", "logs"} {
+		if v, ok := got[plane]; !ok || v != 0 {
+			t.Errorf("plane %q: series present=%v value=%d, want present at 0 (got %v)", plane, ok, v, got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("want exactly the two plane series, got %v", got)
+	}
+}

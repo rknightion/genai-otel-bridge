@@ -139,8 +139,8 @@ def add(p):
 
 
 # === Tab: Overview / SLO =====================================================
-add(stat(100, "Loops healthy", "HEALTHY when no selected loop is staler than 2x its OWN 6h baseline (max freshness_ratio < 2). Self-relative — won't read STALE just because a slow log-export loop is legitimately tens of minutes behind. Needs the recording rules pushed.",
-         'max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=HEALTHY_MAP))
+add(stat(100, "Loops healthy", "HEALTHY when no selected loop is staler than 2x its OWN 6h baseline (max freshness_ratio < 2) AND none is older than the 3h absolute ceiling of GenaiOtelBridgePollerStale (a long stall absorbs the self-relative baseline, so the ratio alone turns green again). Self-relative — won't read STALE just because a slow log-export loop is legitimately tens of minutes behind. Needs the recording rules pushed.",
+         '(max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2) * (max(time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})) < bool 10800)', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=HEALTHY_MAP))
 add(stat(101, "Leader present", "1 (PRESENT) if any selected loop exported a timestamp in the last 15m. ABSENT => leader gone / never emitted (distinct from stale). Inline — no recording rule required.",
          'max(present_over_time(genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"}[15m]))', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=PRESENT_MAP))
 add(stat(102, "Replicas emitting", "Distinct service_instance_id self-reporting genai_otel_bridge_leader_ratio (every replica records it from startup). <2 => no standby (GenaiOtelBridgeNoStandby). 2 is the healthy HA steady state.",
@@ -189,6 +189,11 @@ add(ts(138, "Bucket revision lateness (age p50/p95)", "histogram_quantile over g
        "s", [(f'histogram_quantile(0.50, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{LOOP}[{RI}])))', "p50 {{loop}}"),
              (f'histogram_quantile(0.95, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{LOOP}[{RI}])))', "p95 {{loop}}")], fillop=0))
 
+add(ts(139, "Loops degraded (state gauge)", "genai_otel_bridge_loop_degraded_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). 1 while a loop is held in the degraded state, labelled by the degrade reason; 0 after the clearing commit. Sustained 1 for 15m => GenaiOtelBridgeLoopDegraded.",
+       "short", [(f'max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio{LOOP})', "{{loop}} / {{reason}}")], thresholds=steps((None, "green"), (1, "red"))))
+add(ts(146, "Partial-success rejects (10m increase) by plane", "increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]) by plane. Data points / log records the gateway rejected inside a 200 partial_success response: the emit looked successful, so this is the only signal. Any non-zero => GenaiOtelBridgePartialSuccessRejected.",
+       "short", [('sum by (plane) (increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]))', "{{plane}}")], thresholds=steps((None, "green"), (1, "red"))))
+
 # === Tab: Upstream source health =============================================
 add(ts(140, "Upstream request rate by target & status", "histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds)) by target (source API host) & status_class. The poller's own pull traffic to vendor APIs.",
        "reqps", [(f'sum by (target, status_class) (histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds[{RI}])))', "{{target}} {{status_class}}")], calcs=["lastNotNull"]))
@@ -202,7 +207,7 @@ add(ts(143, "Auth errors /s (401/403)", "rate(genai_otel_bridge_auth_errors_tota
        "cps", [(f'sum by (loop, source) (rate(genai_otel_bridge_auth_errors_total{LOOP}[{RI}]))', "{{loop}} / {{source}}")]))
 add(ts(144, "Source capability outcomes /s", "rate(genai_otel_bridge_source_capability_total) by loop, graph, and state. permission-denied means the capability cannot be used; GenaiOtelBridgeWorkspaceScopePermissionDenied covers workspace_scope. endpoint-absent and plan-unsupported are valid reserved states but currently producerless, so no series distinguishes them; a single 404 remains ambiguous and steady versus intermittent increments require query-time judgement.",
        "cps", [(f'sum by (loop, graph, state) (rate(genai_otel_bridge_source_capability_total{LOOP}[{RI}]))', "{{loop}} / {{graph}} / {{state}}")]))
-add(ts(145, "Source data incompleteness /s", "rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason. window_truncated is a counted dropped-records gap; export_failed/export_stuck mean the export pipeline cannot produce data. GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.",
+add(ts(145, "Source data incompleteness /s", "rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason. window_truncated (LangSmith runs only) is a counted dropped-records gap; export_failed/export_stuck mean the export pipeline cannot produce data; window_oversize is a parked Portkey logs_export window (nothing dropped, shrink settings.window). GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.",
        "cps", [(f'sum by (loop, reason) (rate(genai_otel_bridge_source_data_incomplete_total{LOOP}[{RI}]))', "{{loop}} / {{reason}}")]))
 
 # === Tab: Cardinality & governance ===========================================
@@ -262,8 +267,8 @@ tabs = [
         gi("panel-120"), gi("panel-121"), gi("panel-122"), gi_repeat("panel-123"),
     ], cols=2)),
     tab("Emit pipeline", auto_grid([
-        gi(f"panel-{i}") for i in range(130, 139)
-    ], cols=3)),
+        gi(f"panel-{i}") for i in range(130, 140)
+    ] + [gi("panel-146")], cols=3)),
     tab("Upstream source health", auto_grid([
         gi(f"panel-{i}") for i in range(140, 146)
     ], cols=2)),

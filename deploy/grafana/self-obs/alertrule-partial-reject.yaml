@@ -1,0 +1,57 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: genai-otel-bridge-partial-reject
+  annotations:
+    grafana.app/folder: genai-otel-bridge
+  labels:
+    grafana.app/folder: genai-otel-bridge
+spec:
+  title: GenaiOtelBridgePartialSuccessRejected
+  # The OTLP gateway answered 200 but rejected some data points or log records through a partial_success
+  # response. That bypasses the 4xx reject taxonomy (the emit call returned success, the checkpoint
+  # advances), so genai_otel_bridge_emit_partial_success_rejected_total is its only alertable signal.
+  # Any increase is data the gateway did not store.
+  execErrState: Ok
+  noDataState: Ok
+  for: 0s
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "genai-otel-bridge gateway rejected {{ $labels.plane }} records through a 200 partial_success"
+    description: "genai_otel_bridge_emit_partial_success_rejected_total increased for the {{ $labels.plane }} plane in the last 10m: the OTLP gateway answered 200 but rejected some data points or log records (partial_success), so the loop advanced past them. Check the gateway limits (cardinality, label length, sample age) and the pod logs for the rejection message. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 11m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'sum by (plane) (increase(genai_otel_bridge_emit_partial_success_rejected_total[10m])) > 0'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

@@ -1,6 +1,6 @@
 # genai-otel-bridge Grafana resources (gcx resources-as-code)
 
-Grafana-managed alert/recording rules (and dashboards, when added) live here as **gcx-native
+Grafana-managed alert rules, recording rules and a dashboard live here as **gcx-native
 resource manifests** — the same shape `gcx resources pull` produces — so they can be applied
 directly with `gcx resources push`. (This replaces the old Prometheus-rule-group
 `dashboards/recording-rules.yaml`.)
@@ -13,7 +13,7 @@ see `test/eks/README.md`), NOT by stack name. The manifests are **stack-agnostic
 
 | Dir | Role | Holds |
 |-----|------|-------|
-| `self-obs/` | the integrator's own o11y (`genai_otel_bridge_*`) | folder, the dropped-records **alert**, self recording rules |
+| `self-obs/` | the integrator's own o11y (`genai_otel_bridge_*`) | folder, the self-obs dashboard (`dashboard-self-obs.yaml`), the alert rules (see Self-obs alerts below) and the self recording rules |
 | `product/` | product telemetry (`portkey_api_*`, `langsmith_*`) | folder, portkey + langsmith recording rules |
 
 `gcx` auto-detects kind from each file's `apiVersion`/`kind`, so the flat per-role layout is enough.
@@ -54,7 +54,7 @@ threshold alerts/panels rely on the recording rules being present). Re-pull to r
 | Profiling | the poller's OWN Pyroscope profiles (`service_name=genai-otel-bridge`): CPU, heap in-use, goroutines, CPU flame graph |
 
 Three datasource variables — `${datasource}` (Prometheus, `grafanacloud-prom`), `${loki}`
-(`grafanacloud-logs`), `${pyroscope}` (`grafanacloud-profiles`) — plus a multi `$loop`. Stack-agnostic;
+(`grafanacloud-logs`), `${pyroscope}` (`grafanacloud-profiles`) — plus a multi `$loop` and a multi `$namespace` (a Loki label-values query; the Logs panels use it). Stack-agnostic;
 pick the datasources per stack. Push: `gcx resources push -p deploy/grafana/self-obs --context
 <self-obs-stack>` (push the `Folder` first, or the dashboard 404s on the missing folder).
 
@@ -76,22 +76,24 @@ generator, then `just gen-dashboard` and commit the emitted YAML. gcx 0.3.x requ
 
 ## Self-obs alerts
 
-The `self-obs/` dir ships **thirteen** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
+The `self-obs/` dir ships **sixteen** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
 
 | Alert | Severity | Fires when |
 |-------|----------|------------|
 | `GenaiOtelBridgeLeaderAbsent` | critical | `absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m])` or no replica reporting `genai_otel_bridge_leader_ratio == 1` — no replica has emitted in 15m, or none can lead (poller down / never reached a first commit / lease unavailable). |
-| `GenaiOtelBridgePollerStale` | warning | a loop's last-success age exceeds **2× its own trailing-6h p90 baseline AND 300s** — staler than normal *for that loop*. Self-relative, so it does not false-positive on the slow log-export loops (see below). |
+| `GenaiOtelBridgePollerStale` | warning | a loop's last-success age exceeds **2× its own trailing-6h p90 baseline AND 300s** — staler than normal *for that loop* — **OR exceeds the 3h absolute ceiling**. The relative arm is self-relative, so it does not false-positive on the slow log-export loops; the ceiling keeps a permanent stall firing (see below). |
 | `GenaiOtelBridgeEmitFailing` | critical | fatal emit errors (`retryable_exhausted`/`checkpoint_*`/`granularity_unexpected`/`bad_encoding`/`unknown_4xx`; the benign `collect` upstream-fetch retries are excluded) in 10m. `unknown_4xx` = an unrecognised non-retryable 4xx from the OTLP gateway (e.g. a rotated/invalid emit token). |
 | `GenaiOtelBridgeAuthErrors` | critical | `increase(genai_otel_bridge_auth_errors_total[10m]) > 0` — upstream returned 401/403 (credential failure). |
 | `GenaiOtelBridgeUpstreamErrorBudget` | warning | >20% of requests to an upstream `target` are 4xx/5xx/error (incl. timeouts) over 10m. |
-| `GenaiOtelBridgeWindowTruncatedDroppingRecords` | warning | a windowed log loop truncated a window — records dropped (see below). |
-| `GenaiOtelBridgeExportPipelineDataIncomplete` | critical | `source_data_incomplete_total{reason=~"export_failed\|export_stuck"}` increased in 15m — the export pipeline cannot produce its target's data (see below). |
+| `GenaiOtelBridgeWindowTruncatedDroppingRecords` | warning | the LangSmith `runs` loop truncated a window — records dropped (see below). |
+| `GenaiOtelBridgeExportPipelineDataIncomplete` | critical | `source_data_incomplete_total{reason=~"export_failed\|export_stuck\|window_oversize"}` increased in 15m — the export pipeline cannot produce its target's data, or a `logs_export` window is parked (see below). |
 | `GenaiOtelBridgeWorkspaceScopePermissionDenied` | critical | `source_capability_total{graph="workspace_scope",state="permission-denied"}` increased in 15m — configured credential and expected workspace scope disagree (see below). |
 | `GenaiOtelBridgeDataLoss` | warning | samples skipped for a real-loss reason (`too_old`/`payload_too_large`/`duplicate_timestamp`); benign reasons excluded. |
 | `GenaiOtelBridgeBucketRevisedAfterSettle` | warning | >30 settled buckets/h still changing after `bucket_settle` — late arrivals; widen the loop's `bucket_settle`. |
 | `GenaiOtelBridgeQueueBackpressure` | warning | `genai_otel_bridge_queue_depth_ratio > 0` sustained 15m — emit can't keep up with collect. |
 | `GenaiOtelBridgeCardinalitySpike` | warning | sustained creation of new label-value combos on a series — a cardinality early-warning. |
+| `GenaiOtelBridgeLoopDegraded` | warning | `max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio) == 1` for 15m — a loop is held in the degraded state. The gauge has OTLP unit `1`, so the gateway exposes it with the `_ratio` suffix (as for `queue_depth`). |
+| `GenaiOtelBridgePartialSuccessRejected` | warning | `increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]) > 0` — the gateway rejected records inside a 200 `partial_success` response (the emit looked successful; this counter is the only signal). |
 | `GenaiOtelBridgeNoStandby` | warning | fewer than 2 replicas self-reporting `genai_otel_bridge_leader_ratio` — no failover headroom (expected on intentionally single-replica dev stacks). |
 | `GenaiOtelBridgeMemoryNearLimit` | warning | `genai_otel_bridge_go_heap_inuse_bytes` above 85% of `genai_otel_bridge_go_memory_limit_bytes` for 15m. |
 
@@ -103,22 +105,35 @@ legitimately sawtooth to tens of minutes. The self-relative rule (`> 2× own-6h-
 15m`) dropped that to a handful of isolated transient points that the `for` suppresses, while keeping
 full sensitivity for snapshot loops (`sessions`, normally ~2m). Tune the `2×` multiplier per appetite.
 
+The relative arm alone resolves itself during a permanent stall: once the stall is longer than about 36
+minutes (10% of the 6h window) the trailing p90 is itself a stalled sample, the condition collapses to
+`age < 72m`, and the alert clears while the loop is still dead (a loop whose healthy age reaches 30
+minutes never leaves Pending). So the rule has a second arm, `or age > 10800` (3h, same `for: 15m`),
+above the slowest healthy sawtooth of any loop. It is the backstop the relative arm cannot erase; it adds
+no metric. `self-obs/sim_poller_stale.py` is the minute-resolution simulation (no rule test harness
+exists): it reports the base condition false from about 70 minutes on and the candidate true to the end of
+a 24h stall for healthy ages of 2, 10, 30 and 50 minutes. The dashboard "Loops healthy" badge also goes red
+when any selected loop's age exceeds the same ceiling.
+
 ## The dropped-records alert
 
-`GenaiOtelBridgeWindowTruncatedDroppingRecords` fires (`severity: warning`) when a windowed log loop
-(`runs`, `logs_export`) truncates a window — it advanced past undrained records with a counted gap,
-so records were dropped. Query: `sum by (loop) (increase(genai_otel_bridge_source_data_incomplete_total{reason="window_truncated"}[10m])) > 0`.
+`GenaiOtelBridgeWindowTruncatedDroppingRecords` fires (`severity: warning`) when the LangSmith `runs`
+loop truncates a window — it advanced past undrained records with a counted gap, so records were
+dropped. Only `runs` emits `window_truncated`; the Portkey `logs_export` loop parks an oversize window
+instead (see the export-pipeline alert below). Query: `sum by (loop) (increase(genai_otel_bridge_source_data_incomplete_total{reason="window_truncated"}[10m])) > 0`.
 The truncated COUNT is unknowable by construction (we stop at the page cap), so it's an event signal.
-Remedy: raise the loop's `settings.max_pages_per_window` or shrink `settings.window`.
+Remedy: raise `settings.max_pages_per_window` or shrink `settings.window` on the `runs` loop.
 
 ## Export-pipeline data incompleteness alert
 
 `GenaiOtelBridgeExportPipelineDataIncomplete` fires (`severity: critical`) when
-`genai_otel_bridge_source_data_incomplete_total` increases in 15m with `reason=export_failed` or
-`reason=export_stuck`. Both mean the export-job lifecycle cannot produce the target's data; check the
-export-job status and retry/backoff behaviour.
+`genai_otel_bridge_source_data_incomplete_total` increases in 15m with `reason=export_failed`, `reason=export_stuck` or `reason=window_oversize`. The first two mean the export-job
+lifecycle cannot produce the target's data; check the export-job status and retry/backoff behaviour.
+`window_oversize` means a Portkey `logs_export` window needed more pages than
+`settings.max_pages_per_window`: the loop fires the counter once, parks the window and stops advancing.
+Nothing was dropped. Shrink `settings.window`; the block clears when the window changes.
 
-Query: `sum by (loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck"}[15m])) > 0`.
+Query: `sum by (loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck|window_oversize"}[15m])) > 0`.
 
 ## Workspace-scope permission alert
 

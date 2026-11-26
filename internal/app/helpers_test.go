@@ -20,6 +20,19 @@ func (telemetryAdapter) ObserveUpstreamRequest(string, string, int, error, time.
 func (telemetryAdapter) ObserveEmitRequest(string, int, error, time.Duration)             {}
 func (telemetryAdapter) ObserveEmitPartialReject(string, int64)                           {}
 
+// ScopeState and ScopeAssertion forward to the wrapped metrics when they have them, as SeedLoop does.
+func (a telemetryAdapter) ScopeState(state string) {
+	if s, ok := a.Metrics.(interface{ ScopeState(string) }); ok {
+		s.ScopeState(state)
+	}
+}
+
+func (a telemetryAdapter) ScopeAssertion(result string) {
+	if s, ok := a.Metrics.(interface{ ScopeAssertion(string) }); ok {
+		s.ScopeAssertion(result)
+	}
+}
+
 // SeedLoop forwards to the wrapped metrics when they have the optional capability, so a recorder such
 // as seed_test.go's seedRecorder still sees Build's seeding through the adapter.
 func (a telemetryAdapter) SeedLoop(id schedule.LoopID, hookLoop string) {

@@ -161,6 +161,7 @@ func newGroupsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps source
 		pageSize: gs.pageSize, maxGroups: gs.maxGroups,
 		metadataKeys: gs.metadataKeys, emitCost: gs.emitCost, emitPrompts: gs.emitPrompts,
 		expectedWorkspace: gs.expectedWS,
+		workspaceSlug:     cfg.Scope.Name,
 		passes:            passes,
 		onCapability:      deps.OnCapability,
 		onDataIncomplete:  deps.OnDataIncomplete,
@@ -187,6 +188,7 @@ type groupsLoop struct {
 	emitPrompts               bool
 	authFailed                bool   // an endpoint saw 401/403 in the current Collect (single-flight, so unsynchronised) [#537]
 	expectedWorkspace         string // optional key-scope guardrail (settings.expected_workspace); see scope.go
+	workspaceSlug             string // the source's scope name, sent as workspace_slug on every page; empty (no scope) sends none
 	// passes is the set of filtered passes to run each Collect. Empty use-cases ⇒ a single pass with
 	// slug "" and the legacy settings.api_key_ids filter (backward compatible). Each pass stamps its slug.
 	// Key() is NOT folded with the slug — one instance, one watermark (M7 ownership invariant).
@@ -475,6 +477,9 @@ func (l *groupsLoop) fetchPage(ctx context.Context, path string, from, until tim
 	q.Set("current_page", strconv.Itoa(page))
 	if apiKeyIDs != "" { // scope to specific api keys, as the notebook does (empty ⇒ workspace-wide)
 		q.Set("api_key_ids", apiKeyIDs)
+	}
+	if l.workspaceSlug != "" { // the source's scope (design §5.1); with none the query is unchanged
+		q.Set("workspace_slug", l.workspaceSlug)
 	}
 	u.RawQuery = q.Encode()
 

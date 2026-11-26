@@ -12,8 +12,9 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
 
 ## Factories (`factories.go`)
 
-- `PipelineTelemetry` is `schedule.Metrics` plus `ObserveUpstreamRequest`, `ObserveEmitRequest` and
-  `ObserveEmitPartialReject`. `*selfobs.Metrics` satisfies it, so this package does not import
+- `PipelineTelemetry` is `schedule.Metrics` plus `ObserveUpstreamRequest`, `ObserveEmitRequest`,
+  `ObserveEmitPartialReject` and the scope gate's two signals, `ScopeState` and `ScopeAssertion`
+  (`noopTelemetry` has no-op ones). `*selfobs.Metrics` satisfies it, so this package does not import
   `selfobs`. `SeedLoop` stays an optional capability: `BuildFromPlan` type-asserts it on each row's
   `PipelineTelemetry` value, so an adapter that wraps another value must forward it
   (`helpers_test.go`'s `telemetryAdapter` does).
@@ -35,7 +36,7 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
 - `ValidateConfigFile` validates and resolves the plan itself, then passes it to `BuildFromPlan`
   with an inert emitter factory and `noopTelemetry`.
 - `Options.Secrets` (`tenancy.SecretReader`) reads the secret files a row names. A legacy row names
-  none, so `nil` is fine for it.
+  none, so `nil` is fine for it. `Options.Now` is the clock of every scope gate (nil: `time.Now`).
 
 ## Build order (three passes, and the order is load-bearing)
 
@@ -48,7 +49,14 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
    `Source.Auth.Value`, `TokenFile` into `Destination.Token`, on a copy of the row) through
    `opts.Secrets`; a read error, or a nil reader for a row that names a file, fails the build with the
    tenant and file named and no value. Then the row's telemetry, its `source.Deps` (a source takes its
-   hooks when it is built), its source and loops, the loop-name typo check and the stream-label budget.
+   hooks when it is built), its source and loops, the loop-name typo check, the row's scope gate
+   (`rowScopeGate`, `pipeline.go`) and the stream-label budget. `rowScopeGate` refuses, in every row, a
+   loop named `scope-match` (the reserved remembered-match loop name, design §7). A row with no scope
+   (a zero `Source.Scope`, every legacy row) gets no gate. A row with a scope (a name or an id) fails
+   unless its source is a `source.ScopeAsserter`, so a scope is never collected unchecked, and gets one
+   gate: `Store` the checkpointer, `Digest` `ScopeMatchDigest(KeyFingerprint(Auth.Value), name, id)` of
+   the key read in this pass, `Now` `opts.Now`, and its hooks the row's `ScopeAssertion` and
+   `ScopeState`.
    Loops are built **before** the guards so the per-loop content denylist can be keyed by each loop's
    real identity (`CheckpointKey.String()`), which `SanitizeLogs` receives.
 4. **Pass 2, per group** of rows sharing a stack (`tenancy.StackKey` of endpoint and instance id)
@@ -58,8 +66,8 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
    group: one ownership check and one guard, as before.
 5. **Pass 3, per row** (`pipeline.go`, the only production caller of `schedule.NewLoopRunner`): one
    emitter from the row's destination, identity and telemetry, and one runner and `LoopSpec` per
-   loop with `Metrics` the row's telemetry and `Pipeline` the row's tenant and pipeline id
-   (`WithPipeline`). Nothing at run time chooses a destination.
+   loop with `Metrics` the row's telemetry, `Pipeline` the row's tenant and pipeline id
+   (`WithPipeline`) and `Gate` the row's one gate (nil with no scope). Nothing at run time chooses a destination.
 6. The `ha.coordinator=none` epoch auto-heal over every row's loops, then seeding: `SeedLoop` is
    asserted on each row's telemetry and seeds that row's loops only.
 
@@ -116,7 +124,9 @@ because struct-built test configs bypass `config.Load`'s defaulting.
 `minimalConfig()` plus fake source and fake OTLP gateway `httptest.Server`s. Tests call
 `Build(ctx, cfg, cp, coord, ef, tf, Options{})` with `ef, tf := fixedFactories(em, m)`, which wraps a
 fixed emitter and any `schedule.Metrics` (observers are no-ops). `assembly_test.go` builds hand-made
-plan rows through `BuildFromPlan` with a recording emitter factory (`specRecorder`). The
+plan rows through `BuildFromPlan` with a recording emitter factory (`specRecorder`). A test that needs a
+source no vendor package provides sets the package variable `testSourceTypes` (and resets it in
+`t.Cleanup`); production never sets it. The
 `acceptance`-tagged `TestLegacyPayloadGolden` pins a legacy install's OTLP bytes in
 `testdata/legacy-payload.bin` (generated with `-update` on the unit 3b-1 commit; regenerate only for a
 deliberate wire change). The `acceptance` build

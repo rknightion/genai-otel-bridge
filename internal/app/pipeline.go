@@ -22,6 +22,8 @@ type pipeline struct {
 	src   source.Source
 	loops []loopConfigured
 	guard *source.Guard
+	// gate is the row's scope gate (pass 1, rowScopeGate): nil for a row with no scope.
+	gate *source.ScopeGate
 }
 
 // specs is assembly pass 3 (design §4, §5.2): the only production code that puts a loop and an emitter
@@ -44,10 +46,43 @@ func (p *pipeline) specs(cfg *config.Config, cp checkpoint.Checkpointer, ef Emit
 		specs = append(specs, schedule.LoopSpec{
 			Runner: runner, Loop: l.loop, Cadence: time.Duration(l.cfg.Cadence), MaxBackfill: time.Duration(l.cfg.MaxBackfill),
 			Window: time.Duration(l.cfg.Window), MaxCatchupPerTick: cfg.Governance.MaxCatchupPerTick,
-			Metrics: p.t, Pipeline: pl,
+			Metrics: p.t, Pipeline: pl, Gate: p.gate,
 		})
 	}
 	return specs
+}
+
+// rowScopeGate is assembly pass 1's scope step for one row (design §5.1, §7), after the row's source is
+// built. It refuses, in every row, a loop named source.ScopeMatchLoop: that name keys the pipeline's
+// remembered match, so a vendor loop under it could overwrite the match or be read as one. A row with no
+// scope (every legacy row) gets no gate. A row with a scope, meaning a name or an id, fails unless its
+// source implements source.ScopeAsserter; it gets one gate, which pass 3 sets on every one of its specs.
+// The gate remembers its match in cp under the row's source instance, with the digest of the fingerprint
+// of the API key the source sends (the row's, after its secret files were read), the scope name and the
+// scope id; it reads the clock now (nil: time.Now) and reports through the row's telemetry.
+func rowScopeGate(row tenancy.Row, src source.Source, t PipelineTelemetry, cp checkpoint.Checkpointer, now func() time.Time) (*source.ScopeGate, error) {
+	for _, lp := range src.Loops() {
+		if lp.Key().Loop == source.ScopeMatchLoop {
+			return nil, fmt.Errorf("source %q (type %q): %s is a reserved loop name (the pipeline's remembered scope match); no source may build a loop under it", row.Source.SourceInstance, row.Source.Type, source.ScopeMatchLoop)
+		}
+	}
+	scope := row.Source.Scope
+	if scope == (config.ScopeConfig{}) {
+		return nil, nil
+	}
+	asserter, ok := src.(source.ScopeAsserter)
+	if !ok {
+		return nil, fmt.Errorf("source %q (type %q) has a scope, but the source type cannot assert one (it does not implement source.ScopeAsserter); a scope is never collected unchecked", row.Source.SourceInstance, row.Source.Type)
+	}
+	return source.NewScopeGate(source.ScopeGateConfig{
+		Asserter:       asserter,
+		Store:          cp,
+		SourceInstance: row.Source.SourceInstance,
+		Digest:         source.ScopeMatchDigest(source.KeyFingerprint(row.Source.Auth.Value), scope.Name, scope.ID),
+		Now:            now,
+		OnResult:       t.ScopeAssertion,
+		OnState:        t.ScopeState,
+	}), nil
 }
 
 // pipelineIdentity is the resource identity a row's emitter stamps: the row's own identity map, plus

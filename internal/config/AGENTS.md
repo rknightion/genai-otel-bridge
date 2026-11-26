@@ -124,6 +124,11 @@ constructor, as `portkey.New` does. The 90m is sized to the Grafana Cloud Mimir
 
 ## Other keys
 
+- `SourceConfig.Scope` (`ScopeConfig{Name, ID}`) is **not a key**: it is tagged `yaml:"-"`, so the strict
+  decoder rejects it in a file and the chart generator skips it. Only the plan package fills it, for a
+  tenant-shape target (multi-tenancy design §2, §5.1). The zero value is no scope, as on every legacy
+  source.
+
 - `governance.allow_label_keys` - extra content-free indexed/label keys the operator adds on top of
   each vendor package's declared keys. `internal/app` unions and dedupes them and rejects a
   content-floor key fail-fast. **GS1 limitation**, documented on the field doc-comment so it reaches

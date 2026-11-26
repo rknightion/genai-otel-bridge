@@ -14,14 +14,19 @@ import (
 )
 
 // PipelineTelemetry is the self-telemetry one pipeline records through: the scheduler and runner seam
-// plus the three request observers the emitter and the source HTTP client feed. *selfobs.Metrics (and
-// its With copies) satisfies it, so this package still does not import selfobs. SeedLoop stays an
-// optional capability: Build type-asserts it on the PipelineTelemetry value it is given.
+// plus the three request observers the emitter and the source HTTP client feed, and the two signals of
+// the pipeline's scope gate (a row with a scope has one). *selfobs.Metrics (and its With copies)
+// satisfies it, so this package still does not import selfobs. SeedLoop stays an optional capability:
+// Build type-asserts it on the PipelineTelemetry value it is given.
 type PipelineTelemetry interface {
 	schedule.Metrics
 	ObserveUpstreamRequest(target, method string, statusCode int, err error, d time.Duration)
 	ObserveEmitRequest(plane string, statusCode int, err error, d time.Duration)
 	ObserveEmitPartialReject(plane string, rejected int64)
+	// ScopeState records the gate's state: matched, unverified, mismatched, or "" for no result.
+	ScopeState(state string)
+	// ScopeAssertion counts one assertion call by result: matched, mismatch, unverifiable or error.
+	ScopeAssertion(result string)
 }
 
 // noopTelemetry records nothing. ValidateConfigFile passes it, so the config check builds the app
@@ -31,6 +36,8 @@ type noopTelemetry struct{ schedule.NoopMetrics }
 func (noopTelemetry) ObserveUpstreamRequest(string, string, int, error, time.Duration) {}
 func (noopTelemetry) ObserveEmitRequest(string, int, error, time.Duration)             {}
 func (noopTelemetry) ObserveEmitPartialReject(string, int64)                           {}
+func (noopTelemetry) ScopeState(string)                                                {}
+func (noopTelemetry) ScopeAssertion(string)                                            {}
 
 // TelemetryFactory returns the telemetry hooks for one tenant and pipeline. Both are empty in the
 // legacy shape, where the hooks must record exactly today's label sets.
@@ -54,6 +61,8 @@ type Options struct {
 	// Secrets reads the secret files a tenant-shape row names (AuthValueFile, TokenFile) at assembly.
 	// nil is fine for a plan whose rows name no file, which every legacy row is.
 	Secrets tenancy.SecretReader
+	// Now is the clock of every scope gate BuildFromPlan builds; nil means time.Now.
+	Now func() time.Time
 }
 
 // partialRejectLimitKey is the rate-limit key of the partial-reject warning. With no pipeline it is

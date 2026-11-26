@@ -806,3 +806,13 @@ sources:
 		t.Fatalf("unset emit.telemetry.metric_interval should pass: %v", err)
 	}
 }
+
+// TestSourceScopeNotSettableFromFile (#526): SourceConfig.Scope is yaml:"-". Only the plan package fills
+// it, so a config file that names a scope on a source is refused by the strict decoder, not loaded with a
+// scope nobody resolved.
+func TestSourceScopeNotSettableFromFile(t *testing.T) {
+	_, err := LoadBytes([]byte("sources:\n  - type: portkey\n    enabled: true\n    source_instance: pk\n    scope:\n      name: ws-a\n      id: ws-id-a\n"))
+	if err == nil || !strings.Contains(err.Error(), "field scope not found") {
+		t.Fatalf("a scope in a config file must be refused as an unknown field, got %v", err)
+	}
+}

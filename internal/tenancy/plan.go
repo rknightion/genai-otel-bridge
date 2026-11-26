@@ -121,8 +121,8 @@ func (p Plan) Table() string {
 			r.Target,
 			r.Source.Type,
 			displayURL(r.Source.BaseURL),
-			"", // scope name: the scope is filled from unit 4b
-			"", // scope id
+			r.Source.Scope.Name, // "-" for a row with no scope, as every legacy row is
+			r.Source.Scope.ID,
 			pipeline,
 			r.DestinationName,
 			displayURL(r.Destination.Endpoint),

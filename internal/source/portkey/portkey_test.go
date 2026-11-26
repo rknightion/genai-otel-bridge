@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -623,5 +624,140 @@ func TestCollectNeverSelectsContentFields(t *testing.T) {
 		if strings.Contains(sawQuery, bad) {
 			t.Fatalf("content field %q appeared in query %q (FR10 violation)", bad, sawQuery)
 		}
+	}
+}
+
+// legacyURLConfig is an unscoped source with the analytics and groups loops, against baseURL, with the
+// given per-loop settings.
+func legacyURLConfig(baseURL string, analytics, groups map[string]string) config.SourceConfig {
+	return config.SourceConfig{
+		Type: "portkey", Enabled: true, BaseURL: baseURL, SourceInstance: "pk-test",
+		Auth:      config.AuthConfig{Header: "x-portkey-api-key", Value: "k"},
+		RateLimit: config.RateLimitConfig{RPS: 1000, Burst: 1000},
+		HTTP:      config.HTTPConfig{AllowPrivate: true},
+		Loops: map[string]config.LoopConfig{
+			"analytics": {
+				Enabled: true, Cadence: config.Duration(time.Minute), Window: config.Duration(50 * time.Minute),
+				BucketSettle: config.Duration(3 * time.Minute), BootstrapLookback: config.Duration(50 * time.Minute),
+				MaxBackfill: config.Duration(55 * time.Minute), MetricPrefix: "portkey_api",
+				Graphs: []string{"requests", "latency"}, Settings: analytics,
+			},
+			"groups": {Enabled: true, Cadence: config.Duration(5 * time.Minute), MetricPrefix: "portkey_api", Settings: groups},
+		},
+	}
+}
+
+// uriRecorder is a fake Portkey answering every analytics and groups request with a small valid body
+// (the workspace grouping with one workspace, ws-acme-001) and recording each request URI (path and
+// raw query) in arrival order.
+type uriRecorder struct {
+	*httptest.Server
+	mu   sync.Mutex
+	uris []string
+}
+
+func newURIRecorder(t *testing.T, bucket time.Time) *uriRecorder {
+	t.Helper()
+	f := &uriRecorder{}
+	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.uris = append(f.uris, r.URL.RequestURI())
+		f.mu.Unlock()
+		switch {
+		case strings.Contains(r.URL.Path, "/analytics/graphs/"):
+			_ = json.NewEncoder(w).Encode(graphResponse{DataPoints: []dataPoint{{Timestamp: bucket.Format(time.RFC3339), Total: 1}}})
+		case strings.HasSuffix(r.URL.Path, "/analytics/groups/workspace"):
+			_, _ = w.Write([]byte(`{"object":"list","total":1,"data":[{"workspace":"ws-acme-001","requests":1}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"object":"list","total":0,"data":[]}`))
+		}
+	}))
+	t.Cleanup(f.Close)
+	return f
+}
+
+func (f *uriRecorder) take() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.uris
+	f.uris = nil
+	return out
+}
+
+// TestLegacyRequestURLsUnchanged pins the request URLs of an unscoped (legacy) source byte for byte: the
+// analytics graphs with and without api_key_ids, the groups pages with and without api_key_ids, and the
+// legacy expected_workspace check. The literals were copied from a run on the base commit of unit 4b
+// (#526), before the workspace slug existed; a scope must add the slug and change nothing else, and no
+// scope must change nothing at all. The analytics URL is hand-built on purpose: url.Values.Encode would
+// sort its keys and escape the timestamps' colons.
+func TestLegacyRequestURLsUnchanged(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 10, 30, 0, time.UTC)
+	f := newURIRecorder(t, now.Add(-20*time.Minute))
+	const (
+		window    = "time_of_generation_min=2026-06-18T11:34:00Z&time_of_generation_max=2026-06-18T12:07:00Z"
+		groupsWin = "current_page=0&page_size=100&time_of_generation_max=2026-06-18T12%3A00%3A30Z&time_of_generation_min=2026-06-18T11%3A10%3A30Z"
+		wsCheck   = "/v1/analytics/groups/workspace?current_page=0&page_size=100&time_of_generation_max=2026-06-18T12%3A10%3A30Z&time_of_generation_min=2026-06-11T12%3A10%3A30Z"
+	)
+	cases := []struct {
+		name              string
+		analytics, groups map[string]string
+		want              map[string][]string // loop -> request URIs of one Collect, in order
+	}{
+		{"plain", nil, map[string]string{"page_size": "100"}, map[string][]string{
+			"analytics": {
+				"/v1/analytics/graphs/latency?" + window,
+				"/v1/analytics/graphs/requests?" + window,
+			},
+			"groups": {
+				"/v1/analytics/groups/ai-models?" + groupsWin,
+				"/v1/analytics/groups/prompt?" + groupsWin,
+			},
+		}},
+		{"api_key_ids", map[string]string{"api_key_ids": " uuid-1 , uuid-2 "}, map[string]string{"page_size": "100", "api_key_ids": "uuid-1,uuid-2"}, map[string][]string{
+			"analytics": {
+				"/v1/analytics/graphs/latency?" + window + "&api_key_ids=uuid-1%2Cuuid-2",
+				"/v1/analytics/graphs/requests?" + window + "&api_key_ids=uuid-1%2Cuuid-2",
+			},
+			"groups": {
+				"/v1/analytics/groups/ai-models?api_key_ids=uuid-1%2Cuuid-2&" + groupsWin,
+				"/v1/analytics/groups/prompt?api_key_ids=uuid-1%2Cuuid-2&" + groupsWin,
+			},
+		}},
+		{"legacy workspace check", map[string]string{"expected_workspace": "ws-acme-001"}, map[string]string{"page_size": "100", "expected_workspace": "ws-acme-001"}, map[string][]string{
+			"analytics": {
+				wsCheck,
+				"/v1/analytics/graphs/latency?" + window,
+				"/v1/analytics/graphs/requests?" + window,
+			},
+			"groups": {
+				wsCheck,
+				"/v1/analytics/groups/ai-models?" + groupsWin,
+				"/v1/analytics/groups/prompt?" + groupsWin,
+			},
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src, err := New(legacyURLConfig(f.URL+"/v1", c.analytics, c.groups), source.Deps{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := src.(source.ScopeAsserter); ok {
+				t.Error("a source with no scope must not implement source.ScopeAsserter")
+			}
+			for _, lp := range src.Loops() {
+				if !SetLoopClockForTest(lp, func() time.Time { return now }) {
+					t.Fatalf("no clock for loop %s", lp.Key().Loop)
+				}
+				f.take()
+				if _, err := lp.Collect(context.Background(), model.Watermark{Time: now.Add(-30 * time.Minute)}); err != nil {
+					t.Fatal(err)
+				}
+				got, want := f.take(), c.want[lp.Key().Loop]
+				if strings.Join(got, "\n") != strings.Join(want, "\n") {
+					t.Errorf("%s request URIs changed:\n got %q\nwant %q", lp.Key().Loop, got, want)
+				}
+			}
+		})
 	}
 }

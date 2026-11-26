@@ -17,7 +17,7 @@ which adds the same two attributes to every runner log line; the runner's limite
 keys need no pipeline. The `Metrics` interface does not change.
 
 A spec can carry its pipeline's scope gate (`LoopSpec.Gate *source.ScopeGate`, unit 4a; nil means no gate
-and a tick exactly as without one). The tick asks it after the `Busy` check and before `Since`:
+and a tick exactly as without one; `internal/app` sets one gate on every spec of a row with a scope). The tick asks it after the `Busy` check and before `Since`:
 
 - `ScopeProceed` collects as usual.
 - `ScopeWait` ends the tick with no lag recorded, no unreadable time counted and nothing counted.

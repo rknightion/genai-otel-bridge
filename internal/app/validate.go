@@ -25,8 +25,15 @@ func newRegistry() *source.Registry {
 	reg := source.NewRegistry()
 	portkey.Register(reg)
 	langsmith.Register(reg)
+	if testSourceTypes != nil {
+		testSourceTypes(reg)
+	}
 	return reg
 }
+
+// testSourceTypes, when a test in this package sets it, registers extra source types after the built-in
+// ones, so an assembly test can build a source no vendor package provides. Production never sets it.
+var testSourceTypes func(*source.Registry)
 
 // knownSourceTypes is the source-type registry's known types, so config validation matches what the
 // running binary would accept.

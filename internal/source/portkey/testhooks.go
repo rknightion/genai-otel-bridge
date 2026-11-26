@@ -24,3 +24,25 @@ func SetLoopClockForTest(lp source.Loop, now func() time.Time) bool {
 	}
 	return true
 }
+
+// SetSourceClockForTest overrides the wall-clock of a Portkey source: its scope assertion's (when it has
+// a scope) and each of its loops'. Returns false if src is not a Portkey source or holds a loop
+// SetLoopClockForTest does not support. TEST-ONLY seam, like SetLoopClockForTest.
+func SetSourceClockForTest(src source.Source, now func() time.Time) bool {
+	var ps *portkeySource
+	switch s := src.(type) {
+	case *portkeySource:
+		ps = s
+	case *scopedSource:
+		s.now = now
+		ps = s.portkeySource
+	default:
+		return false
+	}
+	for _, lp := range ps.loops {
+		if !SetLoopClockForTest(lp, now) {
+			return false
+		}
+	}
+	return true
+}

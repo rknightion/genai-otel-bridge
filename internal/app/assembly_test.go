@@ -27,6 +27,7 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/logging"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 )
@@ -577,5 +578,313 @@ func TestBuildFromPlanSeedsEachRow(t *testing.T) {
 		if len(want) == 0 || fmt.Sprint(s.ids) != fmt.Sprint(want) {
 			t.Errorf("pipeline %s seeded %v, want its own loops %v", row.Pipeline, s.ids, want)
 		}
+	}
+}
+
+// Tests for unit 4b (#526): assembly gives every row with a scope one scope gate, and refuses a scoped
+// row whose source cannot assert its scope and any loop named scope-match.
+
+// scopedPortkey is a fake Portkey for scoped rows: the analytics graphs as newAssemblyPortkey serves
+// them, an empty page for every groups endpoint, and a workspace grouping whose only workspace is the
+// one its API key belongs to (workspaces). Each workspace-grouping request's key and slug are recorded.
+type scopedPortkey struct {
+	*httptest.Server
+	workspaces map[string]string
+	mu         sync.Mutex
+	asserts    [][2]string
+}
+
+func newScopedPortkey(t *testing.T, workspaces map[string]string) *scopedPortkey {
+	t.Helper()
+	f := &scopedPortkey{workspaces: workspaces}
+	graphs := newAssemblyPortkey(t)
+	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("x-portkey-api-key")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/analytics/groups/workspace"):
+			f.mu.Lock()
+			f.asserts = append(f.asserts, [2]string{key, r.URL.Query().Get("workspace_slug")})
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "total": 1, "is_quota_exceeded": false,
+				"data": []map[string]any{{"workspace": f.workspaces[key], "requests": 1}}})
+		case strings.Contains(r.URL.Path, "/analytics/groups/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "total": 0, "data": []any{}})
+		default:
+			graphs.Config.Handler.ServeHTTP(w, r)
+		}
+	}))
+	t.Cleanup(f.Close)
+	return f
+}
+
+func (f *scopedPortkey) assertions() [][2]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][2]string(nil), f.asserts...)
+}
+
+// scopedRow is tenantRow with a scope, its own API key and the groups loop beside analytics, so the
+// row has two loops to share one gate.
+func scopedRow(pkURL, tenant, target, endpoint, instanceID, key string, scope config.ScopeConfig) tenancy.Row {
+	r := tenantRow(pkURL, tenant, target, endpoint, instanceID)
+	r.Source.Auth.Value = key
+	r.Source.Scope = scope
+	r.Source.Loops["groups"] = config.LoopConfig{Enabled: true, Cadence: config.Duration(5 * time.Minute), MetricPrefix: "portkey_api",
+		Settings: map[string]string{"page_size": "100"}}
+	return r
+}
+
+// scopeTelemetry records the two scope signals a gate reports through its row's telemetry.
+type scopeTelemetry struct {
+	noopTelemetry
+	mu      sync.Mutex
+	states  []string
+	results []string
+}
+
+func (s *scopeTelemetry) ScopeState(state string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.states = append(s.states, state)
+}
+
+func (s *scopeTelemetry) ScopeAssertion(result string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.results = append(s.results, result)
+}
+
+func (s *scopeTelemetry) seen() (states, results []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.states...), append([]string(nil), s.results...)
+}
+
+// gatesBySource is every spec's gate, grouped by the spec's source instance.
+func gatesBySource(a *App) map[string][]*source.ScopeGate {
+	out := map[string][]*source.ScopeGate{}
+	for _, sp := range a.Specs() {
+		k := sp.Loop.Key().SourceInstance
+		out[k] = append(out[k], sp.Gate)
+	}
+	return out
+}
+
+// TestScopedRowWithoutCapabilityFails (AC6): a row with a scope whose source cannot assert it (the
+// langsmith source implements no source.ScopeAsserter) fails assembly, naming the row; the same row with
+// no scope builds. Fail-closed: a scope that cannot be checked is never collected unchecked.
+func TestScopedRowWithoutCapabilityFails(t *testing.T) {
+	ls := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{})
+	}))
+	t.Cleanup(ls.Close)
+	row := tenantRow(ls.URL, "tenant-a", "primary", "https://stack-a.example", "100")
+	row.Source = config.SourceConfig{
+		Type: "langsmith", Enabled: true, BaseURL: ls.URL, SourceInstance: tenancy.SourceInstance("tenant-a", "primary"),
+		Auth:      config.AuthConfig{Header: "x-api-key", Value: "k"},
+		RateLimit: config.RateLimitConfig{RPS: 1000, Burst: 1000},
+		HTTP:      config.HTTPConfig{AllowPrivate: true},
+		Loops: map[string]config.LoopConfig{"sessions": {
+			Enabled: true, Cadence: config.Duration(time.Minute), MetricPrefix: "langsmith",
+		}},
+	}
+	build := func(r tenancy.Row) error {
+		_, err := BuildFromPlan(context.Background(), minimalConfig(ls.URL), tenancy.Plan{Rows: []tenancy.Row{r}}, assemblyCheckpointer(t), coordinate.Noop{}, (&specRecorder{}).factory, noopTelemetryFactory, Options{})
+		return err
+	}
+	if err := build(row); err != nil {
+		t.Fatalf("the row with no scope must build: %v", err)
+	}
+	for _, scope := range []config.ScopeConfig{{Name: "ws-a", ID: "ws-id-a"}, {ID: "ws-id-a"}} {
+		row.Source.Scope = scope
+		err := build(row)
+		if err == nil || !strings.Contains(err.Error(), "scope") || !strings.Contains(err.Error(), row.Source.SourceInstance) {
+			t.Fatalf("scope %+v on a source that cannot assert it: want an error naming the scope and %s, got %v", scope, row.Source.SourceInstance, err)
+		}
+	}
+}
+
+// reservedSource is a fake source with one loop named loopName; it can assert its scope (always
+// Matched), so only the loop name decides whether a row of it assembles.
+type reservedSource struct{ loopName string }
+
+func (s reservedSource) ID() string           { return "reserved" }
+func (s reservedSource) Loops() []source.Loop { return []source.Loop{reservedLoop(s)} }
+func (s reservedSource) AssertScope(context.Context) (source.ScopeResult, error) {
+	return source.ScopeMatched, nil
+}
+
+type reservedLoop struct{ loopName string }
+
+func (l reservedLoop) Key() model.CheckpointKey {
+	return model.CheckpointKey{SourceInstance: "fake-src", Loop: l.loopName, OutputFingerprint: "f"}
+}
+func (l reservedLoop) Cadence() time.Duration { return time.Minute }
+func (l reservedLoop) SeriesNames() []string  { return []string{} }
+func (l reservedLoop) Collect(_ context.Context, since model.Watermark) (model.Batch, error) {
+	return model.Batch{Key: l.Key(), Watermark: since}, nil
+}
+
+// TestScopeMatchLoopNameFails (AC6): scope-match is the reserved loop name of a pipeline's remembered
+// match (design §7). Assembly refuses a source that builds a loop of that name, in a row with a scope
+// and in a row without one, so no loop's watermark can overwrite or be read as the remembered match. The
+// same source with another loop name builds.
+func TestScopeMatchLoopNameFails(t *testing.T) {
+	testSourceTypes = func(reg *source.Registry) {
+		reg.Register("reserved-scope-match", func(config.SourceConfig, source.Deps) (source.Source, error) {
+			return reservedSource{loopName: source.ScopeMatchLoop}, nil
+		})
+		reg.Register("reserved-other", func(config.SourceConfig, source.Deps) (source.Source, error) {
+			return reservedSource{loopName: "other"}, nil
+		})
+	}
+	t.Cleanup(func() { testSourceTypes = nil })
+	row := func(typ, loop string, scope config.ScopeConfig) tenancy.Row {
+		r := tenantRow("https://vendor.example", "tenant-a", "primary", "https://stack-a.example", "100")
+		r.Source = config.SourceConfig{Type: typ, Enabled: true, SourceInstance: "fake-src", Scope: scope,
+			Loops: map[string]config.LoopConfig{loop: {Enabled: true, Cadence: config.Duration(time.Minute)}}}
+		return r
+	}
+	build := func(r tenancy.Row) error {
+		_, err := BuildFromPlan(context.Background(), minimalConfig("https://vendor.example"), tenancy.Plan{Rows: []tenancy.Row{r}}, assemblyCheckpointer(t), coordinate.Noop{}, (&specRecorder{}).factory, noopTelemetryFactory, Options{})
+		return err
+	}
+	scope := config.ScopeConfig{Name: "ws-a", ID: "ws-id-a"}
+	for _, sc := range []config.ScopeConfig{{}, scope} {
+		if err := build(row("reserved-scope-match", source.ScopeMatchLoop, sc)); err == nil || !strings.Contains(err.Error(), source.ScopeMatchLoop+" is a reserved loop name") {
+			t.Errorf("scope %+v: a loop named %s must fail assembly as a reserved name, got %v", sc, source.ScopeMatchLoop, err)
+		}
+		if err := build(row("reserved-other", "other", sc)); err != nil {
+			t.Errorf("scope %+v: the same source with another loop name must build: %v", sc, err)
+		}
+	}
+}
+
+// TestScopedRowSharesOneGate (AC6): every loop of a scoped row carries the same gate, and two rows have
+// two gates. The gate is wired to its own row: it asserts with that row's key (read from its secret
+// file) and slug, writes the remembered match to the checkpoint store under the row's scope-match key
+// with the digest of that key's fingerprint, scope name and scope id, at the time of Options.Now, and
+// reports through that row's telemetry only.
+func TestScopedRowSharesOneGate(t *testing.T) {
+	const keyA, keyB = "api-key-a-read-from-file", "api-key-b"
+	pk := newScopedPortkey(t, map[string]string{keyA: "ws-a", keyB: "ws-someone-else"})
+	scopeA := config.ScopeConfig{Name: "ws-a", ID: "ws-id-a"}
+	scopeB := config.ScopeConfig{Name: "ws-b", ID: "ws-id-b"}
+	rowA := scopedRow(pk.URL, "tenant-a", "primary", "https://stack-a.example", "100", "", scopeA)
+	rowA.AuthValueFile = "api-key"
+	rowB := scopedRow(pk.URL, "tenant-b", "primary", "https://stack-b.example", "200", keyB, scopeB)
+	tel := map[string]*scopeTelemetry{}
+	var mu sync.Mutex
+	tf := func(_, pipeline string) PipelineTelemetry {
+		mu.Lock()
+		defer mu.Unlock()
+		if tel[pipeline] == nil {
+			tel[pipeline] = &scopeTelemetry{}
+		}
+		return tel[pipeline]
+	}
+	at := time.Date(2026, 3, 1, 9, 30, 0, 0, time.UTC)
+	cp := assemblyCheckpointer(t)
+	a, err := BuildFromPlan(context.Background(), minimalConfig(pk.URL), tenancy.Plan{Rows: []tenancy.Row{rowA, rowB}}, cp, coordinate.Noop{}, (&specRecorder{}).factory, tf,
+		Options{Secrets: &mapSecrets{values: map[[2]string]string{{"tenant-a", "api-key"}: keyA}}, Now: func() time.Time { return at }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pk.assertions(); len(got) != 0 {
+		t.Fatalf("assembly called the vendor: %v", got)
+	}
+	gates := gatesBySource(a)
+	one := func(si string) *source.ScopeGate {
+		t.Helper()
+		gs := gates[si]
+		if len(gs) != 2 {
+			t.Fatalf("%s has %d specs, want its two loops", si, len(gs))
+		}
+		if gs[0] == nil || gs[0] != gs[1] {
+			t.Fatalf("%s: the loops' gates are %p and %p, want one shared gate", si, gs[0], gs[1])
+		}
+		return gs[0]
+	}
+	gateA, gateB := one(rowA.Source.SourceInstance), one(rowB.Source.SourceInstance)
+	if gateA == gateB {
+		t.Fatal("two scoped rows share one gate")
+	}
+
+	ctx := coordinate.WithEpoch(context.Background(), 1)
+	if d, err := gateA.Before(ctx); err != nil || d != source.ScopeProceed {
+		t.Fatalf("row A's key reads ws-a, its scope: want proceed, got %d, %v", d, err)
+	}
+	if got := pk.assertions(); len(got) != 1 || got[0] != [2]string{keyA, "ws-a"} {
+		t.Fatalf("row A's assertion sent (key, slug) %v, want [(the key read from its file, ws-a)]", got)
+	}
+	wm, err := cp.Load(ctx, source.ScopeMatchKey(rowA.Source.SourceInstance))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest := source.ScopeMatchDigest(source.KeyFingerprint(keyA), scopeA.Name, scopeA.ID)
+	if wm.Cursor != wantDigest || !wm.Time.Equal(at) {
+		t.Fatalf("remembered match = (%q, %s), want (%q, %s): the gate's store, digest or clock is not the row's", wm.Cursor, wm.Time, wantDigest, at)
+	}
+	states, results := tel[rowA.Pipeline].seen()
+	if fmt.Sprint(states) != "[matched]" || fmt.Sprint(results) != "[matched]" {
+		t.Fatalf("row A's telemetry saw states %v and results %v, want [matched] and [matched]", states, results)
+	}
+	if states, results := tel[rowB.Pipeline].seen(); len(states)+len(results) != 0 {
+		t.Fatalf("row A's assertion reported through row B's telemetry: %v %v", states, results)
+	}
+
+	if d, err := gateB.Before(ctx); err != nil || d != source.ScopeMismatched {
+		t.Fatalf("row B's key reads another workspace: want mismatched, got %d, %v", d, err)
+	}
+	if got := pk.assertions(); len(got) != 2 || got[1] != [2]string{keyB, "ws-b"} {
+		t.Fatalf("row B's assertion sent (key, slug) %v, want (its own key, ws-b) second", got)
+	}
+	if _, results := tel[rowB.Pipeline].seen(); fmt.Sprint(results) != "[mismatch]" {
+		t.Fatalf("row B's telemetry saw results %v, want [mismatch]", results)
+	}
+}
+
+// TestUnscopedRowHasNoGate (AC6): a legacy row and a tenant row with no scope get no gate on any spec,
+// beside a scoped row that does; a legacy config built through Build has no gate at all. A row with no
+// scope is collected exactly as before.
+func TestUnscopedRowHasNoGate(t *testing.T) {
+	pk := newScopedPortkey(t, map[string]string{"k-scoped": "ws-a"})
+	legacy := assemblyRow(pk.URL, "pk-legacy", "https://stack-l.example", "300", "team-l")
+	unscoped := tenantRow(pk.URL, "tenant-u", "primary", "https://stack-u.example", "400")
+	scoped := scopedRow(pk.URL, "tenant-s", "primary", "https://stack-s.example", "500", "k-scoped", config.ScopeConfig{Name: "ws-a", ID: "ws-id-a"})
+	a, err := BuildFromPlan(context.Background(), minimalConfig(pk.URL), tenancy.Plan{Rows: []tenancy.Row{legacy, unscoped, scoped}}, assemblyCheckpointer(t), coordinate.Noop{}, (&specRecorder{}).factory, noopTelemetryFactory, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gates := gatesBySource(a)
+	for _, r := range []tenancy.Row{legacy, unscoped} {
+		gs := gates[r.Source.SourceInstance]
+		if len(gs) == 0 {
+			t.Fatalf("no spec for %s", r.Source.SourceInstance)
+		}
+		for _, g := range gs {
+			if g != nil {
+				t.Errorf("%s has no scope but its spec carries a gate", r.Source.SourceInstance)
+			}
+		}
+	}
+	for _, g := range gates[scoped.Source.SourceInstance] {
+		if g == nil {
+			t.Errorf("the scoped row %s has a spec with no gate", scoped.Source.SourceInstance)
+		}
+	}
+
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	b, err := Build(context.Background(), minimalConfig(pk.URL), assemblyCheckpointer(t), coordinate.Noop{}, ef, tf, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sp := range b.Specs() {
+		if sp.Gate != nil {
+			t.Errorf("legacy spec %s carries a gate", sp.Loop.Key().String())
+		}
+	}
+	if got := pk.assertions(); len(got) != 0 {
+		t.Fatalf("assembly called the vendor: %v", got)
 	}
 }

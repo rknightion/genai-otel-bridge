@@ -16,7 +16,7 @@ func TestSignalSortKeyOrdering(t *testing.T) {
 		{"name", Signal{Plane: base.Plane, Type: base.Type, Name: "a"}, Signal{Plane: base.Plane, Type: base.Type, Name: "b"}},
 	}
 	for _, c := range cases {
-		if !(c.lower.SortKey() < c.upper.SortKey()) {
+		if c.lower.SortKey() >= c.upper.SortKey() {
 			t.Errorf("%s: want %+v to sort before %+v", c.name, c.lower, c.upper)
 		}
 		if c.upper.SortKey() < c.lower.SortKey() {

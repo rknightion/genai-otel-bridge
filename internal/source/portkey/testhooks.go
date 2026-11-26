@@ -17,6 +17,8 @@ func SetLoopClockForTest(lp source.Loop, now func() time.Time) bool {
 		l.now = now
 	case *logsExportLoop:
 		l.now = now
+	case *groupsLoop:
+		l.now = now
 	default:
 		return false
 	}

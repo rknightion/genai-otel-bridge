@@ -77,8 +77,12 @@ is not a re-parameterised graphs loop.
   `window_span` off the LOWER one, so an equal or larger settle inverts the query window
   (`time_of_generation_min > max`) into a silent-empty or nonsense result.
 - **1DPM comes from minute-truncated timestamps.** Gauges are stamped at `(now-settle).Truncate(1m)`
-  so two polls in the same wall-clock minute share a timestamp and Mimir dedups. The FETCH still uses
-  the precise `now-settle` bound.
+  so two polls in the same wall-clock minute share a timestamp. Mimir does not last-write-wins a changed
+  value at an existing timestamp: it rejects it, and the runner would count the batch as
+  `samples_skipped{reason=duplicate_timestamp}`. So `Collect` keeps a `lastStamp` and a poll in an
+  already-emitted minute makes no vendor call, emits nothing and only advances the liveness watermark.
+  Residual: the first poll after a failover or restart can land in the minute the previous leader wrote;
+  that one is rejected and counted. The FETCH still uses the precise `now-settle` bound.
 - **Per-endpoint independent.** `ai-models` (always on), one `metadata/<key>` per configured
   `settings.metadata_keys`, and the prompt dimension (`emit_prompts`, on by default). A 404 endpoint
   emits nothing for itself, fires `Deps.OnCapability(loop, endpoint, CapabilityTransient404)`, and

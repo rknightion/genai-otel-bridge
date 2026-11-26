@@ -10,6 +10,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -17,9 +18,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
+	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/source"
+	"github.com/rknightion/genai-otel-bridge/internal/source/langsmith"
+	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 )
 
 // Step 1 — gap-free failover handoff is contiguous and value-stable.
@@ -221,4 +228,107 @@ func TestSoakBackfillUnstorableCounted(t *testing.T) {
 	if m.get("backfill_unstorable") == 0 {
 		t.Fatal("a watermark older than max_backfill must count backfill_unstorable (loud counted loss), got 0")
 	}
+}
+
+// buildSnapshotApp builds the wired app for a single snapshot-loop source against a Mimir-model gateway
+// and returns the loop spec plus the skipped-reason counter.
+func buildSnapshotApp(t *testing.T, sc config.SourceConfig, gwURL string) (schedule.LoopSpec, *metricsCounter) {
+	t.Helper()
+	cfg := minimalConfig("http://unused")
+	cfg.Sources = []config.SourceConfig{sc}
+	cp, err := file.New(tmpCP(t), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	em := otlp.New(otlp.Config{
+		Endpoint: gwURL, InstanceID: "1", Token: "t",
+		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20,
+		Retry: otlp.RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 1.5, MaxElapsed: 30 * time.Millisecond},
+	})
+	m := &metricsCounter{skip: map[string]int{}}
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, m, source.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a.Specs()[0], m
+}
+
+// A snapshot loop re-polled inside one wall-clock minute (the jittered tick wait can be 54 s) must not
+// re-emit at the same stamp: the Mimir model rejects a changed value at an existing (series, ts), which
+// the runner would count as samples_skipped{reason=duplicate_timestamp} and page as data loss.
+func TestSnapshotSameMinuteRepollSessions(t *testing.T) {
+	var polls atomic.Int64
+	ls := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := polls.Add(1)
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "active", "run_count": 100 + n}, // rolling count moved between polls
+			{"id": "idle", "run_count": 0},
+		})
+	}))
+	defer ls.Close()
+	gw := newMimirRecorder(t)
+	sp, m := buildSnapshotApp(t, config.SourceConfig{
+		Type: "langsmith", Enabled: true, BaseURL: ls.URL, SourceInstance: "ls-test",
+		Auth:      config.AuthConfig{Header: "x-api-key", Value: "k"},
+		RateLimit: config.RateLimitConfig{RPS: 1000, Burst: 1000},
+		HTTP:      config.HTTPConfig{AllowPrivate: true},
+		Loops: map[string]config.LoopConfig{"sessions": {
+			Enabled: true, Cadence: config.Duration(time.Minute), MetricPrefix: "langsmith",
+		}},
+	}, gw.URL)
+	now := time.Date(2026, 11, 16, 12, 0, 2, 0, time.UTC)
+	if !langsmith.SetLoopClockForTest(sp.Loop, func() time.Time { return now }) {
+		t.Fatal("clock inject failed")
+	}
+	runCycle(t, sp)
+	first := polls.Load()
+	now = now.Add(55 * time.Second) // 12:00:57: same minute, inside the legal 54 s..66 s wait
+	runCycle(t, sp)
+	if n := m.get("duplicate_timestamp"); n != 0 {
+		t.Fatalf("same-minute snapshot re-poll counted %d samples as samples_skipped{reason=duplicate_timestamp}", n)
+	}
+	if polls.Load() != first {
+		t.Fatalf("same-minute re-poll issued %d vendor request(s)", polls.Load()-first)
+	}
+	gw.AssertNoValueChangedRejects(t)
+}
+
+func TestSnapshotSameMinuteRepollGroups(t *testing.T) {
+	var polls atomic.Int64
+	pk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := polls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "total": 1, "data": []map[string]any{
+			{"ai_model": "m1", "requests": 100 + n, "cost": 1.5, "object": "analytics-group"},
+		}})
+	}))
+	defer pk.Close()
+	gw := newMimirRecorder(t)
+	sp, m := buildSnapshotApp(t, config.SourceConfig{
+		Type: "portkey", Enabled: true, BaseURL: pk.URL, SourceInstance: "pk-test",
+		Auth:      config.AuthConfig{Header: "x-portkey-api-key", Value: "k"},
+		RateLimit: config.RateLimitConfig{RPS: 1000, Burst: 1000},
+		HTTP:      config.HTTPConfig{AllowPrivate: true},
+		Loops: map[string]config.LoopConfig{"groups": {
+			Enabled: true, Cadence: config.Duration(time.Minute), MetricPrefix: "portkey_api",
+			Settings: map[string]string{"emit_prompts": "false"},
+		}},
+	}, gw.URL)
+	now := time.Date(2026, 11, 16, 12, 0, 2, 0, time.UTC)
+	if !portkey.SetLoopClockForTest(sp.Loop, func() time.Time { return now }) {
+		t.Fatal("clock inject failed")
+	}
+	runCycle(t, sp)
+	first := polls.Load()
+	if first == 0 {
+		t.Fatal("first poll made no vendor request")
+	}
+	now = now.Add(55 * time.Second)
+	runCycle(t, sp)
+	if n := m.get("duplicate_timestamp"); n != 0 {
+		t.Fatalf("same-minute snapshot re-poll counted %d samples as samples_skipped{reason=duplicate_timestamp}", n)
+	}
+	if polls.Load() != first {
+		t.Fatalf("same-minute re-poll issued %d vendor request(s)", polls.Load()-first)
+	}
+	gw.AssertNoValueChangedRejects(t)
 }

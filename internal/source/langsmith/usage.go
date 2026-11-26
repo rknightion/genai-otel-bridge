@@ -51,6 +51,8 @@ type usageLoop struct {
 	onAuthError               func(loop, source string)
 	onDataIncomplete          func(loop string, reason source.IncompleteReason)
 	now                       func() time.Time
+	// lastStamp is the sample timestamp of the last successful derive (Collect is single-flight).
+	lastStamp time.Time
 }
 
 // newUsageLoop builds the usage loop from the package-local config + a (possibly shared) client,
@@ -127,6 +129,13 @@ func (l *usageLoop) Key() model.CheckpointKey {
 // (traces still emitted); only a 429 (quota) discards the whole batch to back off.
 func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
+	// Emit at most once per sample timestamp (see sessionsLoop.Collect): a same-stamp poll makes no
+	// vendor call and only advances the liveness watermark.
+	if stamp := now.Truncate(time.Minute); stamp.Equal(l.lastStamp) {
+		wm := since
+		wm.Time = now
+		return model.Batch{Key: l.Key(), Watermark: wm}, nil
+	}
 	statsStart := now.Add(-l.statsWindow)
 
 	var sessions []usageSession
@@ -197,6 +206,7 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 	}
 
 	samples := usageDerive(sessions, spans, l.deriveCfg, now)
+	l.lastStamp = now.Truncate(time.Minute)
 	wm := since
 	wm.Time = now
 	return model.Batch{Key: l.Key(), Samples: samples, Watermark: wm}, nil

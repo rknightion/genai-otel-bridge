@@ -15,9 +15,13 @@ Paths above are relative to the configured `base_url`, which carries the `/api/v
 `sessions` and `usage` read a **rolling snapshot** over `[now-stats_window, now]`: one current value
 per session, no `data_points`, no per-minute buckets.
 
-- **Every sample is stamped at `now.Truncate(1m)`** (review-M3). Two polls in the same wall-clock
-  minute share a sample timestamp so Mimir last-write-wins dedups them to exactly 1DPM. `CoalesceDPM`
-  is per-batch and cannot dedup across polls, so this truncation is the whole mechanism.
+- **Every sample is stamped at `now.Truncate(1m)`** (review-M3). The backend does NOT
+  last-write-wins a changed value at an existing timestamp: it rejects it, and the runner would count
+  the whole batch as `samples_skipped{reason=duplicate_timestamp}`. So each loop keeps a `lastStamp`
+  and a poll in an already-emitted minute makes no vendor call, emits nothing and only advances the
+  liveness watermark. `CoalesceDPM` is per-batch and cannot dedup across polls. Residual: the first poll
+  after a failover or restart can land in the minute the previous leader wrote; that one is rejected and
+  counted.
 - The watermark advances `Time = now` (precise, un-truncated) as a forward-only liveness cursor;
   `since.Time` is unused.
 - **No settle, bucket-revision or gap-free backfill.** `deps.OnBucketRevised` is deliberately omitted

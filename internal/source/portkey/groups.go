@@ -187,6 +187,8 @@ type groupsLoop struct {
 	onDataIncomplete func(loop string, reason source.IncompleteReason)
 	onAuthError      func(loop, source string)
 	now              func() time.Time
+	// lastStamp is the sample timestamp of the last successful poll (Collect is single-flight, no lock).
+	lastStamp time.Time
 }
 
 func (l *groupsLoop) Cadence() time.Duration { return l.cadence }
@@ -270,6 +272,15 @@ func (l *groupsLoop) endpoints() []groupsEndpoint {
 // `since` is intentionally unused (no replay frontier for a snapshot loop).
 func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
+	// Emit at most once per sample timestamp: the backend rejects (does not last-write-wins) a changed
+	// value at an existing (series, ts). A same-stamp poll makes no vendor call and only advances the
+	// liveness watermark.
+	stamp := now.Add(-l.settle).Truncate(time.Minute)
+	if stamp.Equal(l.lastStamp) {
+		wm := since
+		wm.Time = now
+		return model.Batch{Key: l.Key(), Watermark: wm}, nil
+	}
 	if l.expectedWorkspace != "" && !l.scopeVerified {
 		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, l.sourceInstance, now, l.onCapability, l.onAuthError)
 		if err != nil {
@@ -283,9 +294,9 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 	// two polls land in the same wall-clock minute (sub-minute cadence, or the jitter edge at ~60s), two
 	// DISTINCT sub-minute timestamps would push >1 point/series/minute past Mimir (CoalesceDPM is
 	// per-batch and can't dedup across polls), violating the 1DPM cap. Truncating to the minute makes
-	// same-minute re-polls share a timestamp (LWW/duplicate-timestamp dedup ⇒ exactly 1DPM) while the
-	// FETCH window still uses the precise now-settle bound. (followup §0 1DPM; groups PoC watermark note.)
-	stamp := until.Truncate(time.Minute)
+	// same-minute re-polls share a timestamp; the backend rejects a changed value at an existing
+	// timestamp, so Collect emits at most once per stamp (lastStamp, checked above). The FETCH window
+	// still uses the precise now-settle bound. (followup §0 1DPM; groups PoC watermark note.)
 	eps := l.endpoints()
 	var samples []model.Sample
 	skipped, total := 0, 0
@@ -305,6 +316,7 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 	if skipped == total {
 		return model.Batch{}, fmt.Errorf("portkey groups: all %d endpoint fetch(es) failed this poll — capability/permission/transient error, not empty data", total)
 	}
+	l.lastStamp = stamp
 	wm := since
 	wm.Time = now
 	return model.Batch{Key: l.Key(), Samples: samples, Watermark: wm}, nil

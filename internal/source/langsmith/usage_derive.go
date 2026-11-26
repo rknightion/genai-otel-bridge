@@ -47,8 +47,8 @@ type usageDeriveConfig struct {
 }
 
 // usageDerive is PURE: (sessions, per-session span counts, naming policy, poll time) → forward Gauge
-// samples stamped at the minute-truncated `now` (aggregate-now snapshot; two same-minute polls share a
-// timestamp so Mimir LWW dedups to 1DPM — see the sessions loop's review-M3). Deterministic order
+// samples stamped at the minute-truncated `now` (aggregate-now snapshot; the backend rejects a changed value at an
+// existing timestamp, so usageLoop.Collect emits at most once per stamp — see the sessions loop's review-M3). Deterministic order
 // (sessions by id) for the emitter's byte-identical encode. `spans` maps session id → span count; a
 // session ABSENT from the map emits no spans gauge (a disabled/failed span call must not fabricate a 0).
 func usageDerive(sessions []usageSession, spans map[string]int, cfg usageDeriveConfig, now time.Time) []model.Sample {

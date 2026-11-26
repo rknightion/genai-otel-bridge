@@ -253,6 +253,8 @@ type sessionsLoop struct {
 	deriveCfg                 deriveConfig
 	onAuthError               func(loop, source string)
 	now                       func() time.Time
+	// lastStamp is the sample timestamp of the last successful derive. Collect is single-flight, so no lock.
+	lastStamp time.Time
 }
 
 func (l *sessionsLoop) Cadence() time.Duration { return l.cadence }
@@ -286,6 +288,14 @@ func (l *sessionsLoop) Key() model.CheckpointKey {
 // forward-only liveness cursor (Cursor/Epoch carried through).
 func (l *sessionsLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
+	// Emit at most once per sample timestamp: the backend rejects (does not last-write-wins) a changed
+	// value at an existing (series, ts), which the runner would count as lost samples. A same-stamp poll
+	// makes no vendor call and only advances the liveness watermark.
+	if stamp := now.Truncate(time.Minute); stamp.Equal(l.lastStamp) {
+		wm := since
+		wm.Time = now
+		return model.Batch{Key: l.Key(), Watermark: wm}, nil
+	}
 	statsStart := now.Add(-l.statsWindow)
 
 	var sessions []tracerSession
@@ -336,6 +346,7 @@ func (l *sessionsLoop) Collect(ctx context.Context, since model.Watermark) (mode
 	}
 
 	samples := derive(sessions, l.deriveCfg, now)
+	l.lastStamp = now.Truncate(time.Minute)
 	wm := since
 	wm.Time = now
 	return model.Batch{Key: l.Key(), Samples: samples, Watermark: wm}, nil

@@ -174,8 +174,8 @@ loops:
       emit_span_counts: true
 ```
 
-`stats_window` defaults to the loop's own cadence so successive windows tile (`sum_over_time`
-approximates the period total). Set `emit_span_counts: false` to emit only `langsmith_usage_traces`
+`stats_window` defaults to 10m for `usage` (1h for `sessions`) and must be greater than zero; set it
+equal to the loop's `cadence` so successive windows tile (`sum_over_time` approximates the period total). Set `emit_span_counts: false` to emit only `langsmith_usage_traces`
 and skip the extra `runs/stats` call per project per poll; bound the fan-out with `session_filter`/
 `max_sessions`.
 

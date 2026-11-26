@@ -133,3 +133,13 @@ deliberate wire change). The `acceptance` build
 tag runs the acceptance gates against a Mimir-model recorder that **400s on a series value change**,
 which is what catches value-divergent re-emits: failover handoff contiguity, stale-queue drop on
 re-election, empty-window advance.
+
+The cross-tenant release gate (design §5.3, a hard rule in the root `AGENTS.md`) is
+`crosstenant_gate_test.go` with its helpers in `crosstenant_helpers_test.go`, both `acceptance`-tagged:
+`CGO_ENABLED=1 go test -race -tags acceptance ./internal/app/ -run TestCrossTenant`. It builds tenant
+rows by hand through `BuildFromPlan` and `OTLPEmitterFactory`, every destination and the self-telemetry
+on one fake receiver's URL, and drives each leadership with one `RunOnceForTest` tick per loop. Its
+four checks (delivery, slug, self endpoint, self identity) return findings; `TestCrossTenantScenarios`
+needs none in any scenario, and `TestCrossTenantSeededFaults` needs each seeded fault reported by
+exactly the checks it names. A new seeded fault (unit 6b-2 adds the duplicate key) is another
+`faultCase`.

@@ -17,6 +17,10 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
+// spanFanoutBreaker is how many CONSECUTIVE failed runs/stats calls stop the per-project span fan-out for
+// one Collect (the remainder is counted as span_stats_unavailable and the traces still emit).
+const spanFanoutBreaker = 5
+
 // usageConfig is the package-local, decoupled config for the `usage` (platform cost-driver) loop.
 // Shares the transport/auth/paging shape with the sessions loop; adds the usage-specific knobs.
 type usageConfig struct {
@@ -126,7 +130,8 @@ func (l *usageLoop) Key() model.CheckpointKey {
 // (when enabled) a per-project span count via runs/stats, then derives gauges stamped at `now`.
 // AGGREGATE-NOW snapshot (like the sessions loop): `since.Time` is unused; the watermark advances to
 // `now` as a forward-only liveness cursor. A span-call failure for one project is a LOUD counted skip
-// (traces still emitted); only a 429 (quota) discards the whole batch to back off.
+// (traces still emitted); spanFanoutBreaker consecutive failures, or a 429 mid-fan-out, stop the fan-out and
+// derive from what was fetched (a 429 on the /sessions page fetch still discards the batch to back off).
 func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
 	// Emit at most once per sample timestamp (see sessionsLoop.Collect): a same-stamp poll makes no
@@ -185,26 +190,53 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 	var spans map[string]int
 	if l.emitSpanCounts {
 		spans = make(map[string]int, len(sessions))
-		for _, s := range sessions {
+		consecutive, skipped, lastStatus := 0, 0, 0
+		var lastErr error
+	fanout:
+		for i, s := range sessions {
 			n, code, err := l.fetchSpanCount(ctx, s.ID, statsStart)
 			if code == http.StatusTooManyRequests {
-				return model.Batch{}, source.ErrQuotaExceeded // quota → back off the whole batch
+				// Quota mid-fan-out: keep what was fetched (trace gauges for every project, span gauges for
+				// the projects already counted) and stop. Discarding the lot would retry the same prefix
+				// forever under tenant-wide contention and never emit a span count. Counted once for the
+				// abandoned remainder (this call included).
+				skipped += len(sessions) - i
+				lastStatus = code
+				if l.onDataIncomplete != nil {
+					l.onDataIncomplete("usage", source.IncompleteSpanStatsUnavailable)
+				}
+				break fanout
 			}
 			if err != nil || code != http.StatusOK || n == nil {
-				// Never silent: a per-project span-call failure is COUNTED + logged and that project's span
-				// metric is skipped; traces still flow (the loop always progresses). A 401/403 also fires the
-				// credential signal.
+				// Never silent: a per-project span-call failure is COUNTED and that project's span metric is
+				// skipped; traces still flow (the loop always progresses). A 401/403 also fires the
+				// credential signal. spanFanoutBreaker consecutive failures stop the fan-out.
 				if source.IsAuthStatus(code) && l.onAuthError != nil {
 					l.onAuthError("usage", l.sourceInstance)
 				}
 				if l.onDataIncomplete != nil {
 					l.onDataIncomplete("usage", source.IncompleteSpanStatsUnavailable)
 				}
-				slog.Warn("langsmith usage: span count skipped for project",
-					"source", l.sourceInstance, "status", code, "err", err)
+				skipped++
+				lastStatus, lastErr = code, err
+				consecutive++
+				if consecutive >= spanFanoutBreaker {
+					if rest := len(sessions) - i - 1; rest > 0 {
+						skipped += rest
+						if l.onDataIncomplete != nil { // once for the abandoned remainder
+							l.onDataIncomplete("usage", source.IncompleteSpanStatsUnavailable)
+						}
+					}
+					break fanout
+				}
 				continue
 			}
+			consecutive = 0
 			spans[s.ID] = *n
+		}
+		if skipped > 0 { // one line per Collect, not one per project
+			slog.Warn("langsmith usage: span counts skipped for projects",
+				"source", l.sourceInstance, "skipped", skipped, "of", len(sessions), "last_status", lastStatus, "last_err", lastErr)
 		}
 	}
 

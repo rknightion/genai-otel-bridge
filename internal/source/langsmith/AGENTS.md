@@ -127,6 +127,11 @@ drives LangSmith's own bill.
 - **`emit_span_counts` is on by default and costs one extra call per project per poll.** Bound the
   fan-out with `session_filter` and `max_sessions`, or set it false to emit trace counts only. The
   loop already logs a warning when it is on with no filter.
+- **The span fan-out stops early and keeps what it fetched.** `spanFanoutBreaker` (5) consecutive failed
+  `runs/stats` calls, or a 429 mid-fan-out, end the fan-out for that Collect: trace gauges still emit for every
+  project, span gauges for the projects already counted, the abandoned remainder fires
+  `span_stats_unavailable` once, and one warning is logged per Collect. A 429 on the `/sessions` page fetch
+  still discards the batch and backs off.
 - The generated Helm example sets the loop's `cadence` equal to `stats_window` so windows tile and
   `sum_over_time` approximates a period total. Changing one without the other double-counts or gaps.
 

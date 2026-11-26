@@ -59,7 +59,7 @@ func main() {
 	cpFile := flag.String("checkpoint-file", "/var/lib/genai-otel-bridge/checkpoints.yaml", "path for the file checkpoint store (only used when ha.checkpoint=file)")
 	cleanupMode := flag.Bool("cleanup", false, "delete the app-created lease + checkpoint ConfigMap, then exit (the chart's post-delete uninstall hook)")
 	cleanupRetainCheckpoint := flag.Bool("cleanup-retain-checkpoint", false, "with -cleanup: keep the checkpoint ConfigMap and the lease (its transition count is the epoch fence) so a reinstall resumes the watermark")
-	validateConfigMode := flag.Bool("validate-config", false, "load + validate the -config file (placeholdering unset ${ENV} refs so secrets aren't needed), print the result, and exit 0/1")
+	validateConfigMode := flag.Bool("validate-config", false, "load, validate and construct (as startup does, no network) the -config file (placeholdering unset ${ENV} refs so secrets aren't needed), print the result, and exit 0/1; does not check the inline GENAI_OTEL_BRIDGE_CONFIG form")
 	healthCheckMode := flag.Bool("healthcheck", false, "probe the local /healthz derived from -health-addr (a 0.0.0.0/[::] bind, or a bare port, is dialed via 127.0.0.1) and exit 0/1 (ECS container health check; distroless has no shell for curl)")
 	versionMode := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()

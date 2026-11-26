@@ -8,10 +8,11 @@ metadata:
     grafana.app/folder: genai-otel-bridge
 spec:
   title: GenaiOtelBridgeQueueBackpressure
-  # The per-loop bounded emit queue is reporting a non-zero depth ratio for a sustained 15m — emit
-  # cannot keep up with collect and batches are waiting in the queue (backpressure). In normal
-  # operation the queue is empty (ratio=0) because emit completes well within the tick interval.
-  # Sustained non-zero means OTLP backend is slow/rejecting or the emit retry budget is being hit.
+  # A loop has had a batch in flight (queue_depth = 1) for a sustained 15m. Collection is single-flight
+  # with the emit, so at most one batch is ever queued or in flight per loop: the gauge is 1 while that
+  # batch is being emitted and committed, else 0. In normal operation the emit completes well within the
+  # tick interval, so a sustained 1 means the emit is slow or failing (OTLP backend slow or rejecting, or
+  # the emit retry budget is being spent). No backlog builds up meanwhile: the loop skips its ticks.
   execErrState: Ok
   noDataState: Ok
   for: 15m
@@ -20,8 +21,8 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "genai-otel-bridge {{ $labels.loop }} loop emit queue is backing up"
-    description: "genai_otel_bridge_queue_depth_ratio for the {{ $labels.loop }} loop has been >0 for 15m — the emit queue is not draining fast enough (backpressure). Healthy operation is depth=0. Check emit latency / OTLP backend availability / genai_otel_bridge_emit_errors_total. A non-draining queue will eventually cause windows to be skipped. See deploy/grafana/README.md."
+    summary: "genai-otel-bridge {{ $labels.loop }} loop has had a batch in flight for 15m"
+    description: "genai_otel_bridge_queue_depth_ratio for the {{ $labels.loop }} loop has been 1 for 15m: one batch has been in flight for the whole period, so its emit is slow or failing. Healthy operation is 0 between emits. Check emit latency / OTLP backend availability / genai_otel_bridge_emit_errors_total. The loop collects nothing new while the batch is in flight, so window_lag rises and windows past max_backfill are eventually skipped (counted). See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom

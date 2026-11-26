@@ -110,9 +110,9 @@ error. Use `<env ref>` placeholder prose in example blocks, never live syntax.
   not affected: 3 resource attributes against Mimir's 40. **In the in-cluster-Alloy topology Alloy's
   own `k8s.*` / `cloud.*` enrichment attributes share this same Loki budget**, and nothing here can
   enforce that, so size with headroom.
-- `queue.max_batches` 256 and `queue.max_batch_bytes` 1 MiB. At 0, `max_batches` falls through to the
-  runner's depth-1 clamp (about a minute of buffering instead of the documented hours) and
-  `max_batch_bytes` disables the emitter's proactive over-cap split, leaving only the reactive 413
+- `queue.max_batches` 256 and `queue.max_batch_bytes` 1 MiB. `max_batches` buffers nothing (collection
+  is single-flight with the emit, so at most one batch is queued or in flight, #372); it is accepted
+  for compatibility. At 0, `max_batch_bytes` disables the emitter's proactive over-cap split, leaving only the reactive 413
   path. The runner and emitter clamps stay as defence-in-depth for struct-built configs.
 - `bucket_settle` 10m.
 

@@ -13,7 +13,9 @@ implements.
 - Watermark advance. `ProcessBatch` splits a batch into ascending per-bucket sub-batches and decides
   per bucket: advance past with a counted skip, terminal halt (degrade, no advance, loud), or
   retryable stop (commit only the interior buckets that advanced and re-pull next tick). Quiet and
-  empty windows still advance past `until` so `window_lag_seconds` does not inflate. `Cursor` is set
+  empty windows still advance past `until` so `window_lag_seconds` does not inflate, and a landed
+  full-completion commit at a non-zero Time stamps `last_success_timestamp_seconds` at that Time, so a
+  quiet source does not read as a stale poller (#371). A failed, fenced or stale commit does not stamp. `Cursor` is set
   only on the full-completion path; interior commits carry an empty cursor.
 - Epoch-fenced commit. `commit()` re-checks `ctx.Err()` immediately before `Save()`, so nothing
   advances after leadership loss even if the checkpointer ignores ctx. On `ErrStaleWrite` where the
@@ -44,10 +46,15 @@ implements.
   ends, `Scheduler.Run` zeroes the `loop_degraded` gauge of each degraded loop after its goroutines
   join; `Reset` at the next election still clears the state.
 - Snapshot loops (`LoopSpec.Window == 0`, for example langsmith sessions and portkey groups) gate out
-  both catch-up acceleration and the `backfill_unstorable` count. A snapshot loop's watermark is a
+  both catch-up acceleration and the `backfill_unstorable` count. A cursor-driven `Window == 0` loop
+  (langsmith runs, portkey logs_export) gets catch-up only while its batch carries a non-empty cursor and
+  emitted records, bounded by `max_catchup_per_tick`; a busy `Window == 0` loop never accelerates (#374). A snapshot loop's watermark is a
   liveness heartbeat at `now`, not a replay frontier. Without the backfill gate, `MaxBackfill == 0`
   makes the floor `now` and produces a spurious skip count every tick.
-- The queue is bounded (cap at least 1) and `Enqueue` blocks when full: backpressure, not drop.
+- The queue is bounded (cap at least 1) and `Enqueue` blocks when full: backpressure, not drop. Because
+  collection is single-flight, at most one batch is ever queued or in flight, so `queue.max_batches`
+  buffers nothing. The worker records `queue_depth` 1 from dequeue until `ProcessBatch` returns, then 0;
+  `Enqueue` records nothing (#372).
 - `SetBeat` wires a per-tick attempt heartbeat, progress rather than success, into `/healthz`. The
   liveness threshold is deliberately the worst legitimate gap between beats, so a leader blocked in
   an intended retry or a degraded loop on its slow backoff is not killed.

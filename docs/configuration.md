@@ -115,12 +115,12 @@ for a full deployment example.
 
 ```yaml
 queue:
-  max_batches: 256     # per-loop queue depth (batches)
+  max_batches: 256     # accepted for compatibility; buffers nothing
   max_batch_bytes: 1048576   # per-batch size cap (~1 MiB)
   emit_workers: 1      # must be 1; validated at startup
 ```
 
-The queue is bounded and blocks on full (backpressure, not drop). At approximately one batch per minute this gives roughly four hours of backlog before the queue blocks the scheduler. `emit_workers` must be 1 to preserve per-loop ordering and monotonic watermark advance.
+Collection is single-flight with the emit: a loop collects its next window only after the previous batch is emitted and its watermark saved, so at most one batch is ever queued or in flight per loop and `max_batches` buffers nothing. A slow or failing emit holds that batch in flight (`queue_depth` reads 1) and the loop skips its ticks until it finishes. `emit_workers` must be 1 to preserve per-loop ordering and monotonic watermark advance.
 
 ---
 

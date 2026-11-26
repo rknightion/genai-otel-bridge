@@ -92,10 +92,10 @@ live.
 | `genai_otel_bridge_emitted_logs_total` | `genai_otel_bridge_emitted_logs_total` | counter | — | loop | — | log records emitted (logs-export loop) |
 | `genai_otel_bridge_emitted_total` | `genai_otel_bridge_emitted_total` | counter | — | loop | — | samples emitted |
 | `genai_otel_bridge_guard_dropped_total` | `genai_otel_bridge_guard_dropped_total` | counter | — | loop | — | data points or log records dropped by the governance guard |
-| `genai_otel_bridge_last_success_timestamp_seconds` | `genai_otel_bridge_last_success_timestamp_seconds` | gauge | s | loop | — | unix time of last successful emit |
+| `genai_otel_bridge_last_success_timestamp_seconds` | `genai_otel_bridge_last_success_timestamp_seconds` | gauge | s | loop | — | unix time of the last fully handled window |
 | `genai_otel_bridge_loop_degraded` | `genai_otel_bridge_loop_degraded_ratio` | gauge | 1 | loop, reason | — | 1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends |
 | `genai_otel_bridge_new_label_values_total` | `genai_otel_bridge_new_label_values_total` | counter | — | series | — | new label-value combinations seen per series |
-| `genai_otel_bridge_queue_depth` | `genai_otel_bridge_queue_depth_ratio` | gauge | 1 | loop | — | per-loop queue depth |
+| `genai_otel_bridge_queue_depth` | `genai_otel_bridge_queue_depth_ratio` | gauge | 1 | loop | — | 1 while a batch is queued or being emitted, else 0 |
 | `genai_otel_bridge_samples_capped_total` | `genai_otel_bridge_samples_capped_total` | counter | — | loop, reason | — | samples suppressed by the DPM cap (coalesced last-write-wins per series-minute) |
 | `genai_otel_bridge_samples_skipped_total` | `genai_otel_bridge_samples_skipped_total` | counter | — | loop, reason | — | data points or log records skipped with a counted gap |
 | `genai_otel_bridge_source_capability_total` | `genai_otel_bridge_source_capability_total` | counter | — | loop, graph, state | — | source capability or permission condition by graph and closed state: endpoint-absent, plan-unsupported, permission-denied, no-data, transient-404, or schema-changed. endpoint-absent and plan-unsupported are enumerated but currently producerless because one 404 cannot distinguish them from a transient failure; steady versus intermittent increments remain a query-time judgement |

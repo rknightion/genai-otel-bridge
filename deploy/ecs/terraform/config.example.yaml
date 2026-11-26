@@ -48,8 +48,9 @@ ha:
     renew_deadline: 10s
     retry_period: 2s
 queue:
-  # Per-loop in-memory queue depth (batches). At ~1 batch/min this is ~4h of backlog before the
-  # queue blocks the scheduler (the block-on-full backpressure path).
+  # Per-loop queue capacity (batches). Collection is single-flight with the emit, so at most one batch
+  # is ever queued or in flight per loop and the capacity is never used: no backlog is buffered. The
+  # value is accepted for compatibility only.
   max_batches: 256
   # Per-batch size cap in bytes (~1 MiB). An over-cap batch is proactively split before transmit;
   # a 413 from the gateway triggers a reactive split (DESIGN §4.5/C11).
@@ -71,7 +72,9 @@ governance:
   # MaxCatchupPerTick bounds how many windows a backlogged loop drains per cadence period: when a loop
   # is more than one window behind (only possible when max_backfill > window, e.g. raised per GS2), the
   # scheduler accelerates the tick interval to drain up to N windows, then takes a cadence breather —
-  # bounded and fair, and won't burst the source (each call is still rate-limited). Unset (0) ⇒
+  # bounded and fair, and won't burst the source (each call is still rate-limited). A cursor-driven logs
+  # loop mid-window (runs, logs_export) uses the same budget: up to N pages or chunks per cadence (#374).
+  # Unset (0) ⇒
   # defaultMaxCatchupPerTick (1) ⇒ one window per cadence, i.e. no acceleration (the v1 behaviour);
   # negative is rejected. (DESIGN §7a Cdx-C13/F44.)
   max_catchup_per_tick: 1

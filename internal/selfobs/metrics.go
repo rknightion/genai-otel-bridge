@@ -63,9 +63,9 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	for _, plane := range []string{"metrics", "logs"} {
 		m.partialRejected.Add(context.Background(), 0, metric.WithAttributes(attribute.String("plane", plane)))
 	}
-	m.lastSuccess = mg("last_success_timestamp_seconds", "unix time of last successful emit", "s")
+	m.lastSuccess = mg("last_success_timestamp_seconds", "unix time of the last fully handled window", "s")
 	m.windowLag = mg("window_lag_seconds", "now minus the watermark frontier", "s")
-	m.queueDepth = mg("queue_depth", "per-loop queue depth", "1")
+	m.queueDepth = mg("queue_depth", "1 while a batch is queued or being emitted, else 0", "1")
 	// [#120] Degraded-state gauge: 1 while a loop is in the degraded state (with the degrade reason as an
 	// attribute), 0 after the clearing commit. The state machine previously only logged + flipped an
 	// internal bool, so "which loop has been degraded, since when, for what reason" was inferable only by

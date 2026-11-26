@@ -205,6 +205,25 @@ loops:
       max_pages_per_window: 50
 ```
 
+### Throughput ceiling
+
+The logs export loop performs one lifecycle step per tick. Each export page costs a create step, a
+start step, at least one poll step while Portkey generates the file (often 10 to 20 minutes), and
+then one download step per `chunk_max_records` records (5,000 by default). Only a download step
+that emits records and leaves the page unfinished asks for the 2-second catch-up interval, so the
+loop downloads up to `governance.max_catchup_per_tick` chunks per `cadence`; the lifecycle steps
+still run once per cadence. The ceiling is therefore about
+`chunk_max_records × max_catchup_per_tick / cadence` records while downloading, less the lifecycle
+ticks: with the defaults and a 60s cadence a full 50,000-record page takes at least 13 ticks, about
+100,000 to 230,000 records an hour per use-case instance. Above that the loop falls further behind
+every window, `window_lag_seconds` rises, and once the lag passes `max_backfill` the oldest span is
+skipped with a counted gap.
+
+The levers are `governance.max_catchup_per_tick` (chunks per cadence; the source's `rate_limit`
+still bounds the request rate), `chunk_max_records` (records per download step, at the cost of memory
+per step) and a shorter `cadence`. Shrinking `window` or raising `max_pages_per_window` does not
+raise the ceiling.
+
 ---
 
 ## Content governance

@@ -123,6 +123,14 @@ func (l *logsExportLoop) jobFailed(reason source.IncompleteReason) {
 	}
 }
 
+// backfillSkipped records that a watermark older than max_backfill was clamped to the floor, dropping the
+// unstorable span (the LangSmith runs loop counts the same event).
+func (l *logsExportLoop) backfillSkipped() {
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete("logs_export", source.IncompleteBackfillSkipped)
+	}
+}
+
 // traceIDUnparsed counts a record whose CONFIGURED trace-id metadata field was present but not a parseable
 // UUID, so the OTLP trace_id mapping was lost (the raw value still ships as a record attr). Reuses the
 // data-incomplete self-metric so a fleet-wide broken mapping — operator configured logs↔traces correlation,
@@ -306,8 +314,10 @@ func (l *logsExportLoop) stepIdle(ctx context.Context, since model.Watermark, no
 	// clamps winMin to the floor; we log the skipped span here (loud), mirroring the analytics loop's
 	// max_backfill clamp (F25). The abandoned span is honestly logged; downstream too-old rejects would
 	// otherwise count it.
+	skippedBackfill := false
 	if raw := since.Time; !raw.IsZero() {
 		if floor := now.Add(-l.maxBackfill); raw.Before(floor) {
+			skippedBackfill = true
 			slog.Warn("portkey logs_export: watermark older than max_backfill — skipping the unstorable span",
 				"from", raw.UTC().Format(time.RFC3339), "floor", floor.UTC().Format(time.RFC3339), "source", l.sourceInstance)
 		}
@@ -315,6 +325,12 @@ func (l *logsExportLoop) stepIdle(ctx context.Context, since model.Watermark, no
 	winMin, winMax, settled := l.windowBoundsFor(since.Time, now)
 	if !settled {
 		return model.Batch{Key: l.Key(), Watermark: since}, nil // nothing settled yet — empty, no advance
+	}
+	if skippedBackfill {
+		// Counted once, on the tick that goes on to create the export (an unsettled tick returns above), so a
+		// long skip is alertable without counting every waiting tick. The scheduler's backfill_unstorable count
+		// is gated on LoopSpec.Window > 0, which this loop forces to 0, so it never fires here.
+		l.backfillSkipped()
 	}
 	jobID, total, err := l.createExport(ctx, winMin, winMax, 0)
 	if err != nil {

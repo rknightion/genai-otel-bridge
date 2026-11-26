@@ -1034,3 +1034,51 @@ func TestLogsExportCreateResponseSchema(t *testing.T) {
 		}
 	})
 }
+
+// TestLogsExportBackfillSkipCounted: a watermark older than max_backfill fires backfill_skipped once, on the
+// tick that goes on to create the export (AC1); an unsettled tick fires nothing (AC2); a zero watermark has
+// no span to skip (AC3).
+func TestLogsExportBackfillSkipCounted(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	mk := func(t *testing.T, settings map[string]string) (*logsExportLoop, *fakeExport, *[]string) {
+		f := newFakeExport(t, 1, func(int) string { return nLines(1, "m") })
+		var events []string
+		l := mkLogsLoopDeps(t, logsCfg(f.srv, settings),
+			source.Deps{OnDataIncomplete: func(_ string, r source.IncompleteReason) { events = append(events, string(r)) }}, now)
+		return l, f, &events
+	}
+	t.Run("old watermark creates the export and counts once", func(t *testing.T) {
+		l, f, events := mk(t, map[string]string{"window": "1h", "settle": "10m", "max_backfill": "1h"})
+		if _, err := l.Collect(context.Background(), model.Watermark{Time: now.Add(-10 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		if f.seq != 1 {
+			t.Fatalf("want the export created on this tick, got %d creates", f.seq)
+		}
+		if len(*events) != 1 || (*events)[0] != string(source.IncompleteBackfillSkipped) {
+			t.Fatalf("OnDataIncomplete = %v, want exactly [backfill_skipped]", *events)
+		}
+	})
+	t.Run("unsettled tick counts nothing", func(t *testing.T) {
+		// A watermark older than the floor whose clamped window has not settled: floor = now-5m is inside the
+		// settle gap (now-10m), so winMax <= winMin. Set directly: config validation rejects this combination.
+		l, f, events := mk(t, map[string]string{"window": "1h", "settle": "10m", "max_backfill": "1h"})
+		l.maxBackfill = 5 * time.Minute
+		wm := model.Watermark{Time: now.Add(-10 * time.Hour)}
+		if _, err := l.Collect(context.Background(), wm); err != nil {
+			t.Fatal(err)
+		}
+		if f.seq != 0 || len(*events) != 0 {
+			t.Fatalf("unsettled tick: creates=%d events=%v", f.seq, *events)
+		}
+	})
+	t.Run("zero watermark counts nothing", func(t *testing.T) {
+		l, f, events := mk(t, map[string]string{"window": "1h", "settle": "10m", "max_backfill": "1h"})
+		if _, err := l.Collect(context.Background(), model.Watermark{}); err != nil {
+			t.Fatal(err)
+		}
+		if f.seq != 1 || len(*events) != 0 {
+			t.Fatalf("zero watermark: creates=%d events=%v", f.seq, *events)
+		}
+	})
+}

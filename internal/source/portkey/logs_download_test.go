@@ -3,6 +3,7 @@
 package portkey
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -43,16 +44,67 @@ func (s *rangeServer) handle(w http.ResponseWriter, r *http.Request) {
 	hdr := r.Header.Get("Range")
 	s.ranges = append(s.ranges, hdr)
 	if hdr != "" && !s.ignoreRange {
-		var start int64
-		_, _ = fmt.Sscanf(hdr, "bytes=%d-", &start)
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, len(s.body)-1, len(s.body)))
-		w.WriteHeader(http.StatusPartialContent)
-		n, _ := w.Write(s.body[start:]) // serve only the tail — the prefix is not re-transferred
-		s.served += int64(n)
+		// RFC 7233 via http.ServeContent: 206 + Content-Range for a satisfiable range, and 416 +
+		// "Content-Range: bytes */<len>" for a range starting at/after the object length (as S3 behaves).
+		cw := &countingWriter{ResponseWriter: w}
+		http.ServeContent(cw, r, "", time.Time{}, bytes.NewReader(s.body))
+		s.served += cw.n
 		return
 	}
 	n, _ := w.Write(s.body) // 200 + full body (first chunk, or a server that ignored Range)
 	s.served += int64(n)
+}
+
+// countingWriter counts the body bytes written through it, so rangeServer.served stays accurate when
+// http.ServeContent writes the response.
+type countingWriter struct {
+	http.ResponseWriter
+	n int64
+}
+
+func (c *countingWriter) Write(b []byte) (int, error) {
+	n, err := c.ResponseWriter.Write(b)
+	c.n += int64(n)
+	return n, err
+}
+
+// TestDownloadChunkRangeAtEOF: a saved byte offset equal to the object length (a checkpoint parked at end of
+// object by a release that reported eof=false on an exact-multiple chunk) is answered 416 by an RFC 7233
+// store. That is the end of the page: eof=true, no error (AC2). A 416 whose Content-Range total differs from
+// the saved offset is NOT the end of the object and stays a loud error (AC3).
+func TestDownloadChunkRangeAtEOF(t *testing.T) {
+	srv := newRangeServer(t, nLines(4, "m"), false)
+	l := mkLogsLoop(t, logsCfg(srv.srv, map[string]string{"window": "1h", "settle": "10m"}), time.Now().UTC())
+	full := int64(len(srv.body))
+
+	recs, lines, off, eof, err := l.downloadChunk(context.Background(), srv.srv.URL+"/f.jsonl", 4, full, 4, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatalf("416 at saved offset == object length must complete the page, got error: %v", err)
+	}
+	if !eof || len(recs) != 0 || lines != 0 || off != full {
+		t.Fatalf("want eof=true, no records, offset %d; got eof=%v recs=%d lines=%d off=%d", full, eof, len(recs), lines, off)
+	}
+
+	// AC3: the object is longer than the saved offset claims, or the offset is past the end — both are 416s
+	// whose total is not the saved offset: refuse loudly.
+	if _, _, _, eof, err := l.downloadChunk(context.Background(), srv.srv.URL+"/f.jsonl", 9, full+10, 4, time.Unix(0, 0).UTC()); err == nil || eof {
+		t.Fatalf("416 with total != saved offset must error and not report eof; eof=%v err=%v", eof, err)
+	}
+}
+
+// TestDownloadChunkExactChunkIsEOF: a chunk that consumes exactly max lines and the last byte of the object
+// reports eof, so no extra Range request (which an RFC 7233 store would answer 416) is ever sent.
+func TestDownloadChunkExactChunkIsEOF(t *testing.T) {
+	srv := newRangeServer(t, nLines(8, "m"), false)
+	l := mkLogsLoop(t, logsCfg(srv.srv, map[string]string{"window": "1h", "settle": "10m"}), time.Now().UTC())
+	_, _, off, eof, err := l.downloadChunk(context.Background(), srv.srv.URL+"/f.jsonl", 0, 0, 4, time.Unix(0, 0).UTC())
+	if err != nil || eof {
+		t.Fatalf("first of two chunks: eof=%v err=%v", eof, err)
+	}
+	_, lines, _, eof, err := l.downloadChunk(context.Background(), srv.srv.URL+"/f.jsonl", 4, off, 4, time.Unix(0, 0).UTC())
+	if err != nil || lines != 4 || !eof {
+		t.Fatalf("final exact-size chunk must report eof: lines=%d eof=%v err=%v", lines, eof, err)
+	}
 }
 
 // TestDownloadChunkRangeResume (#61): a multi-chunk page resumes via an HTTP Range from the persisted byte
@@ -184,13 +236,20 @@ func TestDownloadChunkEOFShortChunk(t *testing.T) {
 	}
 }
 
-// An exact-multiple page: a full chunk reports eof=false; the next (past-the-end) chunk reads 0 → eof.
+// An exact-multiple page: a full chunk that ends at the last byte reports eof=true (peek, no extra request);
+// a full chunk with more object behind it reports eof=false; a past-the-end chunk (an older checkpoint, 200
+// fallback path) still reads 0 → eof.
 func TestDownloadChunkExactMultiple(t *testing.T) {
+	more := bodyServer(t, nLines(7, "m"))
+	_, lines, _, eof, _ := dlLoop(t, more).downloadChunk(context.Background(), more.URL+"/f.jsonl", 0, 0, 5, time.Unix(0, 0).UTC())
+	if lines != 5 || eof {
+		t.Fatalf("full chunk with more behind it: want 5 lines / eof=false, got %d/%v", lines, eof)
+	}
 	srv := bodyServer(t, nLines(5, "m"))
 	l := dlLoop(t, srv)
-	_, lines, _, eof, _ := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 5, time.Unix(0, 0).UTC())
-	if lines != 5 || eof {
-		t.Fatalf("full chunk: want 5 lines / eof=false, got %d/%v", lines, eof)
+	_, lines, _, eof, _ = l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 5, time.Unix(0, 0).UTC())
+	if lines != 5 || !eof {
+		t.Fatalf("full chunk ending at the last byte: want 5 lines / eof=true, got %d/%v", lines, eof)
 	}
 	recs, lines, _, eof, _ := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 5, 0, 5, time.Unix(0, 0).UTC())
 	if len(recs) != 0 || lines != 0 || !eof {

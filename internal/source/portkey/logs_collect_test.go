@@ -3,6 +3,7 @@
 package portkey
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -114,7 +115,9 @@ func (f *fakeExport) handle(w http.ResponseWriter, r *http.Request) {
 		if j != nil {
 			page = j.page
 		}
-		_, _ = w.Write([]byte(f.pageBody(page)))
+		// RFC 7233 via http.ServeContent (206 + Content-Range, and 416 for a range starting at the object
+		// length), as a real object store behaves, so a Range-at-EOF bug cannot hide behind the fake.
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader([]byte(f.pageBody(page))))
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/logs/exports/"):
 		id := strings.TrimPrefix(p, "/logs/exports/")
 		j := f.jobs[id]
@@ -793,5 +796,52 @@ func TestLogsExportAuthErrorFiresHook(t *testing.T) {
 	_, _ = l.Collect(context.Background(), model.Watermark{})
 	if len(auth) != 1 || auth[0] != [2]string{"logs_export", "pk-test"} {
 		t.Fatalf("OnAuthError want one (logs_export,pk-test), got %v", auth)
+	}
+}
+
+// TestLogsExportExactMultiplePageCompletes: a page whose line count is an exact multiple of
+// chunk_max_records completes without an extra Range request. The fake serves the object with
+// http.ServeContent, which answers a Range at the object length with 416 as an RFC 7233 store does.
+func TestLogsExportExactMultiplePageCompletes(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	f := newFakeExport(t, 8, func(int) string { return nLines(8, "m") })
+	l := mkLogsLoop(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m", "chunk_max_records": "4"}), now)
+	start := model.Watermark{Time: now.Add(-time.Hour)}
+	wm := start
+	emitted := 0
+	for step := 0; step < 30; step++ {
+		b, err := l.Collect(context.Background(), wm)
+		if err != nil {
+			t.Fatalf("step %d: Collect error: %v", step, err)
+		}
+		emitted += len(b.Logs)
+		wm = b.Watermark
+		if wm.Time.After(start.Time) {
+			if emitted != 8 {
+				t.Fatalf("emitted %d records, want 8", emitted)
+			}
+			return
+		}
+	}
+	t.Fatalf("window never completed: cursor=%s", wm.Cursor)
+}
+
+// TestLogsExportParkedAtEndOfObjectRecovers: a checkpoint written by a release that left the byte cursor at
+// the end of the object (eof=false on an exact-multiple chunk) recovers on its own (416 handled as eof).
+func TestLogsExportParkedAtEndOfObjectRecovers(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	body := nLines(8, "m")
+	f := newFakeExport(t, 8, func(int) string { return body })
+	l := mkLogsLoop(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m", "chunk_max_records": "4"}), now)
+	f.jobs["job-parked"] = &fakeJob{page: 0, status: statusSuccess}
+	cur := exportCursor{Phase: phaseDownloading, JobID: "job-parked", WinMin: "2026-06-19T10:00:00Z",
+		WinMax: "2026-06-19T11:00:00Z", Pages: 1, TotalRecords: 8, PageOffsetDone: 8, PageByteOffset: int64(len(body))}
+	start := model.Watermark{Time: now.Add(-2 * time.Hour), Cursor: cur.encode()}
+	b, err := l.Collect(context.Background(), start)
+	if err != nil {
+		t.Fatalf("parked checkpoint must recover, got %v", err)
+	}
+	if !b.Watermark.Time.After(start.Time) {
+		t.Fatalf("watermark did not advance: %+v", b.Watermark)
 	}
 }

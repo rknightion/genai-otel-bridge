@@ -1,6 +1,56 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [4.2.0](https://github.com/rknightion/genai-otel-bridge/compare/v4.1.0...v4.2.0) (2026-11-26)
+
+
+### Features
+
+* **selfobs:** label per-loop self-metrics with source and a distinct loop name ([#508](https://github.com/rknightion/genai-otel-bridge/issues/508)) ([eff9208](https://github.com/rknightion/genai-otel-bridge/commit/eff9208c8c939084aaff1f3620251d4919302513))
+* **selfobs:** per-replica leader gauge, runtime memory gauges and a max_response_bytes bound ([#497](https://github.com/rknightion/genai-otel-bridge/issues/497)) ([6dec081](https://github.com/rknightion/genai-otel-bridge/commit/6dec0811fd4f23c6b8a7909c7df9193ce04c0e7d))
+
+
+### Bug Fixes
+
+* align portkey analytics windows to the minute ([#484](https://github.com/rknightion/genai-otel-bridge/issues/484)) ([f2a7dd0](https://github.com/rknightion/genai-otel-bridge/commit/f2a7dd06112887c8cfcafd302b3db6dd2e342067))
+* **ci:** serialise publish per commit, read ci-success in one request and drop private names ([#494](https://github.com/rknightion/genai-otel-bridge/issues/494)) ([d390bff](https://github.com/rknightion/genai-otel-bridge/commit/d390bffc98bfc85f72485b084a00fe7fb226f833))
+* **config:** close the queue, secret and chart-default config gaps ([#485](https://github.com/rknightion/genai-otel-bridge/issues/485)) ([290f31a](https://github.com/rknightion/genai-otel-bridge/commit/290f31ad30a73965eec710de78f93a18e59f090d))
+* **coordinate:** lease epoch baseline, lease epoch read retry and dynamodb renew deadline ([#498](https://github.com/rknightion/genai-otel-bridge/issues/498)) ([2466df9](https://github.com/rknightion/genai-otel-bridge/commit/2466df9c0ddab9e418cad5ae78a5e57e57807e6f))
+* default-install the chart cleanly and align manual publish tags ([#483](https://github.com/rknightion/genai-otel-bridge/issues/483)) ([fec8847](https://github.com/rknightion/genai-otel-bridge/commit/fec8847be07e9cfaf5a3714e4a145d1ef101e127))
+* **deps:** update go modules (non-major) ([#308](https://github.com/rknightion/genai-otel-bridge/issues/308)) ([cbba28a](https://github.com/rknightion/genai-otel-bridge/commit/cbba28a7559399d4e1ccc355ed55e995b25ab55e))
+* **deps:** update go modules (non-major) ([#427](https://github.com/rknightion/genai-otel-bridge/issues/427)) ([e037cfc](https://github.com/rknightion/genai-otel-bridge/commit/e037cfcc72fe6b25d853a05efc4dbb6cdd70c244))
+* **deps:** update go modules (non-major) ([#480](https://github.com/rknightion/genai-otel-bridge/issues/480)) ([d592467](https://github.com/rknightion/genai-otel-bridge/commit/d592467b83f46f7eae12e01b31091d33d329e135))
+* **deps:** update kubernetes libraries to v0.37.2 ([#311](https://github.com/rknightion/genai-otel-bridge/issues/311)) ([e4eceb4](https://github.com/rknightion/genai-otel-bridge/commit/e4eceb4d6348b0aee370873beee47c4ba3154366))
+* **deps:** update kubernetes libraries to v0.37.3 ([#477](https://github.com/rknightion/genai-otel-bridge/issues/477)) ([45ea3fd](https://github.com/rknightion/genai-otel-bridge/commit/45ea3fd3177d8660a770899b122ea96c2d6aae59))
+* **deps:** update module github.com/grafana/pyroscope-go to v1.5.0 ([#428](https://github.com/rknightion/genai-otel-bridge/issues/428)) ([1b64639](https://github.com/rknightion/genai-otel-bridge/commit/1b64639531a2bc9a04560f26e57829426258b523))
+* **deps:** update module sigs.k8s.io/controller-runtime to v0.25.3 ([#423](https://github.com/rknightion/genai-otel-bridge/issues/423)) ([1ac2ffd](https://github.com/rknightion/genai-otel-bridge/commit/1ac2ffd18ef60ec798a4ab99a0a7461be606f915))
+* **emit:** attempt every split chunk before returning an advance-past reject ([#482](https://github.com/rknightion/genai-otel-bridge/issues/482)) ([6ad264f](https://github.com/rknightion/genai-otel-bridge/commit/6ad264f456e4b1d7c772e8ff99ef245dc940e76b))
+* file checkpoint guards and doc statements the tree contradicts ([#349](https://github.com/rknightion/genai-otel-bridge/issues/349)) ([5836f55](https://github.com/rknightion/genai-otel-bridge/commit/5836f55add6fb66f5146185d03c7df4a1af42592))
+* **grafana:** close the self-obs alert gaps (oversize park, PollerStale self-resolve, degraded and partial-success) and the LangSmith window-total rules ([#490](https://github.com/rknightion/genai-otel-bridge/issues/490)) ([42f825f](https://github.com/rknightion/genai-otel-bridge/commit/42f825f1d648866a7cacb9d59340a78b9d889e53))
+* **guard:** count active label sets against the cardinality budget ([#492](https://github.com/rknightion/genai-otel-bridge/issues/492)) ([bfbf1ef](https://github.com/rknightion/genai-otel-bridge/commit/bfbf1efe50070fbf72de2a07146e73c6ebdd6e6b))
+* make -validate-config run Build, guard doc example configs, correct the coordinator=none warning ([#486](https://github.com/rknightion/genai-otel-bridge/issues/486)) ([8c75f5e](https://github.com/rknightion/genai-otel-bridge/commit/8c75f5e15c1834e2007ff6a9427c361df3d4b4f9))
+* portkey logs_export - chunk-boundary wedge, lost jobs, create schema, backfill skip, settings validation ([#487](https://github.com/rknightion/genai-otel-bridge/issues/487)) ([76e069a](https://github.com/rknightion/genai-otel-bridge/commit/76e069af7399fdddbcb2004db6801935dcbbb3b2))
+* reject flattened content-floor keys in vendor opt-in validators ([#496](https://github.com/rknightion/genai-otel-bridge/issues/496)) ([e19c406](https://github.com/rknightion/genai-otel-bridge/commit/e19c4067e6c97e81a70cb3eab07bf0e750f8a45d))
+* repair Renovate, tool-install and forbidden-words tooling ([#493](https://github.com/rknightion/genai-otel-bridge/issues/493)) ([ae225ed](https://github.com/rknightion/genai-otel-bridge/commit/ae225ed8a4e51a4eae149c48557335669dc7a719))
+* **schedule:** back off on fenced writes and quota, stop counting cancellations ([#489](https://github.com/rknightion/genai-otel-bridge/issues/489)) ([6e01619](https://github.com/rknightion/genai-otel-bridge/commit/6e0161974baebf84880d9f04f2cb89158b2d8fab))
+* **schedule:** honest last_success, queue depth and log-loop catch-up, with logs-plane and honesty guards ([#500](https://github.com/rknightion/genai-otel-bridge/issues/500)) ([8f3633e](https://github.com/rknightion/genai-otel-bridge/commit/8f3633ec0a19035681f8f4a62ea9b83d307d3404))
+* seed alerted {loop, reason} counters at 0 so the first event fires ([#504](https://github.com/rknightion/genai-otel-bridge/issues/504)) ([22efba0](https://github.com/rknightion/genai-otel-bridge/commit/22efba0e9091850a8fb06d4e2f7a7ca9e73e471d))
+* snapshot loops emit once per stamp, count truncation and endpoint failures, tighten langsmith inputs ([#491](https://github.com/rknightion/genai-otel-bridge/issues/491)) ([c99d7f2](https://github.com/rknightion/genai-otel-bridge/commit/c99d7f2afba0c1b7908485b6690bee9bfa2588c5))
+
+
+### Documentation
+
+* correct design-record statements the code now contradicts ([#503](https://github.com/rknightion/genai-otel-bridge/issues/503)) ([83b27f2](https://github.com/rknightion/genai-otel-bridge/commit/83b27f289a762f17652a6940b1db289c66af0eac))
+* design-record sweep, owner-decided doc facts, pointer fixes and test pruning ([#488](https://github.com/rknightion/genai-otel-bridge/issues/488)) ([84cd867](https://github.com/rknightion/genai-otel-bridge/commit/84cd867f75c75d140efe0c56bb9a86297c55f971))
+
+
+### Build & CI
+
+* align security workflows with the fleet standard ([9d33ed5](https://github.com/rknightion/genai-otel-bridge/commit/9d33ed56ad654d944b2e931ab5cbf9acbc3480f6))
+* align the CI gate legs with just check and pin the hygiene tools ([#506](https://github.com/rknightion/genai-otel-bridge/issues/506)) ([3681ee0](https://github.com/rknightion/genai-otel-bridge/commit/3681ee0592e0edd859bc79641625bf4bde6f4679))
+* run PR metadata checks in their own workflow so body edits do not restart CI ([#474](https://github.com/rknightion/genai-otel-bridge/issues/474)) ([07a88cd](https://github.com/rknightion/genai-otel-bridge/commit/07a88cd3317a43a0aa83550cb31cf6488164a2c1))
+* share build and acceptance setup ([7b9f546](https://github.com/rknightion/genai-otel-bridge/commit/7b9f546d8672ee11f19e52e838a71382b3c77bd4))
+
 ## [4.1.0](https://github.com/rknightion/genai-otel-bridge/compare/v4.0.0...v4.1.0) (2026-11-13)
 
 

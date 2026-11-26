@@ -133,6 +133,12 @@ func newAnalyticsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps sou
 		return nil, fmt.Errorf("portkey: analytics loop requires a positive window (time-bucketed source); got %s", window)
 	}
 	settle := time.Duration(lpCfg.BucketSettle)
+	// [F27] Collect floors the window end to the granularity, so a window shorter than one bucket would
+	// truncate back onto the watermark on every poll and never progress: reject it here, naming the key.
+	if window < granularity {
+		return nil, fmt.Errorf("portkey: analytics loop window (%s) must be at least the %s bucket granularity (windows are minute-aligned; a shorter window can never advance)", window, granularity)
+	}
+
 	// [#57] Mirror the AR-HIGH window guard for the OTHER two silent-no-op triggers on a raw-YAML config
 	// (config.Load applies no defaults for these; the chart renders 50m/90m). Collect computes
 	// start=now-bootstrap clamped to the now-max_backfill floor, and until=now-settle:
@@ -140,11 +146,19 @@ func newAnalyticsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps sou
 	//   - bootstrap ≤ settle ⇒ until ≤ start=now-bootstrap every tick.
 	// Either way until ≤ start ⇒ empty batch, watermark stays zero, window_lag is skipped (zero watermark),
 	// no samples/errors — a permanent FULLY SILENT data gap. Require both > settle so the loop can advance.
-	if bootstrap := time.Duration(lpCfg.BootstrapLookback); bootstrap <= settle {
-		return nil, fmt.Errorf("portkey: analytics loop requires bootstrap_lookback (%s) > bucket_settle (%s) (else the loop never advances past the settle cutoff — a silent no-op)", bootstrap, settle)
+	//
+	// [F27] Because until is floored to the granularity, > settle is not enough. When start is clamped to
+	// now-X (X = bootstrap_lookback on a zero watermark, max_backfill on a stale one), a poll advances only
+	// if floor(now-settle) > now-X. floor(t) > t-granularity always holds and is tight, so the loop is
+	// guaranteed to progress at every poll iff X >= settle + granularity; for any smaller X there are
+	// instants where floor(now-settle) <= now-X and the window is empty (e.g. X = settle+1s advances only
+	// in the first second of each minute). Require both to be at least settle + granularity.
+	minSpan := settle + granularity
+	if bootstrap := time.Duration(lpCfg.BootstrapLookback); bootstrap < minSpan {
+		return nil, fmt.Errorf("portkey: analytics loop requires bootstrap_lookback (%s) >= bucket_settle (%s) + %s bucket granularity = %s (windows are minute-aligned; a shorter lookback leaves no forward window at most polls — a silent stall)", bootstrap, settle, granularity, minSpan)
 	}
-	if mb := time.Duration(lpCfg.MaxBackfill); mb <= settle {
-		return nil, fmt.Errorf("portkey: analytics loop requires max_backfill (%s) > bucket_settle (%s) (else the backfill floor clamps every window empty — a silent no-op)", mb, settle)
+	if mb := time.Duration(lpCfg.MaxBackfill); mb < minSpan {
+		return nil, fmt.Errorf("portkey: analytics loop requires max_backfill (%s) >= bucket_settle (%s) + %s bucket granularity = %s (windows are minute-aligned; a shorter backfill floor leaves no forward window at most polls — a silent stall)", mb, settle, granularity, minSpan)
 	}
 	band := detectionBand(settle)
 	// Build passes: if use-cases are configured, one pass per use-case; otherwise a single unlabelled
@@ -272,13 +286,17 @@ func (l *analyticsLoop) Collect(ctx context.Context, since model.Watermark) (mod
 	if d := until.Sub(start); d > 55*time.Minute { // defensive H5 clamp
 		until = start.Add(55 * time.Minute)
 	}
+	// [F27] Pin the window end to a whole granularity bucket. A mid-minute end would emit the bucket
+	// containing it from a request that stopped part-way through, and the next window (starting at
+	// that end) would emit the same (series, bucket end) again.
+	until = until.Truncate(granularity)
 	if !until.After(start) {
 		return model.Batch{Key: l.Key(), Watermark: since}, nil // nothing settled yet
 	}
 
 	// [settle-exceedance] Compute the widened fetchStart once (shared across passes; the window math
 	// is the same for all passes — only the api_key_ids filter differs). See collectPass.
-	fetchStart := start
+	fetchStart := start.Truncate(granularity)
 	if l.band > 0 {
 		fetchStart = start.Add(-l.band)
 		if floor := now.Add(-l.maxBackfill); fetchStart.Before(floor) {
@@ -289,6 +307,7 @@ func (l *analyticsLoop) Collect(ctx context.Context, since model.Watermark) (mod
 		if minFetch := until.Add(-55 * time.Minute); fetchStart.Before(minFetch) {
 			fetchStart = minFetch
 		}
+		fetchStart = fetchStart.Truncate(granularity) // whole first bucket: no false revision from a cut
 	}
 
 	var all []model.Sample
@@ -345,14 +364,14 @@ func (l *analyticsLoop) collectPass(ctx context.Context, p resolvedUseCase, star
 	}
 
 	// [AR-H-lb] Forward-only lower bound is `start` — abandoned span counted by scheduler (F25).
-	samples, err := derive(resp, l.prefix, start, now, l.settle, granularity, l.startSemantics)
+	samples, err := derive(resp, l.prefix, start, until, granularity, l.startSemantics)
 	if err != nil {
 		return nil, err // ErrGranularityUnexpected or a parse error
 	}
 
 	// [settle-exceedance] Detection pass — does NOT affect emit/watermark (DESIGN §3.3/F6).
 	if h := l.histories[p.slug]; h != nil {
-		if settled, derr := derive(resp, l.prefix, fetchStart, now, l.settle, granularity, l.startSemantics); derr == nil {
+		if settled, derr := derive(resp, l.prefix, fetchStart, until, granularity, l.startSemantics); derr == nil {
 			if l.onBucketRevised != nil {
 				for _, bucketEnd := range h.observe(settled, until) {
 					// age = how late the revision is (now − bucketEnd); always ≥ settle by construction.

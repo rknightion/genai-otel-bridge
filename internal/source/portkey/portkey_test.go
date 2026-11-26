@@ -31,7 +31,7 @@ func TestDeriveForwardOnlyAndSettle(t *testing.T) {
 		dps = append(dps, dataPoint{Timestamp: tAt(base, i), Total: float64(i)})
 	}
 	resp := map[string]graphResponse{"requests": {DataPoints: dps}}
-	got, err := derive(resp, "portkey_api", since, now, 3*time.Minute, time.Minute, false)
+	got, err := derive(resp, "portkey_api", since, now.Add(-3*time.Minute), time.Minute, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestDeriveLatencyQuantiles(t *testing.T) {
 		dps = append(dps, dataPoint{Timestamp: tAt(base, i), P50: 100 + float64(i)*10, P90: 400, P99: 1200})
 	}
 	resp := map[string]graphResponse{"latency": {DataPoints: dps}}
-	got, err := derive(resp, "portkey_api", base, now, 3*time.Minute, time.Minute, false)
+	got, err := derive(resp, "portkey_api", base, now.Add(-3*time.Minute), time.Minute, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestDeriveTokenSplit(t *testing.T) {
 	// One settled, forward bucket carrying the three token fields (total == input + output, as Portkey reports).
 	dps := []dataPoint{{Timestamp: tAt(base, 1), Total: 1500, TotalRequestUnits: 1000, TotalResponseUnits: 500}}
 	resp := map[string]graphResponse{"tokens": {DataPoints: dps}}
-	got, err := derive(resp, "portkey_api", base, now, 3*time.Minute, time.Minute, false)
+	got, err := derive(resp, "portkey_api", base, now.Add(-3*time.Minute), time.Minute, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestDeriveLatencyAvg(t *testing.T) {
 	// One settled bucket; Avg is in MILLISECONDS like the percentiles → expect seconds.
 	dps := []dataPoint{{Timestamp: tAt(base, 1), Avg: 250, P50: 100, P90: 400, P99: 1200}}
 	resp := map[string]graphResponse{"latency": {DataPoints: dps}}
-	got, err := derive(resp, "portkey_api", base, now, 3*time.Minute, time.Minute, false)
+	got, err := derive(resp, "portkey_api", base, now.Add(-3*time.Minute), time.Minute, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestDeriveOutOfOrderAccepted(t *testing.T) {
 		dps = append(dps, dataPoint{Timestamp: tAt(base, i), Total: float64(i)})
 	}
 	resp := map[string]graphResponse{"requests": {DataPoints: dps}}
-	got, err := derive(resp, "portkey_api", base, now, 3*time.Minute, time.Minute, false)
+	got, err := derive(resp, "portkey_api", base, now.Add(-3*time.Minute), time.Minute, false)
 	if err != nil {
 		t.Fatalf("out-of-order response must sort, not error: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestDeriveGranularityGuard(t *testing.T) {
 	bad := map[string]graphResponse{"requests": {DataPoints: []dataPoint{
 		{Timestamp: rfc(0), Total: 1}, {Timestamp: rfc(60 * time.Second), Total: 1}, {Timestamp: rfc(150 * time.Second), Total: 1},
 	}}}
-	if _, err := derive(bad, "portkey_api", base.Add(-time.Minute), base.Add(time.Hour), time.Minute, time.Minute, false); !errors.Is(err, source.ErrGranularityUnexpected) {
+	if _, err := derive(bad, "portkey_api", base.Add(-time.Minute), base.Add(time.Hour).Add(-time.Minute), time.Minute, false); !errors.Is(err, source.ErrGranularityUnexpected) {
 		t.Fatalf("non-multiple step: want ErrGranularityUnexpected, got %v", err)
 	}
 
@@ -188,7 +188,7 @@ func TestDeriveGranularityGuard(t *testing.T) {
 	gap := map[string]graphResponse{"requests": {DataPoints: []dataPoint{
 		{Timestamp: rfc(60 * time.Second), Total: 1}, {Timestamp: rfc(180 * time.Second), Total: 1}, // 120s = 2×gran
 	}}}
-	if _, err := derive(gap, "portkey_api", base, base.Add(time.Hour), time.Minute, time.Minute, false); err != nil {
+	if _, err := derive(gap, "portkey_api", base, base.Add(time.Hour).Add(-time.Minute), time.Minute, false); err != nil {
 		t.Fatalf("omitted zero-bucket (2×gran gap) must be accepted, got %v", err)
 	}
 }
@@ -219,7 +219,7 @@ func TestAnalyticsDecodesRawJSONWireTags(t *testing.T) {
 	if got := tokensResp.DataPoints[0]; got.Total != 1500 || got.TotalRequestUnits != 1000 || got.TotalResponseUnits != 500 {
 		t.Fatalf("tokens wire tags decoded wrong: %+v (a dataPoint json tag regressed)", got)
 	}
-	tokSamples, err := derive(map[string]graphResponse{"tokens": tokensResp}, "portkey_api", base, now, 3*time.Minute, time.Minute, true)
+	tokSamples, err := derive(map[string]graphResponse{"tokens": tokensResp}, "portkey_api", base, now.Add(-3*time.Minute), time.Minute, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestAnalyticsDecodesRawJSONWireTags(t *testing.T) {
 	if got := latResp.DataPoints[0]; got.Avg != 250 || got.P50 != 100 || got.P90 != 400 || got.P99 != 1200 {
 		t.Fatalf("latency wire tags decoded wrong: %+v (a percentile json tag regressed)", got)
 	}
-	latSamples, err := derive(map[string]graphResponse{"latency": latResp}, "portkey_api", base, now, 3*time.Minute, time.Minute, true)
+	latSamples, err := derive(map[string]graphResponse{"latency": latResp}, "portkey_api", base, now.Add(-3*time.Minute), time.Minute, true)
 	if err != nil {
 		t.Fatal(err)
 	}

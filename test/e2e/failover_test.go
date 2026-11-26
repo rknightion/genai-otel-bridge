@@ -119,7 +119,12 @@ func TestInvariant3_ZombieFrozenStandbyTakesOver(t *testing.T) {
 	// its absence — the monotonic/no-rewind/advanced assertions are what prove the zombie caused no harm.
 	prev, _ := latestWatermark(t, cs)
 	advanced, fenced := false, false
-	deadline := time.Now().Add(30 * time.Second)
+	// The analytics window end is floored to the 1m granularity (#357), so its watermark only moves on
+	// whole-minute boundaries even though the e2e cadence is 10s: a 30s window can legitimately see no
+	// advance. Budget one granularity step plus cadence and slack. The zombie was resumed above, before
+	// its ~60s liveness restart, and a later restart only returns it as a standby (log reads tolerate
+	// it), so the longer window does not change what is asserted.
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		wm, ok := latestWatermark(t, cs)
 		if ok {

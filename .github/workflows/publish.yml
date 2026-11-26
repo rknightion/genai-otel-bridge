@@ -5,9 +5,11 @@
 # ci.yml's `ci-success` check for that same commit (see wait-for-ci below — a red
 # ci-success must never let a broken build reach the edge tag / snapshot chart that
 # dev EKS ArgoCD tracks); called by release-please.yml when a release is created
-# (release_tag set, ungated — release-please only merges once ci-success is already
-# green, so latency is unchanged); also workflow_dispatch-able: leave release_tag
-# empty for an edge (:main) test build, or set it to re-publish a tag.
+# (release_tag set) and by auto-rc.yml for a release candidate; also
+# workflow_dispatch-able: leave release_tag empty for an edge (:main) test build, or
+# set it to re-publish a tag. In a called workflow github.event_name is the caller's
+# event, so the release-please call (a push) waits for ci-success too; the auto-rc
+# call (workflow_run, fired by CI's completion) and a manual dispatch skip the wait.
 name: publish
 
 on:
@@ -31,12 +33,22 @@ on:
 permissions:
   contents: read
 
+# One publish at a time per commit. A release merge runs this workflow twice for the
+# same commit (its own push trigger and the release-please call), and a release
+# candidate runs it a third way through auto-rc; all of them push to the same image
+# repository and the edge and RC paths both write the :main tags. Serialise, never
+# cancel. Under workflow_run (auto-rc) github.sha is the default-branch head, so the
+# group keys on the commit CI ran on instead.
+concurrency:
+  group: publish-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
 jobs:
-  # Gate the edge (:main) publish path on CI actually being green for this exact commit.
-  # Only runs on the `push` trigger (github.sha there is guaranteed to be the pushed commit,
-  # unlike workflow_run's head_sha, which can race ahead on rapid pushes); the workflow_call
-  # (release) and workflow_dispatch (manual) paths skip it, so this job's result is `skipped`
-  # there and `image` proceeds immediately — release publishing latency is unaffected.
+  # Gate the publish on CI actually being green for this exact commit. Runs whenever
+  # github.event_name is `push`: the edge path and the release-please call, whose event
+  # is the caller's push (github.sha there is the pushed commit). The auto-rc call
+  # (workflow_run, which only fires once CI has concluded green) and a manual dispatch
+  # skip it, so this job's result is `skipped` there and `image` proceeds at once.
   wait-for-ci:
     name: wait-for-ci-success
     if: github.event_name == 'push'
@@ -54,10 +66,17 @@ jobs:
           set -euo pipefail
           echo "Waiting for the ci-success check on ${SHA}..."
           for i in $(seq 1 90); do
-            conclusion=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" \
-              --jq '[.check_runs[] | select(.name=="ci-success")] | last | .conclusion // empty')
-            status=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" \
-              --jq '[.check_runs[] | select(.name=="ci-success")] | last | .status // empty')
+            # One request, filtered server-side by name: an unfiltered list is paged at
+            # 30 and this commit can carry more check runs than that, and reading status
+            # and conclusion from two requests can see a check complete in between.
+            if ! state=$(gh api \
+              "repos/${REPO}/commits/${SHA}/check-runs?check_name=ci-success&per_page=100" \
+              --jq '[.check_runs[]] | last | "\(.status // "") \(.conclusion // "")"'); then
+              echo "check-runs request failed; sleeping 30s (${i}/90)"
+              sleep 30
+              continue
+            fi
+            read -r status conclusion <<< "${state}"
             if [ "${status}" = "completed" ]; then
               echo "ci-success conclusion: ${conclusion}"
               if [ "${conclusion}" = "success" ]; then

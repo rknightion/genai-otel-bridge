@@ -127,8 +127,8 @@ constructor, as `portkey.New` does. The 90m is sized to the Grafana Cloud Mimir
 
 A config with at least one `tenants` entry has the tenant shape; otherwise it is the legacy shape, checked
 exactly as before. An empty `tenants: {}` or `defaults: {}` counts as absent, so a chart can render
-either empty for a legacy install. In this version the shape loads and validates, and then `main` and
-`-validate-config` refuse it with `tenancy.ErrTenantShapeNotEnabled`.
+either empty for a legacy install. `main` and `-validate-config` run it once it loads, validates,
+resolves and assembles (unit 6e-2 removed the refusal that stopped it before).
 
 - **Keys.** `Config.Tenants` (`map[string]TenantConfig`) and `Config.Defaults` (`map[string]DefaultsConfig`),
   with `TenantDestinationConfig`, `TenantOTLPConfig`, `TargetConfig`, `TenantSourceConfig` and

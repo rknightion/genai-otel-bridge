@@ -291,8 +291,7 @@ func TestPipelineNames(t *testing.T) {
 }
 
 // Unit 6a (#530): a config with at least one tenant resolves to the tenant shape (this tenant has no
-// targets, so no rows); an empty tenants map is the legacy shape. The sentinel's text is
-// the one main and the config check print.
+// targets, so no rows); an empty tenants map is the legacy shape.
 func TestResolveTenantShape(t *testing.T) {
 	cfg := legacyConfig()
 	cfg.Sources = nil
@@ -312,9 +311,6 @@ func TestResolveTenantShape(t *testing.T) {
 	}
 	if plan.TenantShape || len(plan.Rows) == 0 {
 		t.Fatalf("an empty tenants map: TenantShape %v with %d rows, want the legacy shape", plan.TenantShape, len(plan.Rows))
-	}
-	if got := tenancy.ErrTenantShapeNotEnabled.Error(); got != "the tenant shape is not enabled in this version" {
-		t.Errorf("ErrTenantShapeNotEnabled = %q", got)
 	}
 }
 

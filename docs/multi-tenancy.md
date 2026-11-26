@@ -1,8 +1,9 @@
 # Multi-tenancy
 
 From the version that enables the tenant shape, one install can serve several teams (tenants). Each
-tenant's data goes to its own Grafana Cloud stack, with its own credentials and identity. Until
-then a config file with a `tenants` map is refused at startup. The design and its reasoning are in
+tenant's data goes to its own Grafana Cloud stack, with its own credentials and identity. An older
+image refuses a config file with a `tenants` map at startup, so upgrade the image before you change
+the config ([Converting a legacy install](#converting-a-legacy-install)). The design and its reasoning are in
 [`docs/designs/multi-tenancy.md`](https://github.com/rknightion/genai-otel-bridge/blob/main/docs/designs/multi-tenancy.md).
 
 ```yaml

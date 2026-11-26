@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -273,11 +272,14 @@ func TestRunValidateConfig(t *testing.T) {
 	}
 }
 
-// AC5 (#530): main refuses a tenant-shape plan right after app.Prepare. The fixture validates, so the
-// refusal, not a load rule, is what stops it; a legacy plan passes.
-func TestTenantShapeRefused(t *testing.T) {
+// AC5 (#530), flipped by unit 6e-2 (#536): main accepts a tenant-shape config. app.Prepare resolves the
+// fixture to a tenant-shape plan with one row per target, which main goes on to assemble (its
+// refuseTenantShape and tenancy.ErrTenantShapeNotEnabled are deleted), and -validate-config prints that
+// plan's table and the OK line and exits 0. Until 6e-2 both stopped the fixture with the refusal.
+func TestTenantShapeAccepted(t *testing.T) {
+	const fixture = "../../internal/config/testdata/tenants.yaml"
 	t.Setenv("TENANT_FIXTURE_SELF_TOKEN", "self-token-example")
-	cfg, err := config.Load("../../internal/config/testdata/tenants.yaml")
+	cfg, err := config.Load(fixture)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -285,11 +287,63 @@ func TestTenantShapeRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if err := refuseTenantShape(plan); !errors.Is(err, tenancy.ErrTenantShapeNotEnabled) {
-		t.Fatalf("refuseTenantShape = %v, want ErrTenantShapeNotEnabled", err)
+	if !plan.TenantShape || len(plan.Rows) != 3 {
+		t.Fatalf("plan: TenantShape %v with %d rows, want the tenant shape with 3 rows", plan.TenantShape, len(plan.Rows))
 	}
-	if err := refuseTenantShape(tenancy.Plan{Rows: []tenancy.Row{{}}}); err != nil {
-		t.Fatalf("a legacy plan is refused: %v", err)
+
+	var stdout, stderr strings.Builder
+	if code := runValidateConfig(fixture, &stdout, &stderr); code != 0 {
+		t.Fatalf("-validate-config on a tenant-shape config: exit %d, stderr %q", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.HasPrefix(out, plan.Table()) || !strings.HasSuffix(out, "validate-config: OK ("+fixture+") plan "+plan.Hash()+"\n") {
+		t.Errorf("stdout is not the plan table then the OK line with the plan hash:\n%s", out)
+	}
+	if strings.Contains(out, "self-token-example") {
+		t.Error("stdout prints the self token")
+	}
+}
+
+// TestTenantShapeWithoutEmitSelfStopsBeforeSelfTelemetry (#536): with the refusal gone a tenant-shape
+// config reaches main's self-telemetry wiring, so every step main runs before an exporter exists must stop
+// a tenant-shape config with no emit.self: app.Prepare (main's "config" fatal), newSelfProvider (which
+// validates before it builds a provider) and selfOTLP (main's "selfobs" fatal). None may fall back to a
+// tenant's destination or send it a request.
+func TestTenantShapeWithoutEmitSelfStopsBeforeSelfTelemetry(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	raw, err := os.ReadFile("../../internal/config/testdata/tenants.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const self = "emit:\n  self:\n    otlp:\n      endpoint: https://otlp-self.example.com/otlp\n      instance_id: \"100000\"\n      token: ${TENANT_FIXTURE_SELF_TOKEN}\n"
+	if strings.Count(string(raw), self) != 1 {
+		t.Fatal("the fixture's emit.self block is not found exactly once")
+	}
+	// Every tenant destination points at the counting server, so a fallback to one would be seen.
+	body := strings.Replace(string(raw), self, "", 1)
+	body = regexp.MustCompile(`https://otlp-[ab]\.example\.com/otlp`).ReplaceAllString(body, srv.URL)
+	cfg, err := config.LoadBytes([]byte(body))
+	if err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	const want = "emit.self is required in the tenant shape"
+	if _, err := app.Prepare(cfg); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("app.Prepare = %v, want %q", err, want)
+	}
+	if mp, _, err := newSelfProvider(context.Background(), cfg, "pod-0"); err == nil || mp != nil {
+		t.Errorf("newSelfProvider = %v, %v; want an error and no provider", mp, err)
+	}
+	if ep, _, err := selfOTLP(cfg); err == nil || !strings.Contains(err.Error(), want) || ep != (config.OTLPConn{}) {
+		t.Errorf("selfOTLP = %+v, %v; want %q and no endpoint", ep, err, want)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := hits.Load(); n != 0 {
+		t.Errorf("a tenant destination received %d requests", n)
 	}
 }
 

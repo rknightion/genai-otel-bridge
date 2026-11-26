@@ -27,10 +27,9 @@ imports `internal/config` only.
   `SourceInstance(tenant, target)` (`mt.<tenant>.<target>`), the target's `Scope`, and `Loops`
   deep-copied from `defaults.<type>.loops`: a new map, and in each block a new `settings` map and
   `graphs` slice, so no two rows (and no row and the config) share one. `TestRowsDoNotShareLoopMaps`
-  guards this. `main` and `app.ValidateConfigFile` still refuse the shape with
-  `ErrTenantShapeNotEnabled` ("the tenant shape is not enabled in this version"); the config check
-  first assembles the plan (no secret file read) and returns the table and hash with the refusal
-  only when assembly passes. A tenant with no targets gives no rows.
+  guards this. `main` runs a tenant-shape plan and `app.ValidateConfigFile` assembles it (no secret
+  file read) and returns its table and hash; nothing refuses the shape since unit 6e-2. A tenant with
+  no targets gives no rows.
 - **Resolve-phase rules** (design sections 2 and 3), checked by `Resolve` for the tenant shape. Every
   broken rule is reported (`errors.Join`, in tenant and target order) and the plan is then empty:
   - a target's `destination` names a destination of its own tenant;
@@ -45,7 +44,7 @@ imports `internal/config` only.
   assertion support, log-emitting loops) belong to `internal/app`.
 
 `Row`, `Plan`, `Resolve`, `StackKey`, `PipelineID`, `SourceInstance`, `PipelineAttribute`,
-`ErrTenantShapeNotEnabled`, `SecretReader` and `DirSecretReader` are seams later work depends on: keep their names and shapes. Add nothing to `Plan` beyond `Rows` and
+`SecretReader` and `DirSecretReader` are seams later work depends on: keep their names and shapes. Add nothing to `Plan` beyond `Rows` and
 `TenantShape` without a design change.
 
 ## Table and hash

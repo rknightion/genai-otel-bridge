@@ -63,9 +63,9 @@ var validateEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // make at startup (unknown loop or graph, bootstrap_lookback, content-floor keys, stream-label budget,
 // series ownership, no enabled loops) fails here too. Only a file is checked, not the inline
 // GENAI_OTEL_BRIDGE_CONFIG form. For a valid config it returns the resolved plan's table and hash
-// (tenancy.Plan.Table and Hash; the table holds no secret) and a nil error; otherwise only the error,
-// except a tenant-shape config that also assembles (with placeholderSecrets, no secret file read), which
-// returns its table and hash with tenancy.ErrTenantShapeNotEnabled.
+// (tenancy.Plan.Table and Hash; the table holds no secret) and a nil error; otherwise only the error. A
+// tenant-shape config is assembled with placeholderSecrets (no secret file read), so an unreadable secret
+// and a duplicate API key are found only when a pod reads the files.
 // The hash of a config with an unset ${ENV} ref covers its placeholder, so it matches a running
 // leader's only when CI has the same environment.
 func ValidateConfigFile(path string) (table, hash string, err error) {
@@ -123,11 +123,6 @@ func ValidateConfigFile(path string) (table, hash string, err error) {
 	}
 	if _, err := BuildFromPlan(context.Background(), cfg, plan, inertCheckpointer{}, coordinate.Noop{}, inertEmitterFactory, noopTelemetryFactory, opts); err != nil {
 		return "", "", err
-	}
-	// A tenant-shape config that assembles is refused only now: this version does not run the shape. The
-	// table and hash come with the refusal.
-	if plan.TenantShape {
-		return plan.Table(), plan.Hash(), tenancy.ErrTenantShapeNotEnabled
 	}
 	return plan.Table(), plan.Hash(), nil
 }

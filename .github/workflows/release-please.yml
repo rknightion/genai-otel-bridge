@@ -40,7 +40,7 @@ jobs:
       # the tailnet; a failure here is infrastructure, not the commit.
       - name: Mint a scoped release token
         id: bao
-        uses: rknightion/.github/.github/actions/broker-token@9278035a95cca2de3e202817e536fc7f9fc774fc # v1.34.0
+        uses: rknightion/.github/.github/actions/broker-token@3dacb3010d3967dfa9d7619c2d61dc7af14d72dc # v1.34.1
         with:
           permission-set: release-please-genai-otel-bridge
           tailscale-client-id: ${{ secrets.TS_WIF_CLIENT_ID }}

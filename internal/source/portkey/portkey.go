@@ -272,13 +272,17 @@ func (l *analyticsLoop) Collect(ctx context.Context, since model.Watermark) (mod
 	if d := until.Sub(start); d > 55*time.Minute { // defensive H5 clamp
 		until = start.Add(55 * time.Minute)
 	}
+	// [F27] Pin the window end to a whole granularity bucket. A mid-minute end would emit the bucket
+	// containing it from a request that stopped part-way through, and the next window (starting at
+	// that end) would emit the same (series, bucket end) again.
+	until = until.Truncate(granularity)
 	if !until.After(start) {
 		return model.Batch{Key: l.Key(), Watermark: since}, nil // nothing settled yet
 	}
 
 	// [settle-exceedance] Compute the widened fetchStart once (shared across passes; the window math
 	// is the same for all passes — only the api_key_ids filter differs). See collectPass.
-	fetchStart := start
+	fetchStart := start.Truncate(granularity)
 	if l.band > 0 {
 		fetchStart = start.Add(-l.band)
 		if floor := now.Add(-l.maxBackfill); fetchStart.Before(floor) {
@@ -289,6 +293,7 @@ func (l *analyticsLoop) Collect(ctx context.Context, since model.Watermark) (mod
 		if minFetch := until.Add(-55 * time.Minute); fetchStart.Before(minFetch) {
 			fetchStart = minFetch
 		}
+		fetchStart = fetchStart.Truncate(granularity) // whole first bucket: no false revision from a cut
 	}
 
 	var all []model.Sample
@@ -345,14 +350,14 @@ func (l *analyticsLoop) collectPass(ctx context.Context, p resolvedUseCase, star
 	}
 
 	// [AR-H-lb] Forward-only lower bound is `start` — abandoned span counted by scheduler (F25).
-	samples, err := derive(resp, l.prefix, start, now, l.settle, granularity, l.startSemantics)
+	samples, err := derive(resp, l.prefix, start, until, granularity, l.startSemantics)
 	if err != nil {
 		return nil, err // ErrGranularityUnexpected or a parse error
 	}
 
 	// [settle-exceedance] Detection pass — does NOT affect emit/watermark (DESIGN §3.3/F6).
 	if h := l.histories[p.slug]; h != nil {
-		if settled, derr := derive(resp, l.prefix, fetchStart, now, l.settle, granularity, l.startSemantics); derr == nil {
+		if settled, derr := derive(resp, l.prefix, fetchStart, until, granularity, l.startSemantics); derr == nil {
 			if l.onBucketRevised != nil {
 				for _, bucketEnd := range h.observe(settled, until) {
 					// age = how late the revision is (now − bucketEnd); always ≥ settle by construction.

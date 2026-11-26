@@ -393,3 +393,75 @@ func TestNewRejectsStrayWindowOnSnapshotLoops(t *testing.T) {
 		})
 	}
 }
+
+// TestSessionsWireFieldsFromFixture pins every JSON tag of the sessions decode struct against the raw
+// fixture bytes (not a struct literal), so renaming a tag silently dropping a series fails here. Session 2
+// carries a distinct non-zero value for each field; session 1 pins the numeric-cost and nil-quantile shape.
+func TestSessionsWireFieldsFromFixture(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	srv := fakeLangSmith(t, loadFixture(t, "sessions_with_stats.json"))
+	defer srv.Close()
+	cfg := testConfig(srv)
+	cfg.SessionLabelValue = "name"
+	lp := mkLoop(t, cfg, now)
+	b, err := lp.Collect(context.Background(), model.Watermark{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type key struct{ name, session, extra string }
+	got := map[key]float64{}
+	for _, s := range b.Samples {
+		got[key{s.Name, s.Labels["session"], s.Labels["quantile"] + s.Labels["feedback_key"]}] = s.Value
+	}
+	// "proj-beta-prd" is the raw "name" of session 2 (also proves the name tag).
+	const sess = "proj-beta-prd"
+	want := map[key]float64{
+		{"langsmith_runs", sess, ""}:                          60,
+		{"langsmith_latency_seconds", sess, "p50"}:            70.685,
+		{"langsmith_latency_seconds", sess, "p99"}:            170.26769,
+		{"langsmith_first_token_seconds", sess, "p50"}:        1.23,
+		{"langsmith_first_token_seconds", sess, "p99"}:        4.56,
+		{"langsmith_tokens", sess, ""}:                        1200000,
+		{"langsmith_prompt_tokens", sess, ""}:                 1000000,
+		{"langsmith_completion_tokens", sess, ""}:             200000,
+		{"langsmith_cost_usd", sess, ""}:                      0.4523,
+		{"langsmith_prompt_cost_usd", sess, ""}:               0.4,
+		{"langsmith_completion_cost_usd", sess, ""}:           0.0523,
+		{"langsmith_error_rate", sess, ""}:                    0.1,
+		{"langsmith_streaming_rate", sess, ""}:                1.0,
+		{"langsmith_feedback_score", sess, "domain_accuracy"}: 0.91,
+		{"langsmith_feedback_count", sess, "domain_accuracy"}: 60,
+		// session 1: numeric zero costs and a real 450-run count, null first-token quantiles.
+		{"langsmith_latency_seconds", "proj-alpha_dev-aaaa1111", "p50"}: 0.495,
+		{"langsmith_tokens", "proj-alpha_dev-aaaa1111", ""}:             16513488,
+	}
+	for k, v := range want {
+		g, ok := got[k]
+		if !ok {
+			t.Errorf("missing sample %+v", k)
+			continue
+		}
+		if g != v {
+			t.Errorf("%+v = %v want %v", k, g, v)
+		}
+	}
+	if _, ok := got[key{"langsmith_first_token_seconds", "proj-alpha_dev-aaaa1111", "p50"}]; ok {
+		t.Error("null first_token_p50 must not emit a sample")
+	}
+}
+
+// TestUsageSessionWireFieldsFromRawJSON pins the usage decode struct's name tag from raw JSON.
+func TestUsageSessionWireFieldsFromRawJSON(t *testing.T) {
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	f := newFakeUsageServer(t, []json.RawMessage{
+		json.RawMessage(`{"id":"p1","name":"proj-a","run_count":100,"trace_tier":"longlived"}`),
+	})
+	lp := mkUsageLoop(t, f, now, func(c *usageConfig) { c.SessionLabelValue = "name" })
+	b, err := lp.Collect(context.Background(), model.Watermark{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := byNameLabel(b.Samples)["langsmith_usage_traces|proj-a"]; got.Value != 100 || got.Labels["retention_tier"] != "longlived" {
+		t.Fatalf("name-labelled traces sample = %+v", got)
+	}
+}

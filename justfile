@@ -98,7 +98,7 @@ test-race:
 [group('check')]
 [no-exit-message]
 test-acceptance:
-    {{ go }} test -tags acceptance ./internal/app/
+    {{ go }} test -race -tags acceptance ./internal/app/
 
 # Run envtest integration against a local kube-apiserver and etcd.
 [group('check')]

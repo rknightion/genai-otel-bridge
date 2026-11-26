@@ -13,12 +13,35 @@ imports `internal/config` only.
   identity.ProductIdentity()` (a fresh map per row); tenant, target, pipeline, destination name and
   the two secret file names are empty. A disabled source gives no row. `Resolve` needs no validated
   config for this shape: it only copies enabled sources.
-- **Tenant shape** (`len(cfg.Tenants) > 0`): in this version `Resolve` returns `Plan{TenantShape: true}`
-  with no rows, and `main` and `app.ValidateConfigFile` refuse it with `ErrTenantShapeNotEnabled` ("the
-  tenant shape is not enabled in this version"). The load rules are `config.Validate`'s. Once resolved,
-  its rows carry `PipelineID(tenant, target)` (`<tenant>.<target>`),
-  `SourceInstance(tenant, target)` (`mt.<tenant>.<target>`) and the secrets as file names
-  (`AuthValueFile`, `TokenFile`), never values.
+- **Legacy `mt.` warning.** `Resolve` logs a warning (slog's default logger) for each enabled legacy
+  source whose `source_instance` starts with `mt.`, the prefix of tenant-shape checkpoint keys
+  (design section 7): a later tenant and target with the same names would share its checkpoints. It is
+  the one legacy-visible change of the tenant work here; the legacy rows, table and hash do not change.
+- **Tenant shape** (`len(cfg.Tenants) > 0`): `Plan.TenantShape` is true and there is one row per
+  target, sorted by tenant id then target name (so the table and hash do not depend on map order). A
+  row has `Tenant`, `Target`, `Pipeline = PipelineID(tenant, target)` (`<tenant>.<target>`),
+  `DestinationName`, the destination's endpoint and instance id (no token), the identity (the target's
+  `identity` block whole, else the tenant's), and the two secrets as file names only (`AuthValueFile`,
+  `TokenFile`): `Source.Auth.Value` and `Destination.Token` stay empty. `Row.Source` has `Enabled`
+  true, the target's source block (type, base URL, auth header, rate limit, HTTP),
+  `SourceInstance(tenant, target)` (`mt.<tenant>.<target>`), the target's `Scope`, and `Loops`
+  deep-copied from `defaults.<type>.loops`: a new map, and in each block a new `settings` map and
+  `graphs` slice, so no two rows (and no row and the config) share one. `TestRowsDoNotShareLoopMaps`
+  guards this. `main` and `app.ValidateConfigFile` still refuse the shape with
+  `ErrTenantShapeNotEnabled` ("the tenant shape is not enabled in this version"); the config check
+  returns the table and hash with the refusal. A tenant with no targets gives no rows.
+- **Resolve-phase rules** (design sections 2 and 3), checked by `Resolve` for the tenant shape. Every
+  broken rule is reported (`errors.Join`, in tenant and target order) and the plan is then empty:
+  - a target's `destination` names a destination of its own tenant;
+  - no two tenants declare a destination on one stack (`StackKey`), over every declared destination;
+  - no two targets of one tenant send to one stack with one identity;
+  - no target sends to the self-telemetry stack (`emit.self`, else `emit.telemetry`, as `main` falls
+    back) with the self-telemetry identity (the top-level identity with `config.SelfNamespaceSuffix`);
+  - no scope name and no scope id in two tenants. `config.Validate` checks this at load too; `Resolve`
+    does not call `Validate`, so it keeps its own copy. Keep both.
+
+  The load rules are `config.Validate`'s; the assemble-phase rules (secrets, duplicate keys, scope
+  assertion support, log-emitting loops) belong to `internal/app`.
 
 `Row`, `Plan`, `Resolve`, `StackKey`, `PipelineID`, `SourceInstance`, `PipelineAttribute`,
 `ErrTenantShapeNotEnabled` and `SecretReader` are seams later work depends on: keep their names and shapes. Add nothing to `Plan` beyond `Rows` and
@@ -33,6 +56,9 @@ imports `internal/config` only.
 - **It never prints a secret.** No `Auth.Value`, no `Token`, and every URL is printed without its
   userinfo, query and fragment (a URL that does not parse prints as `(unparseable)`).
   `TestTableNeverPrintsSecrets` guards this; extend it when a column is added.
+- A tenant row's secrets are on the row as file names only (`AuthValueFile`, `TokenFile`), and the
+  table has no column for them: the columns of design section 3 are the whole table, so a legacy plan's
+  header and hash do not change. `TestResolveTenantOrderIndependent` pins a tenant table as a literal.
 - An empty value prints as `-`; a value with white space, a control character, a quote or invalid
   UTF-8 is Go-quoted, so a row is always one line with one cell per column.
 - `Hash()` is the lower-case hex SHA-256 of `Table()`. The layout is not a contract across versions:

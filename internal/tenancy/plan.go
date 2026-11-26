@@ -9,7 +9,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,22 +64,32 @@ type Plan struct {
 	TenantShape bool
 }
 
-// Resolve turns a loaded config into a plan. The legacy shape gives one row per enabled sources
-// entry, in config order, each with the emit.telemetry destination and the top-level identity. It
-// needs no validated config: it only copies enabled sources. A config with at least one tenant gives
-// a plan with TenantShape set and, in this version, no rows: tenant rows are not resolved yet, and
-// main and the config check refuse the shape with ErrTenantShapeNotEnabled.
+// Resolve turns a loaded config into a plan.
+//
+// The legacy shape gives one row per enabled sources entry, in config order, each with the
+// emit.telemetry destination and the top-level identity. It needs no validated config: it only copies
+// enabled sources. It logs a warning (slog's default logger) for each enabled source whose
+// source_instance starts with "mt.", the prefix of the tenant shape's checkpoint keys (design §7).
+//
+// A config with at least one tenant gives a plan with TenantShape set and one row per target, sorted by
+// tenant id then target name (resolveTenants), after the resolve-phase rules of design §3. In this
+// version main and the config check still refuse that plan with ErrTenantShapeNotEnabled.
 func Resolve(cfg *config.Config) (Plan, error) {
 	if cfg == nil {
 		return Plan{}, errors.New("tenancy: nil config")
 	}
 	if len(cfg.Tenants) > 0 {
-		return Plan{TenantShape: true}, nil
+		return resolveTenants(cfg)
 	}
 	var plan Plan
 	for _, sc := range cfg.Sources {
 		if !sc.Enabled {
 			continue
+		}
+		if strings.HasPrefix(sc.SourceInstance, tenantInstancePrefix) {
+			slog.Warn("a legacy source_instance starts with \""+tenantInstancePrefix+"\", the prefix the tenant shape gives its checkpoint keys: "+
+				"if this install is converted to the tenant shape, a tenant and target with the same names would share this source's checkpoints",
+				"source_instance", sc.SourceInstance)
 		}
 		plan.Rows = append(plan.Rows, Row{
 			Source:      sc,
@@ -86,11 +100,178 @@ func Resolve(cfg *config.Config) (Plan, error) {
 	return plan, nil
 }
 
+// tenantInstancePrefix starts every tenant-shape source_instance (SourceInstance).
+const tenantInstancePrefix = "mt."
+
+// resolveTenants builds the tenant-shape plan: one row per target, sorted by tenant id then target
+// name, and the resolve-phase rules of design §2 and §3:
+//
+//   - a target names a destination of its own tenant;
+//   - no two tenants declare a destination on one stack (StackKey);
+//   - no two targets of one tenant send to one stack with one identity;
+//   - no target sends to the self-telemetry stack (emit.self, else emit.telemetry, as main falls back)
+//     with the self-telemetry identity (the top-level identity with config.SelfNamespaceSuffix);
+//   - no scope name and no scope id appears in two tenants. config.Validate checks this at load too;
+//     Resolve does not call Validate, so it holds the rule itself.
+//
+// Every broken rule is reported, in tenant and target order, and the plan is then empty. Each row owns
+// its maps and slices: the loops are deep-copied from defaults.<type>.loops, settings and graphs
+// included, so changing one row never changes another row or the config. A row's secrets are file
+// names (AuthValueFile, TokenFile); Source.Auth.Value and Destination.Token stay empty.
+func resolveTenants(cfg *config.Config) (Plan, error) {
+	var errs []error
+	ids := sortedKeys(cfg.Tenants)
+
+	// Two tenants on one stack, over every declared destination: the first tenant in id order to
+	// declare a stack owns it.
+	stackOwner := map[string]string{}
+	for _, id := range ids {
+		dests := cfg.Tenants[id].Destinations
+		for _, dn := range sortedKeys(dests) {
+			o := dests[dn].OTLP
+			k := StackKey(o.Endpoint, o.InstanceID)
+			if owner, ok := stackOwner[k]; !ok {
+				stackOwner[k] = id
+			} else if owner != id {
+				errs = append(errs, fmt.Errorf("tenants.%s.destinations.%s is on a stack (endpoint and instance_id) that tenant %s also sends to: two tenants may not share a stack", id, dn, owner))
+			}
+		}
+	}
+
+	// A scope name or id in two tenants: the first tenant in id order to name it owns it. One tenant
+	// may name one scope in two targets.
+	scopeOwner := map[string]map[string]string{"name": {}, "id": {}}
+	for _, id := range ids {
+		targets := cfg.Tenants[id].Targets
+		for _, tn := range sortedKeys(targets) {
+			sc := targets[tn].Scope
+			for _, f := range []struct{ field, value string }{{"name", sc.Name}, {"id", sc.ID}} {
+				if f.value == "" {
+					continue
+				}
+				if owner, ok := scopeOwner[f.field][f.value]; !ok {
+					scopeOwner[f.field][f.value] = id
+				} else if owner != id {
+					errs = append(errs, fmt.Errorf("tenants.%s.targets.%s.scope.%s %q is also used by tenant %s: a scope belongs to one tenant", id, tn, f.field, f.value, owner))
+				}
+			}
+		}
+	}
+
+	self := cfg.Emit.Telemetry.OTLP
+	if cfg.Emit.Self != nil {
+		self = cfg.Emit.Self.OTLP
+	}
+	selfStack := StackKey(self.Endpoint, self.InstanceID)
+	selfIdentity := config.IdentityConfig{
+		ServiceNamespace:      cfg.Identity.ServiceNamespace + config.SelfNamespaceSuffix,
+		DeploymentEnvironment: cfg.Identity.DeploymentEnvironment,
+	}.ProductIdentity()
+
+	plan := Plan{TenantShape: true}
+	for _, id := range ids {
+		tc := cfg.Tenants[id]
+		seen := map[string]string{} // stack and identity -> the first target of this tenant on them
+		for _, tn := range sortedKeys(tc.Targets) {
+			tg := tc.Targets[tn]
+			tp := "tenants." + id + ".targets." + tn
+			dest, ok := tc.Destinations[tg.Destination]
+			if !ok {
+				errs = append(errs, fmt.Errorf("%s.destination %q is not a destination of tenant %s", tp, tg.Destination, id))
+				continue
+			}
+			idc := tc.Identity
+			if tg.Identity != nil {
+				idc = *tg.Identity // a target's identity block replaces the tenant's whole
+			}
+			identity := idc.ProductIdentity()
+			stack := StackKey(dest.OTLP.Endpoint, dest.OTLP.InstanceID)
+			key := stack + "\x00" + identityKey(identity)
+			if first, ok := seen[key]; ok {
+				errs = append(errs, fmt.Errorf("%s and tenants.%s.targets.%s send to one stack with one identity: they would write the same series, so give one of them its own identity", tp, id, first))
+			} else {
+				seen[key] = tn
+			}
+			if stack == selfStack && maps.Equal(identity, selfIdentity) {
+				errs = append(errs, fmt.Errorf("%s sends to the self-telemetry stack with the self-telemetry identity (service.namespace %q): give it another identity or destination", tp, selfIdentity["service.namespace"]))
+			}
+			plan.Rows = append(plan.Rows, Row{
+				Tenant:          id,
+				Target:          tn,
+				Pipeline:        PipelineID(id, tn),
+				DestinationName: tg.Destination,
+				AuthValueFile:   tg.Source.Auth.ValueFile,
+				TokenFile:       dest.OTLP.TokenFile,
+				Source: config.SourceConfig{
+					Type:           tg.Source.Type,
+					Enabled:        true,
+					BaseURL:        tg.Source.BaseURL,
+					SourceInstance: SourceInstance(id, tn),
+					Auth:           config.AuthConfig{Header: tg.Source.Auth.Header},
+					RateLimit:      tg.Source.RateLimit,
+					HTTP: config.HTTPConfig{
+						UserAgent:    tg.Source.HTTP.UserAgent,
+						AllowHosts:   slices.Clone(tg.Source.HTTP.AllowHosts),
+						AllowPrivate: tg.Source.HTTP.AllowPrivate,
+					},
+					Loops: copyLoops(cfg.Defaults[tg.Source.Type].Loops),
+					Scope: tg.Scope,
+				},
+				Destination: config.OTLPConn{Endpoint: dest.OTLP.Endpoint, InstanceID: dest.OTLP.InstanceID},
+				Identity:    identity,
+			})
+		}
+	}
+	if len(errs) > 0 {
+		return Plan{}, errors.Join(errs...)
+	}
+	return plan, nil
+}
+
+// copyLoops deep-copies a defaults loop map: a new map, and in each block a new graphs slice and a new
+// settings map, so no two rows share one.
+func copyLoops(in map[string]config.LoopConfig) map[string]config.LoopConfig {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]config.LoopConfig, len(in))
+	for name, lc := range in {
+		lc.Graphs = slices.Clone(lc.Graphs)
+		lc.Settings = maps.Clone(lc.Settings)
+		out[name] = lc
+	}
+	return out
+}
+
+// identityKey is an unambiguous comparison key for an identity map: each key and value Go-quoted,
+// sorted by key.
+func identityKey(id map[string]string) string {
+	var b strings.Builder
+	for _, k := range sortedKeys(id) {
+		b.WriteString(strconv.Quote(k))
+		b.WriteByte('=')
+		b.WriteString(strconv.Quote(id[k]))
+		b.WriteByte(',')
+	}
+	return b.String()
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // PipelineID is a tenant-shape row's pipeline id.
 func PipelineID(tenant, target string) string { return tenant + "." + target }
 
 // SourceInstance is a tenant-shape row's source_instance, which names its checkpoints.
-func SourceInstance(tenant, target string) string { return "mt." + tenant + "." + target }
+func SourceInstance(tenant, target string) string {
+	return tenantInstancePrefix + tenant + "." + target
+}
 
 // StackKey is the one definition of "the same stack": two destinations are the same stack when their
 // instance ids are equal and their endpoints are equal after lower-casing the host (url.Parse also

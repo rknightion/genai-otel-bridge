@@ -142,7 +142,7 @@ func TestValidateConfigFile_PrintsPlan(t *testing.T) {
 }
 
 // AC5 (#530): the config check validates a tenant-shape config, then refuses it as not enabled in this
-// version, with the plan's table and hash (no rows yet). main's half is TestTenantShapeRefused in
+// version, with the plan's table and hash. main's half is TestTenantShapeRefused in
 // cmd/genai-otel-bridge.
 func TestTenantShapeRefused(t *testing.T) {
 	t.Setenv("TENANT_FIXTURE_SELF_TOKEN", "") // ValidateConfigFile placeholders it; t.Setenv restores it

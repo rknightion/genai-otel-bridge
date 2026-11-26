@@ -214,6 +214,20 @@ By default the chart registers a `post-delete` hook that removes the leader Leas
 
 ---
 
+## Tenants (Helm)
+
+Set `config.tenants` and `config.defaults` (or a whole `configOverride`) and the chart renders the
+config without `sources` and `emit.telemetry`. It mounts one optional, read-only Secret per tenant,
+named `genai-otel-bridge-tenant-<tenant id>`, and refuses to render unless
+`rollingUpdate.maxUnavailable` is 0. A Secret change does not restart the pods. The worked values are
+`deploy/helm/examples/tenants-values.yaml`; the procedure, the restart command and the rollback
+are in [Multi-tenancy](./multi-tenancy.md). Converting an existing install is two steps, not one upgrade: see
+[Converting a legacy install](./multi-tenancy.md#converting-a-legacy-install). The NetworkPolicy's OTLP egress
+range must cover every tenant's destination
+([A narrowed NetworkPolicy](./multi-tenancy.md#a-narrowed-networkpolicy)).
+
+---
+
 ## What to read next
 
 - [Configuration](./configuration.md) — detailed walk-through of the config model.

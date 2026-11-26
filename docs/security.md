@@ -200,6 +200,20 @@ for the full policy.
 
 ---
 
+## Tenant isolation
+
+In the tenant shape one process holds every tenant's source API key and destination token. Five
+controls guard against one tenant's data reaching another tenant's stack: a scope assertion before
+every pipeline's first collect, one API key per target (a shared key blocks both tenants), one place
+where each pipeline is assembled, a release gate with seeded faults, and run-time evidence
+(`genai_otel_bridge.pipeline` on every resource, and the plan hash). Secrets are files in one Secret
+per tenant, never in the config. Anyone who can read Secrets in the namespace, or exec into its pods,
+can read every tenant's credentials, so that access belongs to the central team alone. What the
+controls do not catch is in [Multi-tenancy](./multi-tenancy.md#what-the-scope-assertion-covers-and-re-running-q6),
+and the key advice is in [Least-privilege keys](./multi-tenancy.md#least-privilege-keys).
+
+---
+
 ## See also
 
 - [Content Governance](./governance.md) — field allow/deny model

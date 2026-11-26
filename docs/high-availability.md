@@ -203,6 +203,26 @@ self-obs dashboard.
 
 ---
 
+## Tenant shape
+
+From the version that enables the tenant shape, one install still has one leader and one hot standby
+(`ha.coordinator: lease`, `ha.checkpoint: configmap`); every tenant's pipelines run on the leader.
+The ECS and DynamoDB deployment does not support the tenant shape.
+
+- **Checkpoint key.** The source instance is `mt.<tenant>.<target>`; the loop name and fingerprint are
+  as above. The destination and the scope are not in the key, so changing either keeps the
+  watermark.
+- **Remembered scope match.** Each pipeline has one more key, `<source instance>/scope-match/v1`,
+  written through the same store and fenced by leader number. It lets a new leader resume a matched
+  pipeline without waiting for traffic.
+- **Failover.** A leader change discards every pipeline's in-memory scope result and every pipeline
+  resumes from its checkpoints. A handover takes about 20 to 30 seconds.
+- **Evidence.** The leader logs the plan hash and row count when it becomes leader.
+
+See [Multi-tenancy](./multi-tenancy.md) for rollouts, renames and orphaned keys.
+
+---
+
 ## See also
 
 - [Installation](./installation.md) — Helm chart HA options

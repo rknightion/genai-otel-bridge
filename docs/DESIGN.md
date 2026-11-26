@@ -635,8 +635,10 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
 
   **Architecture split — WHY metrics use one instance, logs fan out:**
   - `source.ValidateOwnership` (M7, `source.go`) forbids two `SeriesDeclarer` loops sharing a
-    normalised series name under different checkpoint keys. A metrics fan-out (N analytics/groups
-    instances, same metric names, distinct keys) would fail startup. Therefore **analytics and groups
+    normalised series name under different checkpoint keys. In the legacy shape that is one check over the whole process;
+    in the tenant shape it runs per group of pipelines that share a destination stack and an identity,
+    so pipelines in different stacks may declare the same metric name. A metrics fan-out (N
+    analytics/groups instances, same metric names, distinct keys) would fail startup. Therefore **analytics and groups
     each use ONE loop instance issuing N internal filtered passes**: per pass, fetch with that
     use-case's `api_key_ids` filter, derive samples, stamp the slug; all passes accumulate into one
     `Batch` with one Key and one shared watermark. `Key()` is **unchanged** (`"prefix="+prefix`).
@@ -693,7 +695,12 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
 - **Multi-source / one-process-per-scope (Cdx-H11):** the intended production pattern is **one process
   per environment/workspace**; where one process pulls multiple source instances, each gets its own
   resource identity, credentials, rate limiter, loop-id, checkpoint namespace, and series ownership
-  (ties C4). State and validate this in config.
+  (ties C4). State and validate this in config. **Amended (tenant shape):** from the version that
+  enables the tenant shape, one install can instead serve many tenants, each target with its own
+  destination, identity, credentials, rate limiter, checkpoint namespace (`mt.<tenant>.<target>`) and
+  series ownership (checked per destination stack and identity group). One process per
+  environment stays right for the legacy shape and for a team that needs more isolation. See
+  `docs/designs/multi-tenancy.md`.
 - **Enterprise networking (Cdx-H15):** `httpx` supports custom CA bundle, outbound proxy + no-proxy
   (exclude in-cluster collector), optional mTLS/extra headers, and PrivateLink endpoint overrides;
   NetworkPolicy/egress-allowlist are first-class deploy concerns.

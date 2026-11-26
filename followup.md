@@ -318,6 +318,13 @@ OTel tracing. Declined as a dependency on three grounds:
   respect. This is the guardrail, NOT the fan-out feature: emitting MULTIPLE workspaces under one admin key
   still needs real targeting, which the analytics API can't do — so multi-workspace coverage remains
   key-per-workspace until/unless Portkey adds per-workspace analytics scoping.
+  **Tenant shape (`docs/designs/multi-tenancy.md`):** "Portkey ignores the param" holds for a
+  **workspace key**, which is what was probed (again live on 2026-11-26: no slug, the right slug, a
+  slug naming no workspace and the all-workspaces parameters returned the same rows). It is not known
+  for an **organisation key** until Q6 is run, so the tenant shape supports workspace keys only. A
+  tenant target's `scope` replaces `expected_workspace`: the source sends `workspace_slug` on every
+  analytics and groups request and asserts the scope before its first collect; the legacy
+  `expected_workspace` guardrail is unchanged for the legacy shape.
 
 ## 5. Plugin runtime (only if a real third-party-extension need appears)
 

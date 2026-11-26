@@ -221,6 +221,17 @@ The bridge's own operational logs go to stdout in logfmt (default) or JSON forma
 
 ---
 
+## tenants
+
+The legacy shape above (`sources` and `emit.telemetry`) serves one team. From the version that
+enables the tenant shape, a `tenants` map serves several: each tenant has its own destination,
+identity and targets, and its secrets are files in its own Kubernetes Secret, never in the config.
+The two shapes do not mix. The key table is in
+[Configuration reference](./config-reference.md#tenant-shape) and the guide, with a worked example,
+is [Multi-tenancy](./multi-tenancy.md).
+
+---
+
 ## What to read next
 
 - [Configuration reference](./config-reference.md) — complete key/type/default table.

@@ -36,6 +36,7 @@ Guides = [
     { LangSmith = "langsmith.md" },
     { "Content Governance" = "governance.md" },
     { "High Availability" = "high-availability.md" },
+    { "Multi-tenancy" = "multi-tenancy.md" },
 ]
 
 [[site.nav]]

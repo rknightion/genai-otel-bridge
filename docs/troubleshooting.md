@@ -221,6 +221,39 @@ endpoint.
 
 ---
 
+## Tenant blocked
+
+**Symptom:** [GenaiOtelBridgeTenantBlocked](./alerts.md#genaiotelbridgetenantblocked) fires, or
+`genai_otel_bridge_tenant_blocked{tenant, reason}` is 1.
+
+- `reason="secret_unreadable"`: a file named by the tenant's `token_file` or `value_file` is missing,
+  empty or too large in `genai-otel-bridge-tenant-<tenant id>`. The log line names the tenant and the
+  file, never a value.
+- `reason="duplicate_key"`: two targets share a source API key. The log line names their pipeline ids.
+
+Fix the Secret, then restart the pods: a Secret change does not restart them
+([Secrets and the restart command](./multi-tenancy.md#secrets-and-the-restart-command)). A blocked tenant has no
+loops, so it has no lag series.
+
+---
+
+## Scope mismatched or unverified
+
+**Symptom:** a tenant's pipeline emits nothing and `genai_otel_bridge_scope_state` shows
+`mismatched` or `unverified`.
+
+- **Mismatched:** the key reads a workspace other than the configured scope. Correct the key in the
+  tenant's Secret and restart the pods. Data older than the lookback when it ends is counted as
+  skipped.
+- **Unverified:** the workspace has had no traffic in seven days under this key. It starts by itself
+  when traffic arrives.
+- **Leader absent on a new install:** [GenaiOtelBridgeLeaderAbsent](./alerts.md#genaiotelbridgeleaderabsent)
+  fires while no tenant has matched yet. It clears after the first match.
+
+See [Idle and mismatched tenants](./multi-tenancy.md#idle-and-mismatched-tenants).
+
+---
+
 ## See also
 
 - [Alerts & Runbooks](./alerts.md) — alert rule runbooks

@@ -13,7 +13,9 @@ implements.
 - Watermark advance. `ProcessBatch` splits a batch into ascending per-bucket sub-batches and decides
   per bucket: advance past with a counted skip, terminal halt (degrade, no advance, loud), or
   retryable stop (commit only the interior buckets that advanced and re-pull next tick). Quiet and
-  empty windows still advance past `until` so `window_lag_seconds` does not inflate. `Cursor` is set
+  empty windows still advance past `until` so `window_lag_seconds` does not inflate, and a landed
+  full-completion commit at a non-zero Time stamps `last_success_timestamp_seconds` at that Time, so a
+  quiet source does not read as a stale poller (#371). A failed, fenced or stale commit does not stamp. `Cursor` is set
   only on the full-completion path; interior commits carry an empty cursor.
 - Epoch-fenced commit. `commit()` re-checks `ctx.Err()` immediately before `Save()`, so nothing
   advances after leadership loss even if the checkpointer ignores ctx. On `ErrStaleWrite` where the

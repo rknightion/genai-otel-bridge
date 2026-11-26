@@ -57,7 +57,7 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	m.sourceDataIncomplete = mk("source_data_incomplete_total", "source data was incomplete for a closed, enumerated reason")
 	m.authErr = mk("auth_errors_total", "upstream source API responded 401/403 — a credential failure (wrong/expired key, missing scope) distinct from a slow/erroring endpoint; alert on rate(...) > 0")
 	m.partialRejected = mk("emit_partial_success_rejected_total", "data points or log records the gateway rejected via an OTLP 200 partial_success response (rejected_data_points/rejected_log_records) — bypasses the 4xx reject taxonomy (emit returned success), so this is its only alertable signal; alert on rate(...) > 0")
-	m.lastSuccess = mg("last_success_timestamp_seconds", "unix time of last successful emit", "s")
+	m.lastSuccess = mg("last_success_timestamp_seconds", "unix time of the last fully handled window", "s")
 	m.windowLag = mg("window_lag_seconds", "now minus the watermark frontier", "s")
 	m.queueDepth = mg("queue_depth", "per-loop queue depth", "1")
 	// [#120] Degraded-state gauge: 1 while a loop is in the degraded state (with the degrade reason as an

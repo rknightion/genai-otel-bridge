@@ -17,6 +17,10 @@ spec:
   #     72m of stall and the alert would resolve with the loop still dead). The ceiling sits above the
   #     slowest healthy sawtooth of any loop (tens of minutes; a 50m sawtooth is covered by
   #     sim_poller_stale.py) and is the backstop arm 1 cannot erase.
+  # Scope gate (multi-tenant shape): a pipeline is judged only while genai_otel_bridge_scope_state{state="matched"}
+  # is 1 for it (the "and on (tenant, pipeline)" join), because an unverified or mismatched pipeline is held
+  # back on purpose and its age grows by design. The second branch (tenant="") keeps a series with no tenant
+  # label, a legacy install, judged exactly as before. sim_poller_stale.py proves the gate's arithmetic.
   # The "leader entirely gone" case (no series at all) is covered by GenaiOtelBridgeLeaderAbsent, hence
   # noData=Ok here.
   execErrState: Ok
@@ -36,7 +40,7 @@ spec:
       relativeTimeRange: {from: 6h0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: '(((time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) > (2 * quantile_over_time(0.9, (time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])) and (time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 300) or (time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 10800)'
+        expr: '((((time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) and on (tenant, pipeline) (max by (tenant, pipeline) (genai_otel_bridge_scope_state{state="matched"}) == 1)) > (2 * quantile_over_time(0.9, ((time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) and on (tenant, pipeline) (max by (tenant, pipeline) (genai_otel_bridge_scope_state{state="matched"}) == 1))[6h:1m])) and ((time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) and on (tenant, pipeline) (max by (tenant, pipeline) (genai_otel_bridge_scope_state{state="matched"}) == 1)) > 300) or ((time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) and on (tenant, pipeline) (max by (tenant, pipeline) (genai_otel_bridge_scope_state{state="matched"}) == 1)) > 10800) or (((time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds{tenant=""})) > (2 * quantile_over_time(0.9, (time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds{tenant=""}))[6h:1m])) and (time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds{tenant=""})) > 300) or (time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds{tenant=""})) > 10800)'
         instant: true
         range: false
         intervalMs: 1000

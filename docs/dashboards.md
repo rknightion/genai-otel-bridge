@@ -18,7 +18,7 @@ deploy/grafana/
 ├── self-obs/     # genai_otel_bridge_* signals — push to your self-obs stack
 │   ├── folder.yaml
 │   ├── dashboard-self-obs.yaml
-│   ├── alertrule-*.yaml          (15 alert rules)
+│   ├── alertrule-*.yaml          (20 alert rules)
 │   └── recordingrule-*.yaml      (7 recording rules)
 └── product/      # portkey_api_* and langsmith_* signals — push to your product stack
     ├── folder.yaml
@@ -68,7 +68,7 @@ edit the generator and run `just gen-dashboard` to regenerate it.
 | Tab | What it shows |
 |-----|---------------|
 | Overview / SLO | At-a-glance badges: loops-healthy, leader present, replicas, worst freshness ratio, max window lag, fatal emit errors; freshness-by-loop + throughput |
-| Liveness & leadership | Window lag, last-success age vs each loop's own baseline, replicas over time, per-loop freshness gauge (repeats per `$loop`) |
+| Liveness & leadership | Window lag, last-success age vs each loop's own baseline, replicas over time, per-loop freshness gauge (repeats per `$loop`), scope state by pipeline (`genai_otel_bridge_scope_state`, tenant shape) |
 | Emit pipeline | Emitted samples/logs, emit errors by kind, queue depth, samples skipped/capped, guard dropped, buckets revised after settle |
 | Upstream source health | Request rate/latency/error-ratio per target, auth errors, capability outcomes, and data incompleteness |
 | Cardinality & governance | New-label-value growth, guard drops, DPM capping |
@@ -98,6 +98,8 @@ a broken panel.
 | `${datasource}` | Prometheus | `grafanacloud-prom` |
 | `${loki}` | Loki | `grafanacloud-logs` |
 | `${pyroscope}` | Pyroscope | `grafanacloud-profiles` |
+| `${tenant}` | all | multi-value tenant filter; its all-value matches a series with no `tenant` label, so a legacy install shows everything |
+| `${pipeline}` | all | multi-value pipeline filter (`<tenant>.<target>` in the tenant shape), with the same all-value |
 | `${loop}` | — | multi-value loop filter |
 | `${namespace}` | Loki (query) | multi-value namespace filter, used by the Logs panels |
 
@@ -110,7 +112,7 @@ provisioning.
 
 | Rule | What it computes |
 |------|-----------------|
-| `genai-otel-bridge:last_success_age:seconds` | `time() − max by (source, loop)(last_success_timestamp_seconds)` — staleness in seconds per loop instance |
+| `genai-otel-bridge:last_success_age:seconds` | `time() − max by (tenant, pipeline, source, loop)(last_success_timestamp_seconds)` — staleness in seconds per loop instance |
 | `genai-otel-bridge:last_success_age:baseline6h` | Trailing 6h p90 of `last_success_age:seconds` per loop — the self-relative staleness baseline |
 | `genai-otel-bridge:freshness_ratio` | `last_success_age:seconds / clamp_min(last_success_age:baseline6h, 120)` — the ratio the dashboard colours on; the 120s floor stops a fast, quiet loop dividing by about 0 |
 | `genai-otel-bridge:upstream_error_ratio:5m` | Error ratio per upstream `target`, for the upstream-health panel. The `GenaiOtelBridgeUpstreamErrorBudget` alert inlines its own query and does not read this rule |
@@ -165,6 +167,6 @@ Before deploying to production:
 
 ## See also
 
-- [Alerts & Runbooks](./alerts.md) — the sixteen bundled alert rules with runbooks
+- [Alerts & Runbooks](./alerts.md) — the twenty bundled alert rules with runbooks
 - [Telemetry reference](./telemetry.md) — full signal catalogue
 - [Troubleshooting](./troubleshooting.md) — common failure modes

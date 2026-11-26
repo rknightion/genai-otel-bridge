@@ -22,7 +22,7 @@ spec:
         datasource: {type: prometheus, uid: grafanacloud-prom}
         # `< bool 900` => 1 (healthy) / 0 (stale). WITHOUT bool this is a filter that records the
         # age value (e.g. 720) for healthy loops and drops stale ones, breaking the `== 1` usage.
-        expr: '(time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) < bool 900'
+        expr: '(time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) < bool 900'
         instant: true
         range: false
         intervalMs: 1000

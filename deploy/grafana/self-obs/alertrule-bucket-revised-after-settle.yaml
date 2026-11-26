@@ -29,7 +29,7 @@ spec:
       relativeTimeRange: {from: 1h5s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (source, loop) (increase(genai_otel_bridge_bucket_revised_after_settle_total[1h])) > 30'
+        expr: 'sum by (tenant, pipeline, source, loop) (increase(genai_otel_bridge_bucket_revised_after_settle_total[1h])) > 30'
         instant: true
         range: false
         intervalMs: 1000

@@ -277,3 +277,58 @@ func TestDashboardLoopFilterMatchesEveryInstrument(t *testing.T) {
 		t.Fatal("no dashboard selector filters on $loop; the check proved nothing")
 	}
 }
+
+// TestDashboardHasTenantAndPipelineFilters: the dashboard offers tenant and pipeline variables whose
+// all-value also matches a series with no such label (a legacy install), applies them to the panel
+// selectors, and has a panel reading scope_state.
+func TestDashboardHasTenantAndPipelineFilters(t *testing.T) {
+	path := "../../deploy/grafana/self-obs/dashboard-self-obs.yaml"
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Spec struct {
+			Variables []struct {
+				Spec struct {
+					Name     string `yaml:"name"`
+					AllValue string `yaml:"allValue"`
+				} `yaml:"spec"`
+			} `yaml:"variables"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"tenant", "pipeline"} {
+		found := false
+		for _, v := range doc.Spec.Variables {
+			if v.Spec.Name != name {
+				continue
+			}
+			found = true
+			if !regexp.MustCompile("^" + v.Spec.AllValue + "$").MatchString("") {
+				t.Errorf("$%s all-value %q does not match an empty label, so a legacy series would be hidden", name, v.Spec.AllValue)
+			}
+		}
+		if !found {
+			t.Errorf("dashboard has no $%s variable", name)
+		}
+	}
+	es, _ := exprs(t, path)
+	scope, filtered := 0, 0
+	for _, e := range es {
+		if strings.Contains(e, "genai_otel_bridge_scope_state") {
+			scope++
+		}
+		if strings.Contains(e, `tenant=~"$tenant"`) && strings.Contains(e, `pipeline=~"$pipeline"`) {
+			filtered++
+		}
+	}
+	if scope == 0 {
+		t.Error("no panel reads genai_otel_bridge_scope_state")
+	}
+	if filtered == 0 {
+		t.Error("no panel selector filters on $tenant and $pipeline")
+	}
+}

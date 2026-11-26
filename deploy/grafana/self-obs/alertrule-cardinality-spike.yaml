@@ -30,7 +30,7 @@ spec:
       relativeTimeRange: {from: 1h5s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (series) (rate(genai_otel_bridge_new_label_values_total[1h])) > 0.05'
+        expr: 'sum by (tenant, pipeline, series) (rate(genai_otel_bridge_new_label_values_total[1h])) > 0.05'
         instant: true
         range: false
         intervalMs: 1000

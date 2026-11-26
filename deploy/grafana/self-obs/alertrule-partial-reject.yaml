@@ -29,7 +29,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (plane) (increase(genai_otel_bridge_emit_partial_success_rejected_total[10m])) > 0'
+        expr: 'sum by (tenant, pipeline, plane) (increase(genai_otel_bridge_emit_partial_success_rejected_total[10m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

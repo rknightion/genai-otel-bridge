@@ -173,7 +173,10 @@ var (
 	alertedIncompleteReasons = []string{"export_failed", "export_stuck", "window_oversize", "window_truncated"}
 	alertedSkipReasons       = []string{"duplicate_timestamp", "payload_too_large", "too_old"}
 	// alertedEmitKinds are the emit_errors_total kinds the emit-failing rule reads (#517).
-	alertedEmitKinds = []string{"bad_encoding", "checkpoint_fenced", "checkpoint_load", "checkpoint_save",
+	// alertedScopeResults are the scope_assertion_total results the scope-assertion-errors rule reads:
+	// result="error" and result!="error" (every other result), all four the gate reports.
+	alertedScopeResults = []string{"matched", "mismatch", "unverifiable", "error"}
+	alertedEmitKinds    = []string{"bad_encoding", "checkpoint_fenced", "checkpoint_load", "checkpoint_save",
 		"granularity_unexpected", "retryable_exhausted", "unknown_4xx"}
 )
 
@@ -201,6 +204,16 @@ func (m *Metrics) SeedLoop(id loopid.ID, hookLoop string) {
 	}
 	m.authErr.Add(ctx, 0, m.attrs(
 		attribute.String("loop", hookLoop), attribute.String("source", id.Source)))
+}
+
+// SeedScope creates, at 0, every scope_assertion_total result for the pipeline this copy labels, so the
+// first result after a run of errors is a measurable step for the scope-assertion-errors rule's increase().
+// Call it once for each pipeline that has a scope gate and for no other: a legacy install exports no
+// scope_assertion series. On a With copy every seed carries the copy's tenant and pipeline.
+func (m *Metrics) SeedScope() {
+	for _, result := range alertedScopeResults {
+		m.scopeAssertion.Add(context.Background(), 0, m.attrs(attribute.String("result", result)))
+	}
 }
 
 func (m *Metrics) loopAttr(loop string) metric.MeasurementOption {

@@ -33,6 +33,13 @@ func (a telemetryAdapter) ScopeAssertion(result string) {
 	}
 }
 
+// SeedScope forwards the optional scope-assertion seeding, as SeedLoop does.
+func (a telemetryAdapter) SeedScope() {
+	if s, ok := a.Metrics.(interface{ SeedScope() }); ok {
+		s.SeedScope()
+	}
+}
+
 // SeedLoop forwards to the wrapped metrics when they have the optional capability, so a recorder such
 // as seed_test.go's seedRecorder still sees Build's seeding through the adapter.
 func (a telemetryAdapter) SeedLoop(id schedule.LoopID, hookLoop string) {

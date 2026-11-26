@@ -3,12 +3,11 @@
 # updates CHANGELOG.md + deploy/helm/Chart.yaml (version + appVersion). Merging that PR tags vX.Y.Z,
 # creates the GitHub Release (notes = that version's changelog section), and triggers the publish below.
 #
-# NB: publish runs HERE, gated on release_created — NOT via the v* tag-push event — because a tag created
-# with GITHUB_TOKEN does not trigger other workflows. The release PR is opened with a fine-grained PAT
-# (secrets.RELEASE_PLEASE_TOKEN, see the token: input below), so — unlike a GITHUB_TOKEN-authored PR — CI
-# DOES run on it automatically (a PAT identity is a trusted author). Merge it once its checks are green;
-# branch protection still applies (enforce_admins=false lets an admin bypass if needed), and its content
-# (changelog + version bump) was already validated when the underlying commits landed.
+# NB: publish runs HERE, gated on release_created, not from a v* tag-push event, so the release image
+# and chart come from this same run. The release PR is opened with a short-lived GitHub App installation
+# token minted for this repository (the broker-token step below), not with GITHUB_TOKEN, so CI runs on it
+# like any other pull request. Merge it once ci-success is green, as for any other pull request; its
+# content (changelog + version bump) was already validated when the underlying commits landed.
 name: release-please
 
 on:
@@ -37,8 +36,8 @@ jobs:
       # action_required gate applies to github-actions[bot], not to bot identities
       # generally -- Renovate, a GitHub App, already runs fine.
       #
-      # Releases now depend on camden being up, unsealed and on the tailnet; a
-      # failure here is infrastructure, not the commit.
+      # Releases now depend on the token broker host being up, unsealed and on
+      # the tailnet; a failure here is infrastructure, not the commit.
       - name: Mint a scoped release token
         id: bao
         uses: rknightion/.github/.github/actions/broker-token@b31fba795a67b1a413ec1e11a7cd4ac9c2447f15 # v1.32.7
@@ -65,8 +64,9 @@ jobs:
       id-token: write         # cosign keyless signing + provenance attestation
       attestations: write
       security-events: write  # Trivy SARIF upload
-      checks: read            # publish.yml's wait-for-ci job reads the ci-success check; a called
-                              # workflow's job perms must be within the caller's grant or the whole
-                              # run dies at startup (startup_failure), even though wait-for-ci is skipped here
+      checks: read            # publish.yml's wait-for-ci job reads the ci-success check. It runs on
+                              # this path: in a called workflow github.event_name is the caller's
+                              # (push). A called workflow's job perms must be within the caller's
+                              # grant or the whole run dies at startup (startup_failure).
     with:
       release_tag: ${{ needs.release-please.outputs.tag_name }}

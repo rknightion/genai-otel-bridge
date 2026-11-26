@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -808,7 +809,9 @@ func TestLogsExportAuthErrorFiresHook(t *testing.T) {
 	deps := source.Deps{OnAuthError: func(loop, s string) { auth = append(auth, [2]string{loop, s}) }}
 	l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}), deps, now)
 	// One Collect step attempts createExport → 401 → lifecycle fires the hook then returns the error.
-	_, _ = l.Collect(context.Background(), model.Watermark{})
+	if _, err := l.Collect(context.Background(), model.Watermark{}); !errors.Is(err, source.ErrAuth) {
+		t.Fatalf("a 401 lifecycle failure must wrap source.ErrAuth [#537], got %v", err)
+	}
 	if len(auth) != 1 || auth[0] != [2]string{"logs_export", "pk-test"} {
 		t.Fatalf("OnAuthError want one (logs_export,pk-test), got %v", auth)
 	}

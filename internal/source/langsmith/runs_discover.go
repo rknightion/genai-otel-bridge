@@ -81,7 +81,10 @@ func (l *runsLoop) listSessionIDs(ctx context.Context) ([]string, error) {
 		if resp.StatusCode != http.StatusOK {
 			snip := httpx.ErrSnippet(resp)
 			_ = resp.Body.Close()
-			return nil, fmt.Errorf("langsmith runs: discover sessions status %d%s", resp.StatusCode, errBodySuffix(snip))
+			if source.IsAuthStatus(resp.StatusCode) && l.onAuthError != nil {
+				l.onAuthError("runs", l.sourceInstance) // credential failure on discovery = own signal, like queryRuns
+			}
+			return nil, source.WrapAuth(resp.StatusCode, fmt.Errorf("langsmith runs: discover sessions status %d%s", resp.StatusCode, errBodySuffix(snip)))
 		}
 		var page []struct {
 			ID string `json:"id"`

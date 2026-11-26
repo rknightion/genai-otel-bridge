@@ -4,6 +4,7 @@ package portkey
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -40,6 +41,43 @@ func wsServer(t *testing.T, status int, workspaces ...string) *httptest.Server {
 func scopeTestClient(t *testing.T) *httpx.Client {
 	t.Helper()
 	return httpx.New(httpx.Config{UserAgent: "test", AllowPrivate: true, Timeout: 5 * time.Second})
+}
+
+// TestCollectScopeProbeAuthWrapsErrAuth [#537]: with expected_workspace set, a 401/403 from the scope
+// probe (which runs before the graph fetch) must satisfy errors.Is(err, source.ErrAuth) through Collect so
+// the scheduler's auth backoff applies on this path too; the probe's own error text is kept.
+func TestCollectScopeProbeAuthWrapsErrAuth(t *testing.T) {
+	now := time.Unix(1_750_000_000, 0).UTC()
+	for _, status := range []int{401, 403} {
+		srv := wsServer(t, status)
+		cfg := config.SourceConfig{
+			Type: "portkey", Enabled: true, BaseURL: srv.URL, SourceInstance: "pk-test",
+			Auth:      config.AuthConfig{Header: "x-portkey-api-key", Value: "k"},
+			RateLimit: config.RateLimitConfig{RPS: 1000, Burst: 1000},
+			HTTP:      config.HTTPConfig{AllowPrivate: true},
+			Loops: map[string]config.LoopConfig{"analytics": {
+				Enabled: true, Cadence: config.Duration(time.Minute), Window: config.Duration(50 * time.Minute),
+				BucketSettle: config.Duration(3 * time.Minute), BootstrapLookback: config.Duration(50 * time.Minute),
+				MaxBackfill: config.Duration(55 * time.Minute), MetricPrefix: "portkey_api",
+				Graphs:   []string{"requests"},
+				Settings: map[string]string{"expected_workspace": "ws-acme-001"},
+			}},
+		}
+		src, err := New(cfg, source.Deps{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lp := src.Loops()[0].(*analyticsLoop)
+		lp.now = func() time.Time { return now }
+		_, err = lp.Collect(context.Background(), model.Watermark{Time: now.Add(-10 * time.Minute)})
+		srv.Close()
+		if !errors.Is(err, source.ErrAuth) {
+			t.Fatalf("status %d: scope-probe failure must wrap source.ErrAuth, got %v", status, err)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("workspace scope probe: status %d", status)) {
+			t.Fatalf("status %d: probe error text must be kept, got %v", status, err)
+		}
+	}
 }
 
 func TestCheckWorkspaceScope(t *testing.T) {

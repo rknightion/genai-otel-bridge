@@ -33,7 +33,9 @@ Extend it when unit-suffixed or counter names are added.
 ## Sentinel errors map to scheduler behaviour
 
 `ErrQuotaExceeded` (discard batch, no advance, back off, F3/F34) and `ErrGranularityUnexpected`
-(alert, no advance, F27). Neither crashes; both become self-metrics.
+(alert, no advance, F27). Neither crashes; both become self-metrics. `ErrAuth` marks a 401/403: wrap it
+with `source.WrapAuth(code, err)` into the retryable Collect error (it stays a counted collect failure)
+and the scheduler stretches the wait as for quota [#537].
 
 ## Guard
 

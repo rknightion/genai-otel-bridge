@@ -350,7 +350,7 @@ func (l *analyticsLoop) collectPass(ctx context.Context, p resolvedUseCase, star
 			if source.IsAuthStatus(code) && l.onAuthError != nil {
 				l.onAuthError(l.Key().Loop, l.sourceInstance) // followup §9: credential failure = own signal
 			}
-			return nil, fmt.Errorf("portkey: %s status %d", g, code)
+			return nil, source.WrapAuth(code, fmt.Errorf("portkey: %s status %d", g, code))
 		}
 		if r.IsQuotaExceeded {
 			return nil, source.ErrQuotaExceeded // discard whole batch (F34)

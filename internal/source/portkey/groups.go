@@ -185,6 +185,7 @@ type groupsLoop struct {
 	metadataKeys              []string
 	emitCost                  bool
 	emitPrompts               bool
+	authFailed                bool   // an endpoint saw 401/403 in the current Collect (single-flight, so unsynchronised) [#537]
 	expectedWorkspace         string // optional key-scope guardrail (settings.expected_workspace); see scope.go
 	// passes is the set of filtered passes to run each Collect. Empty use-cases ⇒ a single pass with
 	// slug "" and the legacy settings.api_key_ids filter (backward compatible). Each pass stamps its slug.
@@ -309,6 +310,7 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 	eps := l.endpoints()
 	var samples []model.Sample
 	skipped, total := 0, 0
+	l.authFailed = false
 	quota, quotaStop := false, false // quota: any endpoint hit quota; quotaStop: an HTTP 429 stopped the poll
 	for _, p := range l.passes {
 		for _, ep := range eps {
@@ -336,7 +338,12 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 		if quota {
 			return model.Batch{}, source.ErrQuotaExceeded // every endpoint failed and one was quota-limited: back off (F3/F34)
 		}
-		return model.Batch{}, fmt.Errorf("portkey groups: all %d endpoint fetch(es) failed this poll — capability/permission/transient error, not empty data", total)
+		err := fmt.Errorf("portkey groups: all %d endpoint fetch(es) failed this poll — capability/permission/transient error, not empty data", total)
+		if l.authFailed {
+			// A 401/403 on any endpoint of an all-failed poll is a credential failure: let the scheduler back off [#537].
+			return model.Batch{}, fmt.Errorf("%w: %w", err, source.ErrAuth)
+		}
+		return model.Batch{}, err
 	}
 	wm := since
 	wm.Time = now
@@ -399,8 +406,11 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 		default:
 			// 401/403/429/5xx: discard this endpoint's batch this poll (no shared watermark to advance).
 			slog.Warn("portkey groups endpoint status", "endpoint", ep.label, "status", code, "source", l.sourceInstance)
-			if source.IsAuthStatus(code) && l.onAuthError != nil {
-				l.onAuthError(l.Key().Loop, l.sourceInstance) // followup §9: credential failure = own signal
+			if source.IsAuthStatus(code) {
+				l.authFailed = true // read by Collect when every endpoint failed [#537]
+				if l.onAuthError != nil {
+					l.onAuthError(l.Key().Loop, l.sourceInstance) // followup §9: credential failure = own signal
+				}
 			}
 			if code == http.StatusTooManyRequests {
 				quota, stop = true, true

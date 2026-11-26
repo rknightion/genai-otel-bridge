@@ -70,7 +70,7 @@ func checkWorkspaceScope(ctx context.Context, hc *httpx.Client, baseURL, authHdr
 		if source.IsAuthStatus(resp.StatusCode) && onAuthError != nil {
 			onAuthError(loop, sourceInstance)
 		}
-		return scopeUndeterminable, "", fmt.Errorf("workspace scope probe: status %d", resp.StatusCode)
+		return scopeUndeterminable, "", source.WrapAuth(resp.StatusCode, fmt.Errorf("workspace scope probe: status %d", resp.StatusCode))
 	}
 	var gr groupsResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&gr); err != nil {

@@ -590,6 +590,8 @@ func TestCollectAuthErrorFiresHook(t *testing.T) {
 	lp.now = func() time.Time { return now }
 	if _, err := lp.Collect(context.Background(), model.Watermark{Time: base}); err == nil {
 		t.Fatal("a 403 must surface as a retryable error")
+	} else if !errors.Is(err, source.ErrAuth) {
+		t.Fatalf("a 403 must wrap source.ErrAuth [#537], got %v", err)
 	}
 	if len(auth) != 1 || auth[0] != [2]string{"analytics", "pk-test"} {
 		t.Fatalf("OnAuthError want one (analytics,pk-test), got %v", auth)

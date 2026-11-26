@@ -39,8 +39,10 @@ implements. The runner and scheduler record under a `LoopID` {source, loop} from
 
 - Consecutive `source.ErrQuotaExceeded` ticks stretch the wait: cadence doubled per quota tick,
   jittered, capped at `DegradedBackoff` and never below cadence. One successful `Collect` resets it;
-  a non-quota `Collect` error holds the streak. Auth (401/403) failures have no sentinel and still
-  retry at cadence. Degraded keeps precedence, and the quota tick still counts
+  a Collect error that is neither quota nor auth holds the streak. A Collect error wrapping
+  `source.ErrAuth` (401/403) takes the same stretched wait and shares the streak [#537], but stays a
+  counted `emit_errors_total{reason="collect"}` error (the source's `auth_errors_total` hook fires inside
+  Collect, so every failed tick is still counted). Degraded keeps precedence, and the quota tick still counts
   `samples_skipped_total{reason="quota_exceeded"}` and advances nothing.
 - Tick interval is cadence with 10% jitter, to de-align loops and replicas. On a terminal or degraded
   halt the scheduler backs off to 10 minutes, cleared on the next successful save. Five consecutive

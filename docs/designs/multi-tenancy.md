@@ -109,9 +109,9 @@ A central team cannot run today's binary for many teams without one install per 
     measured platform limit. One install per team is one pod per team with a single replica and
     two with a standby.
 *   **One process cannot serve two teams today.** The OTLP destination and the identity are global.
-    Startup fails when two loops declare the same metric name. Self-metrics are labelled by loop
-    name only, so two sources with an `analytics` loop overwrite each other's lag gauge. The
-    guard's budget is shared.
+    Startup fails when two loops declare the same metric name. Self-metrics carry the source
+    instance and the loop name, but nothing names the team, so alerts cannot be routed per team.
+    The guard's budget is shared.
 *   **Putting many teams in one process creates a new failure: one team's data delivered to
     another team's stack.** Nothing in the binary guards against it, because until now it could not
     happen. The most likely cause is not mis-wiring inside the binary. It is an API key that reads
@@ -144,7 +144,7 @@ Each goal states how it is checked.
     are both not built, and in each case every other pipeline runs.
 *   **G4. Every pipeline is individually alertable.** Lag, skips and degraded state carry the
     pipeline's id. Test: two pipelines with the same loop name produce two distinct `window_lag`
-    series.
+    series, each carrying its own `tenant` and `pipeline` labels.
 *   **G5. The three gap-free mechanisms work unchanged inside each pipeline.** Test: the existing
     acceptance tests pass with their assertions unmodified, and the same scenarios pass when run
     with three pipelines.
@@ -409,7 +409,8 @@ process, except the two that block one tenant: an unreadable secret and a duplic
     when values files are layered and merges a map.
 *   A target names one destination inside its own tenant. There is no syntax for referring to
     another tenant's objects, no pattern and no precedence.
-*   `scope` is required for every target, with both `name` and `id`. A target must not set the
+*   `scope` is required for every target, with both `name` and `id`, neither containing a
+    control character. A target must not set the
     legacy `settings.expected_workspace`; the scope replaces it.
 *   No two targets, in one tenant or in two, may use the same source API key. This is checked
     when the pod reads the secrets (section 5.5), not by the config check.
@@ -478,14 +479,17 @@ Rules are checked in three phases:
 | --- | --- | --- |
 | Load | Config package | Shape, ids and names, required keys, complete loop blocks, the https rules, the form of the secret file names, no references under `tenants` or `defaults`, `ha` values. |
 | Resolve | Plan package | References between a target and its destination, the two stack-sharing rules, the self-telemetry rule, no scope in two tenants. |
-| Assemble | Composition root | Rules that need the secrets or a built source and its loops: no two targets with the same API key (section 5.5; blocks the tenants, does not stop the process), scope assertion support, no vendor loop named `scope-match`, no loop that emits log records, no two loops in a group declaring one metric name (section 4). |
+| Assemble | Composition root | Rules that need a built source and its loops, or the secrets: no two targets with the same API key (section 5.5; blocks the tenants, does not stop the process), scope assertion support, no vendor loop named `scope-match`, no loop that emits log records, no two loops in a group declaring one metric name (section 4). |
 
-The config check runs the load and resolve phases and never reads a tenant's secret files. The
-assemble-phase rules are found when a pod starts. The chart requires a new pod to become ready
-before an old one is removed (section 11), so a pod that fails to assemble never becomes ready
-and the old pods keep running. That holds only while no old pod restarts: the config is one
-ConfigMap updated in place, so an old pod that restarts during a stopped rollout reads the new
-config and fails too (see Risks).
+The config check runs the load and resolve phases, then builds the app with placeholder credentials,
+an inert emitter and checkpoint store and no network, as it already does for the legacy shape. So
+every assemble rule that needs no secret is found in CI. It never reads a tenant's secret files, so
+two rules are found only when a pod starts: a duplicate API key and an unreadable secret. Both block
+the tenants concerned, not the process (section 9). The chart requires a new pod to become ready
+before an old one is removed (section 11), so a pod that fails to assemble never becomes ready and
+the old pods keep running. That holds only while no old pod restarts: the config is one ConfigMap
+updated in place, so an old pod that restarts during a stopped rollout reads the new config and
+fails too (see Risks).
 
 ### 4. Pipeline assembly
 
@@ -823,11 +827,15 @@ reserved loop name `scope-match` and the fingerprint field `v1`. No vendor loop 
 name; assembly refuses one that does. Its record is an ordinary watermark saved through the
 existing store, so it is fenced by leader number like any other:
 
-*   `Time` is when the gate recorded the match, so it only moves forward.
+*   `Time` is the later of the current time and one second after the stored record's time. The
+    store refuses a record older than the one it holds, so a new leader whose clock is behind the
+    last one's could otherwise never write it, or clear it.
 *   `Cursor` is the SHA-256, in hex, of the key fingerprint, the scope name and the scope id,
-    joined with a separator neither can contain. An empty `Cursor` means no match is remembered.
+    joined with a NUL byte. The load rules refuse a scope name or id that contains a control
+    character, so the join is unambiguous. An empty `Cursor` means no match is remembered.
 *   It is written when the assertion returns `Matched` and the stored digest differs from the
-    current one, and written empty when it returns `Mismatch`. A pipeline at steady state writes
+    current one, and written empty on every `Mismatch` whose stored digest is not already empty,
+    so a clearing write that failed is retried. A pipeline at steady state writes
     it once, not every interval.
 *   The digest cannot be turned back into the key. Anyone who can read the checkpoint ConfigMap
     can test a guessed key against it, but an API key is a long random string.
@@ -847,9 +855,7 @@ is counted as skipped. An offline prune is future work.
 *   The metrics interface the scheduler and runner use does not change. The existing `loop` label
     keeps its value. Metric and label names are published contracts.
 *   In the legacy shape the factory returns hooks that add nothing, so every label set is
-    identical to today's. A legacy config with two sources that share a loop name still
-    overwrites its lag gauge, as today. The fix for such an install is to move to the tenant
-    shape.
+    identical to today's: `source` and `loop`, with no `tenant` or `pipeline`.
 *   The upstream latency histogram already has a label called `target`, a published name that
     means the host of the request. It is unrelated to a target in this document and is not
     renamed.
@@ -876,11 +882,11 @@ is counted as skipped. An offline prune is future work.
 **Alerts and dashboards.** The behaviours below are the acceptance criteria. The rule expressions
 are written and tested in the change that edits the rule files.
 
-*   Every existing rule that groups by `loop` also groups by `tenant` and `pipeline`. That
-    changes nothing for series without those labels, so a legacy install's rules behave as today.
-    This covers the alerts for a stale poller, failing emits, auth errors, data loss, queue
-    backpressure, buckets revised after settle and a cardinality spike, and the five recording
-    rules built on the time of the last success.
+*    Every existing rule that groups by `source` and `loop` also groups by `tenant` and `pipeline`.
+    That changes nothing for series without those labels, so a legacy install's rules behave as
+    today. This covers the alerts for a stale poller, failing emits, auth errors, data loss, queue
+    backpressure, buckets revised after settle and a cardinality spike, and the five recording rules
+    built on the time of the last success.
 *   The stale-poller alert judges only pipelines whose state is matched. Series with no `tenant`
     label are judged as today.
 *   The leader-absent alert is unchanged. A new install whose tenants have never matched records
@@ -898,7 +904,7 @@ Every signal in a "Run" row carries `tenant` and `pipeline`.
 | Failure | Phase | Behaviour | Signal or outcome |
 | --- | --- | --- | --- |
 | A broken load-phase or resolve-phase rule | Load, resolve | The process does not start. The config check finds it in CI. | Exit. The new pod never becomes ready, so the rollout stops and the old pods keep running. |
-| A broken assemble-phase rule | Assemble | The process does not start. | The same. The config check does not find it. |
+| A broken assemble-phase rule | Assemble | The process does not start. | The same. The config check finds every one that needs no secret. |
 | A tenant's secret file is missing or unreadable | Assemble | That tenant's pipelines are not built. Every other tenant starts. If every tenant is blocked, the process does not start. | `tenant_blocked` with reason `secret_unreadable` |
 | 401 or 403 from the vendor, on a collect or on the scope assertion | Run | That loop does not advance and retries at its cadence, as today. | `auth_errors_total` |
 | The scope assertion call fails for another reason | Run | The tick ends before the collect. The loop retries at its cadence. | `emit_errors_total` with kind `collect`; `scope_assertion_total` with result `error` |
@@ -1006,7 +1012,7 @@ The checkpoint key contains no shard name, so a later shard design does not rewr
 | Every tenant's assertion reads one endpoint Portkey does not document (`/analytics/groups/workspace`). | Matched pipelines ride out up to 20 minutes of failures (section 5.1). The stale-poller alert fires for every matched pipeline past that. | A change or removal of that endpoint stops every tenant at once, and no other endpoint is known to replace it. |
 | Two tenants name the same workspace with an organisation key. | No scope may appear in two tenants, checked by the config check in CI (section 2). | An organisation key can still be pointed at a workspace that belongs to no tenant of the install; only review of the plan table catches that. |
 | Workspace slugs are unique only inside a Portkey organisation (Q9). | None in the binary: the workspace grouping returns no id. | A key from another organisation whose workspace has the configured slug returns `Matched`. Accepted if Q9 finds slugs are not globally unique. |
-| A rule that needs a built source is broken, and the config check does not find it. | The pod fails to become ready and the rollout stops with the old pods running. | The mistake is found at rollout, not in CI. The config is one ConfigMap updated in place, so an old pod that restarts during a stopped rollout reads the new config and fails too. A stopped rollout must be rolled back promptly. |
+| A rule that needs a tenant's secret is broken (a duplicate key or an unreadable secret), which the config check cannot find. | Only the tenants concerned are blocked, and the alert pages. A process-stopping assemble rule is found by the config check in CI. | The mistake is found at rollout, not in CI. The config is one ConfigMap updated in place, so an old pod that restarts during a stopped rollout reads the new config and fails too. A stopped rollout must be rolled back promptly. |
 
 ## Alternatives Considered
 

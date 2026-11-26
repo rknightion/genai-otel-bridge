@@ -65,7 +65,7 @@ func TestGroupsParseTolerantDimField(t *testing.T) {
 	if err := json.Unmarshal([]byte(realUsers24h), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if !resp.IsQuotaExceeded == false { // present-and-false
+	if resp.IsQuotaExceeded { // present-and-false
 		t.Fatal("users envelope is_quota_exceeded should be false")
 	}
 	rows, err := parseGroupRows(resp.Data, "user")
@@ -204,5 +204,18 @@ func TestGroupsDeriveLabelsNotAliased(t *testing.T) {
 	}
 	if !seen["a"] || !seen["b"] {
 		t.Fatalf("labels aliased — distinct metadata_value lost: %v", seen)
+	}
+}
+
+// TestGroupsQuotaFlagFromRawJSON pins the is_quota_exceeded tag from a raw envelope: the flag decoding to
+// the zero value hides a renamed tag, so assert the true case.
+func TestGroupsQuotaFlagFromRawJSON(t *testing.T) {
+	var resp groupsResponse
+	raw := `{"object":"list","total":1,"is_quota_exceeded":true,"data":[{"user":"u","requests":1,"object":"analytics-group"}]}`
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.IsQuotaExceeded {
+		t.Fatal("is_quota_exceeded:true must decode to true")
 	}
 }

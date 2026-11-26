@@ -66,7 +66,8 @@ configOverride: |
           graphs: [requests, cost, tokens, latency, errors]
 
 extraContainers:
-  # Loopback OTLP sink — absorbs emit (127.0.0.1:4318) + reports per-pod export count (8090).
+  # Loopback OTLP sink — absorbs emit (127.0.0.1:4318) and serves what this pod emitted on 8090
+  # (/count, and /points with every received gauge point; the suite reads it via the pod proxy).
   - name: otlp-sink
     image: genai-otel-bridge-e2e-helper:dev   # default only: the script sets it to $E2E_HELPER_IMAGE
     imagePullPolicy: IfNotPresent
@@ -85,8 +86,9 @@ extraContainers:
         port: 8090
       initialDelaySeconds: 2
       periodSeconds: 5
-  # Mock Portkey Analytics — loopback source (127.0.0.1:8080). Per-pod, so the leader polls its own
-  # mock; the watermark advances on every (empty) poll and commits to the SHARED checkpoint ConfigMap.
+  # Mock Portkey Analytics — loopback source (127.0.0.1:8081). Per-pod, so the leader polls its own
+  # mock; every pod's mock serves the same deterministic point per minute bucket, and the leader
+  # commits its watermark to the SHARED checkpoint ConfigMap.
   - name: mock-portkey
     image: genai-otel-bridge-e2e-helper:dev   # default only: the script sets it to $E2E_HELPER_IMAGE
     imagePullPolicy: IfNotPresent

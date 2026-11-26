@@ -22,7 +22,6 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // secretMarkers are DISTINCTIVE values placed in the PII/content fields Portkey injects into an export
@@ -157,7 +156,8 @@ func TestLogsExportContentLeakConformanceGate(t *testing.T) {
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t",
 		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(em, schedule.NoopMetrics{})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

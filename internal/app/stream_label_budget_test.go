@@ -12,7 +12,6 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // nIndexedFields returns n synthetic content-free field names, comma-joined — operator-promoted indexed
@@ -38,7 +37,8 @@ func TestBuildRejectsIndexedFieldsOverLokiStreamLabelBudget(t *testing.T) {
 	lp.Settings["extra_indexed_fields"] = nIndexedFields(10) // 3 identity + 3 base + 10 = 16 > 15
 	cfg.Sources[0].Loops["logs_export"] = lp
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err == nil || !strings.Contains(err.Error(), "max_stream_label_keys") {
 		t.Fatalf("want a Loki stream-label budget rejection naming max_stream_label_keys, got %v", err)
 	}
@@ -55,7 +55,8 @@ func TestBuildAcceptsIndexedFieldsAtBudgetBoundary(t *testing.T) {
 	lp.Settings["extra_indexed_fields"] = nIndexedFields(9) // 3 + 3 + 9 = 15 == default budget
 	cfg.Sources[0].Loops["logs_export"] = lp
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{}); err != nil {
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{}); err != nil {
 		t.Fatalf("at-budget (15) config must build, got %v", err)
 	}
 }
@@ -65,7 +66,8 @@ func TestBuildAcceptsIndexedFieldsAtBudgetBoundary(t *testing.T) {
 func TestBuildAcceptsDefaultLogsLoopWithinBudget(t *testing.T) {
 	cfg := logsExportConfig("http://127.0.0.1:1", "127.0.0.1")
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{}); err != nil {
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{}); err != nil {
 		t.Fatalf("default logs loop must build, got %v", err)
 	}
 }
@@ -79,7 +81,8 @@ func TestStreamLabelBudgetKnobRaises(t *testing.T) {
 	lp.Settings["extra_indexed_fields"] = nIndexedFields(10) // 16 ≤ 30
 	cfg.Sources[0].Loops["logs_export"] = lp
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{}); err != nil {
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{}); err != nil {
 		t.Fatalf("raised budget (30) must accept 16 labels, got %v", err)
 	}
 }

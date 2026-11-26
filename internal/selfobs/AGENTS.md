@@ -13,7 +13,8 @@ Unlike the product data plane (hand-rolled `emit/otlp` encoder), this package us
 SDK, so SDK features (cardinality limits, views) apply here and only here.
 
 `internal/httpx` and `internal/emit` are decoupled from `selfobs` the same way: neither imports it.
-`main.go` wires an `httpx.Observer` to `Metrics.ObserveUpstreamRequest` and the emit-leg observer to
+The composition root (`internal/app`, from the telemetry factory `main.go` passes it) wires an
+`httpx.Observer` to `Metrics.ObserveUpstreamRequest` and the emit-leg observer to
 `ObserveEmitRequest`, giving `upstream_request_duration_seconds{target,method,status_class}` and
 `emit_request_duration_seconds{plane,status_class}`. Keep new instrumentation on that pattern.
 

@@ -14,7 +14,6 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // docExample names a documented example config and how to find it: the first fenced yaml block that
@@ -102,7 +101,8 @@ func TestDocsExampleConfigsBuild(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{}); err != nil {
+			ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+			if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{}); err != nil {
 				t.Fatalf("%s: Build: %v", ex.path, err)
 			}
 		})

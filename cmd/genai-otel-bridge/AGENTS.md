@@ -60,6 +60,11 @@ access to its own lease or checkpoint. Fixed names; the chart is single-instance
   so an invalid config stops before the `config loaded` line and before any exporter exists. The
   `config loaded` counts and the liveness threshold read `plan.Rows`, never `cfg.Sources`.
   `newSelfProvider` keeps its own `ValidateConfig` call.
+- **Emitter and telemetry come from factories.** `main` builds no emitter and no `source.Deps`. It
+  passes `app.Build` `app.OTLPEmitterFactory(cfg.Queue.MaxBatchBytes, otlp.DefaultRetryPolicy(),
+  logging.NewLimiter(time.Minute))`, which owns the emit-leg observer, the partial-success counter
+  and the rate-limited partial-reject warning, and a telemetry factory over `metrics.With`.
+  `metrics.SetLeader` stays on the unlabelled `metrics` here; `leader` is never labelled.
 - **Self-observability** falls back to the telemetry endpoint when `cfg.Emit.Self` is nil; identity and self-profiling are in `internal/selfobs/AGENTS.md`. The self `service.namespace` is `identity.service_namespace` plus `config.SelfNamespaceSuffix` (`-meta`), never a literal.
 - **Liveness threshold** is derived, not a literal:
   `max(schedule.DegradedBackoff, slowest enabled loop cadence over the plan's rows) + emitRetryBudget(2m) + livenessMargin(4m)`.

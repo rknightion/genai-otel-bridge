@@ -42,7 +42,7 @@ unit, label key, then timestamp to defeat map-iteration randomness. Two fixed bu
   still success and the batch advances, but part of it was dropped past the taxonomy. `post()`
   decodes it from the raw pre-redaction bytes and fires `Config.OnPartialReject(plane, n, msg)`. The
   emitter is loop-agnostic and owns no metrics or logging, so the composition root
-  (`cmd/genai-otel-bridge/main.go`) wires that to `metrics.ObserveEmitPartialReject`
+  (`app.OTLPEmitterFactory` in `internal/app/factories.go`) wires that to `ObserveEmitPartialReject`
   (`genai_otel_bridge_emit_partial_success_rejected_total{plane}`) plus a rate-limited warn. No
   confirmed backend emits this form; the in-cluster Alloy topology could.
 - `CoalesceDPM` in `coalesce.go` is the stateless per-(series, minute) last-write-wins cap, called

@@ -22,7 +22,6 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // runsSecretMarkers are DISTINCTIVE values placed in the content fields LangSmith returns on a run
@@ -137,7 +136,8 @@ func TestLangsmithRunsContentLeakConformanceGate(t *testing.T) {
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t",
 		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(em, schedule.NoopMetrics{})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,8 @@ func TestLangsmithRunsExtraRecordFieldFlows(t *testing.T) {
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t",
 		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(em, schedule.NoopMetrics{})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +292,8 @@ func TestLangsmithRunsRejectsContentPreviewOptIn(t *testing.T) {
 		cfg := langsmithRunsConfig("http://127.0.0.1:1")
 		cfg.Sources[0].Loops["runs"].Settings["extra_record_fields"] = field
 		cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-		_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+		ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+		_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 		if err == nil {
 			t.Fatalf("%s: Build must reject opting an LLM-content preview into extra_record_fields (#95)", field)
 		}
@@ -335,7 +337,8 @@ func TestLangsmithRunsExtraIndexedGrayFieldFlows(t *testing.T) {
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t",
 		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(em, schedule.NoopMetrics{})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +412,8 @@ func TestLangsmithRunsExtraIndexedFieldFlows(t *testing.T) {
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t",
 		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(em, schedule.NoopMetrics{})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

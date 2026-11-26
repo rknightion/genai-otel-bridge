@@ -24,7 +24,6 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/source/langsmith"
 	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 )
@@ -246,7 +245,8 @@ func buildSnapshotApp(t *testing.T, sc config.SourceConfig, gwURL string) (sched
 		Retry: otlp.RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 1.5, MaxElapsed: 30 * time.Millisecond},
 	})
 	m := &metricsCounter{skip: map[string]int{}}
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, m, source.Deps{})
+	ef, tf := fixedFactories(em, m)
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

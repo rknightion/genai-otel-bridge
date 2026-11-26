@@ -21,7 +21,6 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
 	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 )
 
@@ -52,7 +51,8 @@ func TestUpgradeFromCurrentCheckpoints(t *testing.T) {
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
 	t.Cleanup(gw.Close)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t", Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
-	a, err := Build(context.Background(), minimalConfig(pk.URL), cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(em, schedule.NoopMetrics{})
+	a, err := Build(context.Background(), minimalConfig(pk.URL), cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

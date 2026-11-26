@@ -30,7 +30,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (source, loop, reason) (increase(genai_otel_bridge_samples_skipped_total{reason=~"too_old|payload_too_large|duplicate_timestamp"}[10m])) > 0'
+        expr: 'sum by (tenant, pipeline, source, loop, reason) (increase(genai_otel_bridge_samples_skipped_total{reason=~"too_old|payload_too_large|duplicate_timestamp"}[10m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

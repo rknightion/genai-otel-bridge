@@ -76,7 +76,7 @@ generator, then `just gen-dashboard` and commit the emitted YAML. gcx 0.3.x requ
 
 ## Self-obs alerts
 
-The `self-obs/` dir ships **sixteen** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
+The `self-obs/` dir ships **twenty** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
 
 | Alert | Severity | Fires when |
 |-------|----------|------------|
@@ -96,6 +96,20 @@ The `self-obs/` dir ships **sixteen** alerts (push the whole dir with `gcx resou
 | `GenaiOtelBridgePartialSuccessRejected` | warning | `increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]) > 0` — the gateway rejected records inside a 200 `partial_success` response (the emit looked successful; this counter is the only signal). |
 | `GenaiOtelBridgeNoStandby` | warning | fewer than 2 replicas self-reporting `genai_otel_bridge_leader_ratio` — no failover headroom (expected on intentionally single-replica dev stacks). |
 | `GenaiOtelBridgeMemoryNearLimit` | warning | `genai_otel_bridge_go_heap_inuse_bytes` above 85% of `genai_otel_bridge_go_memory_limit_bytes` for 15m. |
+| `GenaiOtelBridgeScopeMismatched` | critical | `max by (tenant, pipeline) (genai_otel_bridge_scope_state{state="mismatched"}) == 1` for 5m — a tenant-shape pipeline's credential belongs to a different upstream scope than its target's; the pipeline is held back (pages). |
+| `GenaiOtelBridgeTenantBlocked` | critical | `max by (tenant, reason) (genai_otel_bridge_tenant_blocked) == 1` for 5m — a tenant cannot run (`secret_unreadable` or `duplicate_key`); none of its pipelines start (pages). |
+| `GenaiOtelBridgeScopeAssertionErrors` | warning | every scope assertion call for a pipeline ended in `result="error"` (none matched, mismatched or unverifiable) for 30m — a pipeline stuck with no result. |
+| `GenaiOtelBridgeScopeUnverified` | info | `scope_state{state="unverified"}` is 1 for a pipeline for 24h (low severity). |
+
+### Tenant and pipeline grouping
+
+In the tenant shape every per-pipeline self-metric carries `tenant` and `pipeline` beside `source` and `loop`. So the per-pipeline rules (auth errors, bucket revised after settle, data loss, emit failing, loop degraded, poller stale, queue backpressure, window truncated, cardinality spike, partial reject) and the recording rules freshness ratio, last-success age, its 6h baseline, scrape healthy and window-truncated rate group by `tenant, pipeline` as well, so two pipelines never merge into one alert. A series with no `tenant` label (a legacy install) is grouped, and so judged, exactly as before. The window-truncated rules are per pipeline because the Portkey `groups` loop, which the tenant shape keeps, fires `window_truncated`.
+
+`GenaiOtelBridgePollerStale` and the baseline recording rule judge a tenant-shape pipeline only while `genai_otel_bridge_scope_state{state="matched"}` is 1 for it (an `and on (tenant, pipeline)` join), because an unverified or mismatched pipeline is held back on purpose and its age grows by design. A second branch, `tenant=""`, keeps a series with no tenant label judged as today. `self-obs/sim_poller_stale.py` proves the gate's arithmetic; `TestBundledRuleGroupings` pins the join.
+
+Left as they were, with the reason: `GenaiOtelBridgeLeaderAbsent` (no replica emitting is a process-wide fact; a new install whose tenants have never matched records no success and fires it, so say so in the onboarding), `GenaiOtelBridgeMemoryNearLimit` and `GenaiOtelBridgeNoStandby` (per replica), `GenaiOtelBridgeUpstreamErrorBudget` and its recording rule (grouped by host `target`), the scrape-present recording rule, `GenaiOtelBridgeExportPipelineDataIncomplete` (logs export, which the tenant shape refuses) and `GenaiOtelBridgeWorkspaceScopePermissionDenied` (the legacy `expected_workspace` check, which a scoped row refuses).
+
+The four scope alerts take the max across replicas (a replica that is not leading reports `scope_state` all 0) and treat no data as healthy.
 
 `GenaiOtelBridgeLeaderAbsent` and `GenaiOtelBridgePollerStale` are complementary: *absent* = no series at all (gone), *stale* = series present but ageing past its own baseline (wedged).
 

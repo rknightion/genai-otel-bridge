@@ -5,7 +5,7 @@ description: Bundled self-observability alert rules for genai-otel-bridge, with 
 
 # Alerts & Runbooks
 
-genai-otel-bridge ships sixteen self-observability alert rules under
+genai-otel-bridge ships twenty self-observability alert rules under
 `deploy/grafana/self-obs/alertrule-*.yaml`. All rules query `genai_otel_bridge_*` metrics
 directly (no recording-rule dependency) and use `noDataState: Ok` so the healthy case (no
 series at all) never fires spuriously.
@@ -38,6 +38,10 @@ gcx resources push -p deploy/grafana/self-obs --context self-obs-stack
 | [GenaiOtelBridgePartialSuccessRejected](#genaiotelbridgepartialsuccessrejected) | warning | The gateway rejected records inside a 200 `partial_success` response |
 | [GenaiOtelBridgeNoStandby](#genaiotelbridgenostandby) | warning | Fewer than 2 replicas self-reporting |
 | [GenaiOtelBridgeMemoryNearLimit](#genaiotelbridgememorynearlimit) | warning | Heap in use above 85% of the Go memory limit for 15m |
+| [GenaiOtelBridgeScopeMismatched](#genaiotelbridgescopemismatched) | critical | A pipeline's credential belongs to a different upstream scope than its target's |
+| [GenaiOtelBridgeTenantBlocked](#genaiotelbridgetenantblocked) | critical | A tenant cannot run: unreadable secret or a duplicate API key |
+| [GenaiOtelBridgeScopeAssertionErrors](#genaiotelbridgescopeassertionerrors) | warning | Every scope assertion for a pipeline has ended in an error for 30m |
+| [GenaiOtelBridgeScopeUnverified](#genaiotelbridgescopeunverified) | info | A pipeline has been unverified for 24h |
 
 `GenaiOtelBridgeLeaderAbsent` and `GenaiOtelBridgePollerStale` are complementary:
 *absent* means no series at all (leader gone); *stale* means the series is present but
@@ -376,6 +380,44 @@ GOMEMLIMIT is a soft target: the container is still OOM-killed at its hard limit
 
 1. The LangSmith decode buffers: a page decodes at roughly 2-3x its wire size, one per loop. Lower `page_size` or `max_response_bytes`.
 2. The container memory limit (Helm `resources.limits.memory`, ECS task memory) against the number of loops.
+
+---
+
+## Tenant and pipeline alerts
+
+In the tenant shape the per-pipeline rules group by `tenant, pipeline` as well as `source, loop`, so each pipeline alerts on its own and the alert labels name the tenant and pipeline. A series with no `tenant` label (a legacy install) is judged exactly as before. `GenaiOtelBridgePollerStale` judges a tenant-shape pipeline only while its scope state is matched; `GenaiOtelBridgeLeaderAbsent` is unchanged, so a new install whose tenants have never matched fires it. The four alerts below are inert until a tenant exists, take the max across replicas and treat no data as healthy.
+
+### GenaiOtelBridgeScopeMismatched
+
+**Severity:** critical (pages)
+
+**Fires when:** `genai_otel_bridge_scope_state{state="mismatched"}` is 1 for a pipeline for 5 minutes.
+
+The pipeline's credential resolves to a different upstream scope than the one configured for its target. The pipeline's loops are degraded (`scope_mismatch`) and nothing is collected or emitted for it. Correct the tenant's credential or target scope; the gate re-asserts every 10 minutes.
+
+### GenaiOtelBridgeTenantBlocked
+
+**Severity:** critical (pages)
+
+**Fires when:** `genai_otel_bridge_tenant_blocked` is 1 for a tenant for 5 minutes.
+
+`reason="secret_unreadable"` means a credential file of the tenant is missing or empty; `reason="duplicate_key"` means two tenants share an API key. None of the tenant's pipelines run until it is fixed.
+
+### GenaiOtelBridgeScopeAssertionErrors
+
+**Severity:** warning
+
+**Fires when:** every scope assertion call for a pipeline ended in `result="error"` (no matched, mismatch or unverifiable result) for 30 minutes.
+
+This covers a pipeline stuck with no result, which the state gauge shows only as unverified. Check the upstream status and the pod logs.
+
+### GenaiOtelBridgeScopeUnverified
+
+**Severity:** info (low)
+
+**Fires when:** `genai_otel_bridge_scope_state{state="unverified"}` is 1 for a pipeline for 24 hours.
+
+A short unverified spell is normal at start-up or during an upstream outage. A full day means the pipeline has not collected; check the credential and the assertion alerts above.
 
 ---
 

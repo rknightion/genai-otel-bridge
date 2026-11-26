@@ -30,7 +30,7 @@ spec:
       relativeTimeRange: {from: 16m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'max by (source, loop, reason) (genai_otel_bridge_loop_degraded_ratio) == 1'
+        expr: 'max by (tenant, pipeline, source, loop, reason) (genai_otel_bridge_loop_degraded_ratio) == 1'
         instant: true
         range: false
         intervalMs: 1000

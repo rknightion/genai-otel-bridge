@@ -1,0 +1,57 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: genai-otel-bridge-scope-mismatched
+  annotations:
+    grafana.app/folder: genai-otel-bridge
+  labels:
+    grafana.app/folder: genai-otel-bridge
+spec:
+  title: GenaiOtelBridgeScopeMismatched
+  # A pipeline's credential resolved to a different upstream scope than the one configured for its target, so its
+  # loops are held back (loop_degraded reason scope_mismatch) and nothing is collected or emitted for it. The
+  # gauge is 1 for the current state and 0 for the others; max across replicas collapses the leader and the
+  # standbys (a replica that is not leading reports all 0). A pipeline with no data is healthy.
+  execErrState: Ok
+  noDataState: Ok
+  for: 5m
+  trigger:
+    interval: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "genai-otel-bridge pipeline {{ $labels.pipeline }} of tenant {{ $labels.tenant }} has a credential for the wrong scope"
+    description: "The scope gate reports mismatched for pipeline {{ $labels.pipeline }} (tenant {{ $labels.tenant }}) for 5m: the credential does not belong to the configured upstream scope. The pipeline is not collecting. Fix the tenant's credential or target scope; the gate re-asserts every 10 minutes. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 6m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'max by (tenant, pipeline) (genai_otel_bridge_scope_state{state="mismatched"}) == 1'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

@@ -1,0 +1,57 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: genai-otel-bridge-scope-assertion-errors
+  annotations:
+    grafana.app/folder: genai-otel-bridge
+  labels:
+    grafana.app/folder: genai-otel-bridge
+spec:
+  title: GenaiOtelBridgeScopeAssertionErrors
+  # Every scope assertion call for a pipeline in the last 15m ended in an error (result="error": a 5xx, a timeout or an
+  # unreadable reply), with no matched, mismatch or unverifiable result beside it. That is a pipeline stuck with no
+  # result, which scope_state alone reports as unverified. Held for 30m. Max across replicas (a counter series
+  # per replica); a pipeline with no data is healthy.
+  execErrState: Ok
+  noDataState: Ok
+  for: 30m
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "genai-otel-bridge scope assertion for pipeline {{ $labels.pipeline }} of tenant {{ $labels.tenant }} only returns errors"
+    description: "Every scope assertion call for pipeline {{ $labels.pipeline }} (tenant {{ $labels.tenant }}) has ended in an error for 30m, so the pipeline cannot be verified and does not collect. Check the upstream status and the pod logs. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 46m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: '(max by (tenant, pipeline) (increase(genai_otel_bridge_scope_assertion_total{result="error"}[15m])) > 0) unless on (tenant, pipeline) (max by (tenant, pipeline) (increase(genai_otel_bridge_scope_assertion_total{result!="error"}[15m])) > 0)'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

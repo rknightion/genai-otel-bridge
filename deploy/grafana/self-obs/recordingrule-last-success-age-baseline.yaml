@@ -20,6 +20,8 @@ spec:
       relativeTimeRange: {from: 6h0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
+        # Gated like GenaiOtelBridgePollerStale: a tenant-shape pipeline only while its scope_state is matched
+        # (and on (tenant, pipeline)); the tenant="" branch keeps a legacy series as before.
         # Each loop's OWN normal staleness peak: p90 of last_success_age over the trailing 6h. This is
         # what makes the staleness thresholds self-relative and decoupled — no hardcoded per-loop number.
         # A snapshot loop (sessions) settles ~2m; a windowed log loop (runs) sawtooths to tens of minutes;
@@ -27,7 +29,7 @@ spec:
         # metric) so it does not depend on genai-otel-bridge:last_success_age:seconds being recorded. Ramps over the
         # first ~6h after deploy; during a sustained outage the baseline drifts up (the climbing age series
         # feeds it) — GenaiOtelBridgeLeaderAbsent is the absolute backstop for that case.
-        expr: 'quantile_over_time(0.9, (time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])'
+        expr: 'quantile_over_time(0.9, ((time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) and on (tenant, pipeline) (max by (tenant, pipeline) (genai_otel_bridge_scope_state{state="matched"}) == 1))[6h:1m]) or quantile_over_time(0.9, (time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds{tenant=""}))[6h:1m])'
         instant: true
         range: false
         intervalMs: 1000

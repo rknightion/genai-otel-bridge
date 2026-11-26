@@ -7,6 +7,15 @@ implements. The runner and scheduler record under a `LoopID` {source, loop} from
 `Key().SourceInstance`, and `Key().Loop` or a loop's `source.MetricsLoopNamer` name (the
 `logs_export` use-case fan-out), so same-named loop instances never share a gauge series (#387).
 
+A loop can belong to a tenant's pipeline (#521). `LoopSpec.Pipeline` (`schedule.Pipeline{Tenant, ID}`,
+zero in the legacy shape) adds `tenant` and `pipeline` to the scheduler's log lines through
+`Pipeline.LogAttrs`, and puts the pipeline id in its limiter keys (`collect:<pipeline>:<loop>`,
+`checkpoint_load:<pipeline>:<loop>`), so one tenant's failing loop cannot suppress another tenant's
+same-named loop's warning. `LoopSpec.Metrics` is the loop's own `Metrics` (the pipeline's labelled
+copy); nil means the scheduler's. `NewLoopRunner(..., m, opts ...RunnerOption)` takes `WithPipeline`,
+which adds the same two attributes to every runner log line; the runner's limiter is per runner, so its
+keys need no pipeline. The `Metrics` interface does not change.
+
 ## Invariants, each backed by a test
 
 - Single-flight collection. `Busy()` blocks re-collection while a batch is in flight and the

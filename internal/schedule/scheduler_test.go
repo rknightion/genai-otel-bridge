@@ -389,3 +389,47 @@ func TestJitterBounds(t *testing.T) {
 		}
 	}
 }
+
+// TestPipelineLogAttrs [#521]: the zero Pipeline (the legacy shape) adds no log attributes; a pipeline
+// with an id adds tenant and pipeline, in that order.
+func TestPipelineLogAttrs(t *testing.T) {
+	if got := (Pipeline{}).LogAttrs(); got != nil {
+		t.Fatalf("zero Pipeline LogAttrs = %v, want nil", got)
+	}
+	if got := (Pipeline{Tenant: "t1"}).LogAttrs(); got != nil {
+		t.Fatalf("Pipeline without an id LogAttrs = %v, want nil", got)
+	}
+	got := (Pipeline{Tenant: "t1", ID: "t1.a"}).LogAttrs()
+	want := []any{"tenant", "t1", "pipeline", "t1.a"}
+	if len(got) != len(want) {
+		t.Fatalf("LogAttrs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("LogAttrs = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestLoopSpecMetricsOverridesScheduler [#521]: a spec's own Metrics receives its tick's recordings; a
+// nil Metrics falls back to the scheduler's, as before.
+func TestLoopSpecMetricsOverridesScheduler(t *testing.T) {
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	now := time.Unix(1100, 0).UTC()
+	run := func(specM Metrics) (schedM *capMetrics) {
+		cp := newMemCP()
+		cp.Save(context.Background(), key, model.Watermark{Time: time.Unix(1000, 0).UTC(), Epoch: 1})
+		loop := &collectStub{key: key, out: batchAt(key, 1060)}
+		schedM = &capMetrics{}
+		r := NewLoopRunner(loop, &fakeEmitter{byTS: map[int64]error{}}, cp, source.NewGuard(source.GuardConfig{}), 4, 1, NoopMetrics{})
+		NewScheduler(nil, schedM).runOnce(leaderCtx(), LoopSpec{Runner: r, Loop: loop, Cadence: time.Minute, MaxBackfill: time.Hour, Metrics: specM}, now)
+		return schedM
+	}
+	own := &capMetrics{}
+	if schedM := run(own); own.lag != 100*time.Second || schedM.lag != 0 {
+		t.Fatalf("spec Metrics: spec lag=%v scheduler lag=%v, want 100s on the spec's and none on the scheduler's", own.lag, schedM.lag)
+	}
+	if schedM := run(nil); schedM.lag != 100*time.Second {
+		t.Fatalf("nil spec Metrics: scheduler lag=%v, want 100s", schedM.lag)
+	}
+}

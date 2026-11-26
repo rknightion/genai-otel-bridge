@@ -89,6 +89,26 @@
         "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?\\s+k3s_image\\s*:=\\s*env\\('[^']+', 'rancher/k3s:(?<currentValue>[^']+)'\\)"
       ],
       "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Tool versions pinned in the cloud setup script and the CI workflows; each assignment declares its own Renovate datasource. The same depName in both files moves in one pull request.",
+      "managerFilePatterns": ["/^scripts/cloud-environment-setup\\.sh$/", "/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?(?: extractVersion=(?<extractVersion>[^\\s]+))?\\s+(?:[A-Z_]+_VERSION=\"|just-version: '|tofu_version: '|tflint_version: v|run: pipx install checkov==)(?<currentValue>[^'\"\\s]+)"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    },
+    {
+      "customType": "regex",
+      "description": "go-licenses version pinned as a build ARG in both Dockerfiles; mirrors the justfile pin.",
+      "managerFilePatterns": ["/^Dockerfile(\\.kaniko)?$/"],
+      "matchStrings": [
+        "ARG GO_LICENSES_VERSION=(?<currentValue>v[^\\s]+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "google/go-licenses",
+      "versioningTemplate": "semver"
     }
   ]
 }

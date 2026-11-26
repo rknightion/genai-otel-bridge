@@ -53,18 +53,25 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         id: setup-just
         with:
+          # renovate: datasource=github-releases depName=casey/just
           just-version: '1.59.0'
       # IaC toolchain for the `tf-validate` hygiene step: OpenTofu (tofu-native), tflint (correctness),
       # and checkov (AWS security posture). Only the hygiene leg needs them.
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         if: matrix.name == 'hygiene'
         with:
+          # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.+)$
+          tofu_version: '1.10.6'
           tofu_wrapper: false
       - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
         if: matrix.name == 'hygiene'
+        with:
+          # renovate: datasource=github-releases depName=terraform-linters/tflint extractVersion=^v(?<version>.+)$
+          tflint_version: v0.59.1
       - name: install checkov
         if: matrix.name == 'hygiene'
-        run: pipx install checkov
+        # renovate: datasource=pypi depName=checkov versioning=pep440
+        run: pipx install checkov==3.2.495
       - run: ${{ matrix.run }}
         env:
           # term list for the forbidden-words hygiene guard (kept out of the repo; see scripts/forbidden-words.sh)
@@ -88,6 +95,7 @@ jobs:
           cache: true
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
+          # renovate: datasource=github-releases depName=casey/just
           just-version: '1.59.0'
       - run: just e2e
 
@@ -105,6 +113,7 @@ jobs:
           cache: false
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
+          # renovate: datasource=github-releases depName=casey/just
           just-version: '1.59.0'
       - run: just secret-scan
 
@@ -131,6 +140,7 @@ jobs:
           cache: true
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
+          # renovate: datasource=github-releases depName=casey/just
           just-version: '1.59.0'
       - run: just test-dynamodb
 
@@ -157,6 +167,7 @@ jobs:
           cache: true
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
+          # renovate: datasource=github-releases depName=casey/just
           just-version: '1.59.0'
       - run: just coverage
       - name: Upload coverage to Codacy

@@ -5,9 +5,14 @@
 #   bash scripts/cloud-environment-setup.sh
 set -euo pipefail
 
-JUST_VERSION="1.58.0"
+# Keep these equal to the versions pinned in .github/workflows/ci.yml; Renovate moves both together.
+# renovate: datasource=github-releases depName=casey/just
+JUST_VERSION="1.59.0"
+# renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.+)$
 TOFU_VERSION="1.10.6"
+# renovate: datasource=github-releases depName=terraform-linters/tflint extractVersion=^v(?<version>.+)$
 TFLINT_VERSION="0.59.1"
+# renovate: datasource=pypi depName=checkov versioning=pep440
 CHECKOV_VERSION="3.2.495"
 
 repo_root="$(git rev-parse --show-toplevel)"

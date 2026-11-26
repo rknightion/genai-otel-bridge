@@ -179,8 +179,9 @@ config:
     # configmap: durable watermark in a k8s ConfigMap (required with coordinator=lease). file: local file (dev only). dynamodb: DynamoDB item (ECS/AWS).
     checkpoint: configmap
   queue:
-    # Per-loop in-memory queue depth (batches). At ~1 batch/min this is ~4h of backlog before the
-    # queue blocks the scheduler (the block-on-full backpressure path).
+    # Per-loop queue capacity (batches). Collection is single-flight with the emit, so at most one batch
+    # is ever queued or in flight per loop and the capacity is never used: no backlog is buffered. The
+    # value is accepted for compatibility only.
     max_batches: 256
     # Per-batch size cap in bytes (~1 MiB). An over-cap batch is proactively split before transmit;
     # a 413 from the gateway triggers a reactive split (DESIGN §4.5/C11).

@@ -60,7 +60,7 @@ the explicit view remains authoritative.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `queue.max_batches` | int | `256` | Per-loop in-memory queue depth (batches). Blocks on full (backpressure). |
+| `queue.max_batches` | int | `256` | Per-loop queue capacity (batches). Accepted for compatibility: collection is single-flight with the emit, so at most one batch is ever queued or in flight and no backlog is buffered. |
 | `queue.max_batch_bytes` | int | `1048576` | Per-batch size cap in bytes (~1 MiB). Over-cap batches are split proactively; a 413 from the gateway triggers a reactive split. |
 | `queue.emit_workers` | int | `1` | Must be 1. Per-loop single-flight emit so the watermark advances monotonically. |
 

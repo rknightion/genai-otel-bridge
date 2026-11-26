@@ -59,7 +59,7 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	m.partialRejected = mk("emit_partial_success_rejected_total", "data points or log records the gateway rejected via an OTLP 200 partial_success response (rejected_data_points/rejected_log_records) — bypasses the 4xx reject taxonomy (emit returned success), so this is its only alertable signal; alert on rate(...) > 0")
 	m.lastSuccess = mg("last_success_timestamp_seconds", "unix time of the last fully handled window", "s")
 	m.windowLag = mg("window_lag_seconds", "now minus the watermark frontier", "s")
-	m.queueDepth = mg("queue_depth", "per-loop queue depth", "1")
+	m.queueDepth = mg("queue_depth", "1 while a batch is queued or being emitted, else 0", "1")
 	// [#120] Degraded-state gauge: 1 while a loop is in the degraded state (with the degrade reason as an
 	// attribute), 0 after the clearing commit. The state machine previously only logged + flipped an
 	// internal bool, so "which loop has been degraded, since when, for what reason" was inferable only by

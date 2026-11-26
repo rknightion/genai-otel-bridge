@@ -160,13 +160,13 @@ func (r *LoopRunner) ClearDegradedGauge() {
 }
 
 // Enqueue marks the loop busy and hands the batch to the single worker (block-on-full backpressure).
+// It records no queue depth: the worker owns the gauge [#372] (a read here raced the worker's receive).
 func (r *LoopRunner) Enqueue(ctx context.Context, b model.Batch) error {
 	r.mu.Lock()
 	r.busy = true
 	r.mu.Unlock()
 	select {
 	case r.q <- queuedBatch{batch: b, parent: trace.SpanContextFromContext(ctx)}:
-		r.m.QueueDepth(r.name, len(r.q))
 		return nil
 	case <-ctx.Done():
 		r.mu.Lock()
@@ -189,11 +189,16 @@ func (r *LoopRunner) Run(leaderCtx context.Context) {
 			if leaderCtx.Err() != nil {
 				return
 			}
-			r.m.QueueDepth(r.name, len(r.q))
+			// [#372] Collection is single-flight with the emit (CP-C1), so at most one batch is ever queued
+			// or in flight per loop and len(r.q) is always 0 here. queue_depth therefore reports the batch in
+			// flight: 1 for the whole emit and commit, 0 once it is handled. A slow or failing emit holds it at
+			// 1, which is what GenaiOtelBridgeQueueBackpressure alerts on.
+			r.m.QueueDepth(r.name, 1)
 			ctx := trace.ContextWithSpanContext(leaderCtx, b.parent)
 			ctx, span := otel.Tracer(tracerName).Start(ctx, "loop.emit", trace.WithAttributes(attribute.String("loop", r.name)))
 			r.ProcessBatch(ctx, b.batch)
 			span.End()
+			r.m.QueueDepth(r.name, 0)
 		}
 	}
 }

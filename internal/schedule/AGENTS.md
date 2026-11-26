@@ -49,7 +49,10 @@ implements.
   both catch-up acceleration and the `backfill_unstorable` count. A snapshot loop's watermark is a
   liveness heartbeat at `now`, not a replay frontier. Without the backfill gate, `MaxBackfill == 0`
   makes the floor `now` and produces a spurious skip count every tick.
-- The queue is bounded (cap at least 1) and `Enqueue` blocks when full: backpressure, not drop.
+- The queue is bounded (cap at least 1) and `Enqueue` blocks when full: backpressure, not drop. Because
+  collection is single-flight, at most one batch is ever queued or in flight, so `queue.max_batches`
+  buffers nothing. The worker records `queue_depth` 1 from dequeue until `ProcessBatch` returns, then 0;
+  `Enqueue` records nothing (#372).
 - `SetBeat` wires a per-tick attempt heartbeat, progress rather than success, into `/healthz`. The
   liveness threshold is deliberately the worst legitimate gap between beats, so a leader blocked in
   an intended retry or a degraded loop on its slow backoff is not killed.

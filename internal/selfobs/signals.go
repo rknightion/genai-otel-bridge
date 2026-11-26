@@ -32,7 +32,7 @@ func Signals() []signal.Signal {
 		selfMetric("emit_partial_success_rejected_total", "counter", "1", "data points or log records the gateway rejected via an OTLP 200 partial_success response (rejected_data_points/rejected_log_records)", "plane"),
 		selfMetric("last_success_timestamp_seconds", "gauge", "s", "unix time of the last fully handled window", "loop"),
 		selfMetric("window_lag_seconds", "gauge", "s", "now minus the watermark frontier", "loop"),
-		selfMetric("queue_depth", "gauge", "1", "per-loop queue depth", "loop"),
+		selfMetric("queue_depth", "gauge", "1", "1 while a batch is queued or being emitted, else 0", "loop"),
 		selfMetric("loop_degraded", "gauge", "1", "1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends", "loop", "reason"),
 		selfMetric("upstream_request_duration_seconds", "histogram", "s", "base2 exponential histogram: outbound request latency to upstream source APIs (time to response headers)", "target", "method", "status_class"),
 		selfMetric("emit_request_duration_seconds", "histogram", "s", "base2 exponential histogram: outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs)", "plane", "status_class"),

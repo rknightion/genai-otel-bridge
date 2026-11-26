@@ -77,12 +77,12 @@ const (
 	defaultRateLimitBurst = 3
 )
 
-// Queue depth defaults — applied in Load when max_batches/max_batch_bytes is unset (0). They mirror the
+// Queue defaults — applied in Load when max_batches/max_batch_bytes is unset (0). They mirror the
 // QueueConfig helm:"default=..." render tags (the chart SSOT). A hand-written or env-injected config
 // (e.g. the ECS delivery) that sets only the mandatory emit_workers must NOT run with the zero value:
-// max_batches 0 falls through to the runner's depth-1 clamp (~1 minute of buffering instead of the
-// documented ~4h), and max_batch_bytes 0 disables the emitter's proactive over-cap split entirely (only
-// the reactive 413 path survives). 0 is never a safe silent default here — same reasoning as governance.* (#114).
+// max_batch_bytes 0 disables the emitter's proactive over-cap split entirely (only the reactive 413 path
+// survives). max_batches is accepted for compatibility and has no effect on buffering (see QueueConfig),
+// but it keeps the same default so a rendered config and a hand-written one agree (#114, #372).
 const (
 	defaultQueueMaxBatches    = 256
 	defaultQueueMaxBatchBytes = 1 << 20 // 1 MiB
@@ -282,8 +282,9 @@ type DynamoDBHAConfig struct {
 	RetryPeriod   Duration `yaml:"retry_period" helm:"omit"`   // default 2s
 }
 type QueueConfig struct {
-	// Per-loop in-memory queue depth (batches). At ~1 batch/min this is ~4h of backlog before the
-	// queue blocks the scheduler (the block-on-full backpressure path).
+	// Per-loop queue capacity (batches). Collection is single-flight with the emit, so at most one batch
+	// is ever queued or in flight per loop and the capacity is never used: no backlog is buffered. The
+	// value is accepted for compatibility only.
 	MaxBatches int `yaml:"max_batches" helm:"default=256"`
 	// Per-batch size cap in bytes (~1 MiB). An over-cap batch is proactively split before transmit;
 	// a 413 from the gateway triggers a reactive split (DESIGN §4.5/C11).
@@ -422,7 +423,7 @@ func LoadBytes(raw []byte) (*Config, error) {
 	if cfg.Governance.MaxStreamLabelKeys == 0 { // unset ⇒ GC Loki max_label_names_per_series default (15)
 		cfg.Governance.MaxStreamLabelKeys = DefaultMaxStreamLabelKeys
 	}
-	if cfg.Queue.MaxBatches == 0 { // #114: unset ⇒ 256 (else runner clamps depth to 1, ≈1m of buffering)
+	if cfg.Queue.MaxBatches == 0 { // #114: unset ⇒ 256, so rendered and hand-written configs agree (inert, #372)
 		cfg.Queue.MaxBatches = defaultQueueMaxBatches
 	}
 	if cfg.Queue.MaxBatchBytes == 0 { // #114: unset ⇒ 1 MiB (else the proactive over-cap split is disabled)

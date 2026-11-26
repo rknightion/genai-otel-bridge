@@ -175,7 +175,7 @@ add(ts(131, "Emitted logs /s by loop", "rate(genai_otel_bridge_emitted_logs_tota
        "cps", [(f'sum by (loop) (rate(genai_otel_bridge_emitted_logs_total{LOOP}[{RI}]))', "{{loop}}")]))
 add(ts(132, "Emit errors /s by loop & kind", "rate(genai_otel_bridge_emit_errors_total) by kind. 'collect' = benign upstream-fetch retry; retryable_exhausted / checkpoint_* / bad_encoding are fatal (GenaiOtelBridgeEmitFailing).",
        "cps", [(f'sum by (loop, kind) (rate(genai_otel_bridge_emit_errors_total{LOOP}[{RI}]))', "{{loop}} / {{kind}}")]))
-add(ts(133, "Queue depth by loop", "genai_otel_bridge_queue_depth_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). Sustained non-zero => emit can't keep up with collect (backpressure → GenaiOtelBridgeQueueBackpressure).",
+add(ts(133, "Queue depth by loop", "genai_otel_bridge_queue_depth_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). 1 while a batch is in flight (collection is single-flight, so never more), else 0. Sustained 1 => the emit is slow or failing (GenaiOtelBridgeQueueBackpressure).",
        "short", [(f'max by (loop) (genai_otel_bridge_queue_depth_ratio{LOOP})', "{{loop}}")]))
 add(ts(134, "Samples skipped /s (counted gaps) by reason", "rate(genai_otel_bridge_samples_skipped_total) by reason. too_old / payload_too_large / duplicate_timestamp = real loss (GenaiOtelBridgeDataLoss); quota_exceeded / backfill_unstorable are benign. The loop advances past the bad bucket with a counted gap — never silent.",
        "cps", [(f'sum by (loop, reason) (rate(genai_otel_bridge_samples_skipped_total{LOOP}[{RI}]))', "{{loop}} / {{reason}}")]))

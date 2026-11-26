@@ -111,8 +111,7 @@ func cleanAPIKeyIDs(s string) string {
 // no I/O. bucketEnd = timestamp (+granularity when the API stamps bucket-START — OP5e set this true).
 // The latency graph emits one gauge per percentile with a {quantile} label; all other graphs emit a
 // single gauge from `total`.
-func derive(resp map[string]graphResponse, prefix string, since, now time.Time, settle, gran time.Duration, startSemantics bool) ([]model.Sample, error) {
-	cutoff := now.Add(-settle)
+func derive(resp map[string]graphResponse, prefix string, since, cutoff time.Time, gran time.Duration, startSemantics bool) ([]model.Sample, error) {
 	graphs := make([]string, 0, len(resp))
 	for g := range resp {
 		graphs = append(graphs, g)
@@ -154,7 +153,7 @@ func derive(resp map[string]graphResponse, prefix string, since, now time.Time, 
 			if !bend.After(since) { // forward-only
 				continue
 			}
-			if bend.After(cutoff) { // not yet settled
+			if bend.After(cutoff) { // beyond the committed frontier (the caller passes the minute-aligned window end)
 				continue
 			}
 			if g == "latency" {

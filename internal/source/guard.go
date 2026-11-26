@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
@@ -22,8 +23,31 @@ type GuardConfig struct {
 	// global DenyFieldKeys, which is the full floor+gray backstop. Never-subtractable content-floor keys are
 	// denied regardless of this map (IsContentFloorKey), so a per-loop entry can only release gray fields.
 	DenyFieldKeysByLoop map[string][]string
-	PerSeriesBudget     int
-	OnNewLabelValue     func(series string) // early-warning hook → new_label_values{series} self-metric
+	// PerSeriesBudget caps the ACTIVE label sets per metric name (and per logs loop): a label set counts
+	// against the budget until it has been idle for seenIdleWindow (#383). 0 or less means unlimited.
+	PerSeriesBudget int
+	OnNewLabelValue func(series string) // early-warning hook → new_label_values{series} self-metric
+	// Now is the clock the budget's idle eviction reads. nil means time.Now; tests inject a fake.
+	Now func() time.Time
+}
+
+// seenIdleWindow is how long a label set stays counted against PerSeriesBudget after it was last
+// admitted (#383). The budget bounds ACTIVE label sets, as the downstream active-series limit does, so a
+// churning dimension (per-experiment sessions, prompt ids) is not starved by label sets that stopped
+// arriving long ago. Fixed, not a config knob: it only needs to exceed every loop's poll cadence by a
+// margin, and one hour is far above the 60s default.
+const seenIdleWindow = time.Hour
+
+// seriesSeen is the cardinality state of one metric name (or one logs loop): every admitted label-set
+// signature with the time it was last admitted. It never holds more than budget entries: a signature is
+// only inserted while len(last) < budget, so memory stays bounded by budget x signature size per series.
+type seriesSeen struct {
+	last map[string]time.Time
+	// nextExpiry is the earliest time any entry could have gone idle (oldest last-seen at the previous
+	// sweep + seenIdleWindow). Refreshes only move entries later, so before nextExpiry a sweep cannot evict
+	// anything and is skipped: the O(budget) sweep runs only when the set is full, a new label set
+	// arrives and at least one entry may have expired.
+	nextExpiry time.Time
 }
 
 // Guard sits between derive and emit: drops samples with disallowed or deny-listed label keys,
@@ -41,7 +65,8 @@ type Guard struct {
 	// own emit-worker goroutine, so the mutable cardinality state must be locked. allow/deny/denyByLoop are
 	// written only at construction (read-only after) so they need no lock; seen is read+written here.
 	mu   sync.Mutex
-	seen map[string]map[string]struct{} // series → set of distinct labelset signatures
+	seen map[string]*seriesSeen // series → admitted labelset signatures with their last-seen time
+	now  func() time.Time
 }
 
 // NewGuard builds a Guard from config.
@@ -51,7 +76,11 @@ func NewGuard(cfg GuardConfig) *Guard {
 		deny:   map[string]bool{},
 		budget: cfg.PerSeriesBudget,
 		onNew:  cfg.OnNewLabelValue,
-		seen:   map[string]map[string]struct{}{},
+		seen:   map[string]*seriesSeen{},
+		now:    cfg.Now,
+	}
+	if g.now == nil {
+		g.now = time.Now
 	}
 	for _, k := range cfg.AllowLabelKeys {
 		g.allow[k] = true
@@ -146,29 +175,7 @@ func (g *Guard) okLog(loop string, lr model.LogRecord) bool {
 	}
 	// Per-loop cardinality budget on the distinct INDEXED signature (= distinct Loki streams). Keyed by a
 	// synthetic per-loop series ("logs:<loop>") since a LogRecord has no metric Name to key on.
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	series := "logs:" + loop
-	sig := labelSig(lr.IndexedAttributes)
-	set := g.seen[series]
-	if set == nil {
-		set = map[string]struct{}{}
-		g.seen[series] = set
-	}
-	if _, known := set[sig]; known {
-		return true
-	}
-	if len(set) >= g.budget {
-		if g.onNew != nil {
-			g.onNew(series)
-		}
-		return false
-	}
-	set[sig] = struct{}{}
-	if g.onNew != nil {
-		g.onNew(series)
-	}
-	return true
+	return g.admit("logs:"+loop, labelSig(lr.IndexedAttributes))
 }
 
 func (g *Guard) ok(s model.Sample) bool {
@@ -183,28 +190,67 @@ func (g *Guard) ok(s model.Sample) bool {
 	if g.budget <= 0 {
 		return true
 	}
+	return g.admit(s.Name, labelSig(s.Labels))
+}
+
+// admit applies the per-series cardinality budget to one label-set signature and reports whether it
+// may be emitted. The budget counts ACTIVE label sets (#383): a known signature is admitted and its
+// last-seen refreshed; a new one is admitted while fewer than budget signatures are held, and when the
+// set is full the signatures idle for seenIdleWindow or longer are evicted first. onNew fires on every
+// new admission and on every over-budget drop, as before.
+func (g *Guard) admit(series, sig string) bool {
 	g.mu.Lock() // [ext-review-8] guards the shared per-series cardinality state
 	defer g.mu.Unlock()
-	sig := labelSig(s.Labels)
-	set := g.seen[s.Name]
-	if set == nil {
-		set = map[string]struct{}{}
-		g.seen[s.Name] = set
+	now := g.now()
+	st := g.seen[series]
+	if st == nil {
+		st = &seriesSeen{last: map[string]time.Time{}}
+		g.seen[series] = st
 	}
-	if _, known := set[sig]; known {
+	if last, known := st.last[sig]; known {
+		if now.After(last) {
+			st.last[sig] = now
+		}
 		return true
 	}
-	if len(set) >= g.budget {
+	if len(st.last) >= g.budget {
+		st.evictIdle(now)
+	}
+	if len(st.last) >= g.budget {
 		if g.onNew != nil {
-			g.onNew(s.Name) // budget exceeded — alert before the series explodes
+			g.onNew(series) // budget exceeded — alert before the series explodes
 		}
 		return false
 	}
-	set[sig] = struct{}{}
+	st.last[sig] = now
 	if g.onNew != nil {
-		g.onNew(s.Name)
+		g.onNew(series)
 	}
 	return true
+}
+
+// evictIdle deletes every signature last admitted seenIdleWindow or more before now, and records when
+// the oldest survivor can next expire so a sweep that would evict nothing is skipped.
+func (st *seriesSeen) evictIdle(now time.Time) {
+	if now.Before(st.nextExpiry) {
+		return
+	}
+	var oldest time.Time
+	survivors := false
+	for sig, last := range st.last {
+		if now.Sub(last) >= seenIdleWindow {
+			delete(st.last, sig)
+			continue
+		}
+		if !survivors || last.Before(oldest) {
+			oldest, survivors = last, true
+		}
+	}
+	if !survivors {
+		st.nextExpiry = time.Time{}
+		return
+	}
+	st.nextExpiry = oldest.Add(seenIdleWindow)
 }
 
 // labelSigReplacer escapes the signature's delimiter/escape characters so labelSig is INJECTIVE over

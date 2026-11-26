@@ -58,11 +58,18 @@ That is what stops a secret containing YAML-special characters (`tok # x`) from 
 comment, and an unresolved ref from becoming invalid flow-map syntax. Unknown YAML keys are rejected
 (`KnownFields(true)`). An unset `${VAR}` is fatal.
 
+**Refs resolve as strings** (the node keeps its `!!str` tag): fine for string and `Duration` fields, a
+loud type error for bool and number fields. An empty `file:` secret is fatal. File-sourced values join the
+placeholder map under a `file-secret:` key so `redactSecretValues` redacts them at any length, plus the
+`first-7-bytes...` form yaml.v3 prints for long scalars [#381].
+
 **A `${VAR}` inside a YAML comment is still resolved.** `injectEnvPlaceholders` runs its regex over
 the raw text before parsing, so an unset var in a commented-out example block is a fatal startup
 error. Use `<env ref>` placeholder prose in example blocks, never live syntax.
 
 ## Validation rules worth knowing before you touch them
+
+- `selfobs.profiling.pull.addr` is `helm:"omit"`: `Load` supplies `:6060` in pull mode, and a rendered default would make a Helm override to `mode: push` fail the pull.addr-with-push cross-check [#382].
 
 - `emit.telemetry` and `emit.self` endpoints must be **https**, or loopback for dev. The loopback
   check **parses the URL and matches the hostname exactly**, not by prefix, so `localhost.evil.example`

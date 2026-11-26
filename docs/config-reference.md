@@ -70,7 +70,7 @@ the explicit view remains authoritative.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `governance.per_metric_cardinality_budget` | int | `10000` | Max distinct label-sets per metric name. Over-budget series are dropped and counted as `genai_otel_bridge_guard_dropped_total`. |
+| `governance.per_metric_cardinality_budget` | int | `10000` | Max distinct label-sets per metric name active within the last hour. Over-budget series are dropped and counted as `genai_otel_bridge_guard_dropped_total`. |
 | `governance.max_dpm` | int | `1` | Hard cap on data points per minute per series (both planes). Drives the product-plane LWW coalesce and clamps the self-obs PeriodicReader interval. |
 | `governance.max_catchup_per_tick` | int | `1` | Max windows drained per cadence period when a loop is backlogged. `1` = no catch-up acceleration (the default). |
 | `governance.max_stream_label_keys` | int | `15` | Max OTLP resource attributes a single logs loop may contribute as Loki stream labels. The Grafana Cloud Loki default ceiling is 15; the bridge fails fast at startup if a loop would exceed it. |

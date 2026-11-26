@@ -56,7 +56,7 @@ docs/superpowers/
 # Zensical docs-site build output
 /site/
 
-# Injected by the m7kni.io hub at build time — never commit these.
+# Injected by the docs hub at build time — never commit these.
 # The hub copies its own SEO template, brand stylesheet and fonts into a clone
 # and generates zensical.toml from docs.toml. A tracked copy here is drift, and
 # is exactly what the manifest model exists to prevent.

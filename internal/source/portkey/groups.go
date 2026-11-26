@@ -283,7 +283,7 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 	// two polls land in the same wall-clock minute (sub-minute cadence, or the jitter edge at ~60s), two
 	// DISTINCT sub-minute timestamps would push >1 point/series/minute past Mimir (CoalesceDPM is
 	// per-batch and can't dedup across polls), violating the 1DPM cap. Truncating to the minute makes
-	// same-minute re-polls share a timestamp (LWW/duplicate-timestamp dedup ⇒ exactly 1DPM) while the
+	// same-minute re-polls share a timestamp (identical values are a Mimir no-op, a changed value is a counted duplicate-timestamp reject) while the
 	// FETCH window still uses the precise now-settle bound. (followup §0 1DPM; groups PoC watermark note.)
 	stamp := until.Truncate(time.Minute)
 	eps := l.endpoints()

@@ -135,6 +135,16 @@ func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, sk
 		} else {
 			return nil, 0, 0, false, fmt.Errorf("portkey logs_export: signed-url returned 206 with unexpected Content-Range %q (wanted start %d)", resp.Header.Get("Content-Range"), byteOffset)
 		}
+	case http.StatusRequestedRangeNotSatisfiable:
+		// A checkpoint parked at the END of the object (written by a release that reported eof=false on a
+		// chunk that consumed exactly max lines and the last byte) asks for a Range that starts at the object
+		// length, which an RFC 7233 store answers 416 with "Content-Range: bytes */<length>". The saved offset
+		// IS the end of the object, so the page is done. Any other 416 (offset not equal to the length, or no
+		// parseable header) stays loud.
+		if total, ok := contentRangeUnsatisfiedTotal(resp.Header.Get("Content-Range")); byteOffset > 0 && ok && total == byteOffset {
+			return nil, 0, byteOffset, true, nil
+		}
+		return nil, 0, 0, false, fmt.Errorf("portkey logs_export: signed-url download status %d%s", resp.StatusCode, errBodySuffix(httpx.ErrSnippet(resp)))
 	default:
 		return nil, 0, 0, false, fmt.Errorf("portkey logs_export: signed-url download status %d%s", resp.StatusCode, errBodySuffix(httpx.ErrSnippet(resp)))
 	}
@@ -234,11 +244,32 @@ func (l *logsExportLoop) downloadChunk(ctx context.Context, signedURL string, sk
 		// and a page legitimately near 512 MiB is itself a mis-sized window. Raise the cap / shrink window.)
 		return nil, 0, 0, false, fmt.Errorf("portkey logs_export: signed-url object exceeds %d bytes (truncated) — raise download cap / shrink window", maxBytes)
 	}
-	// Fewer than a full chunk ⇒ end of page. (When a page is an exact multiple of `max`, the final
-	// non-empty chunk reports eof=false and the NEXT chunk reads zero lines ⇒ eof=true — one extra,
-	// cheap, idempotent re-download. Correctness over micro-optimisation.)
+	// Fewer than a full chunk ⇒ end of page. A chunk that read exactly `max` lines may still have consumed
+	// the last byte of the object (a page that is an exact multiple of `max`): peek one byte so that case
+	// is eof too, instead of asking the next tick for a Range that starts at the object length, which an
+	// RFC 7233 store answers 416. Any Peek error other than io.EOF leaves eof=false; the next chunk surfaces it.
 	eof = linesRead < max
+	if !eof {
+		if _, perr := br.Peek(1); perr == io.EOF {
+			eof = true
+		}
+	}
 	return recs, linesRead, base + consumed, eof, nil
+}
+
+// contentRangeUnsatisfiedTotal parses the TOTAL of an unsatisfied-range `Content-Range: bytes */TOTAL` header
+// (RFC 7233 §4.2), as sent with a 416. ok=false on any other shape.
+func contentRangeUnsatisfiedTotal(h string) (int64, bool) {
+	h = strings.TrimSpace(h)
+	const p = "bytes */"
+	if !strings.HasPrefix(h, p) {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(h[len(p):]), 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // contentRangeStart parses the START byte of a `Content-Range: bytes START-END/TOTAL` header (RFC 7233).

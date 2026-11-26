@@ -59,7 +59,7 @@ func main() {
 	cpFile := flag.String("checkpoint-file", "/var/lib/genai-otel-bridge/checkpoints.yaml", "path for the file checkpoint store (only used when ha.checkpoint=file)")
 	cleanupMode := flag.Bool("cleanup", false, "delete the app-created lease + checkpoint ConfigMap, then exit (the chart's post-delete uninstall hook)")
 	cleanupRetainCheckpoint := flag.Bool("cleanup-retain-checkpoint", false, "with -cleanup: keep the checkpoint ConfigMap and the lease (its transition count is the epoch fence) so a reinstall resumes the watermark")
-	validateConfigMode := flag.Bool("validate-config", false, "load + validate the -config file (placeholdering unset ${ENV} refs so secrets aren't needed), print the result, and exit 0/1")
+	validateConfigMode := flag.Bool("validate-config", false, "load, validate and construct (as startup does, no network) the -config file (placeholdering unset ${ENV} refs so secrets aren't needed), print the result, and exit 0/1; does not check the inline GENAI_OTEL_BRIDGE_CONFIG form")
 	healthCheckMode := flag.Bool("healthcheck", false, "probe the local /healthz derived from -health-addr (a 0.0.0.0/[::] bind, or a bare port, is dialed via 127.0.0.1) and exit 0/1 (ECS container health check; distroless has no shell for curl)")
 	versionMode := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()
@@ -392,15 +392,12 @@ func buildHA(ctx context.Context, cfg *config.Config, ns, identity, cpFile strin
 		coord = ddbcoord.New(ddb, d.Table, d.KeyPrefix+"lock#"+d.LockName, identity,
 			time.Duration(d.LeaseDuration), time.Duration(d.RenewDeadline), time.Duration(d.RetryPeriod))
 	default: // "none" (or, pre-validation, any other value) → single-replica Noop
-		// [#45] A durable, shared checkpoint that a prior HA (lease/dynamodb) deployment advanced to
-		// epoch ≥ 2 permanently fences Noop's writes (Noop stamps epoch 1), spinning the loop re-emitting
-		// the same window forever until the checkpoint objects are manually deleted. We cannot read the
-		// stored epoch here (checkpoint keys aren't known until the source graph is built), so warn loudly
-		// rather than fail. app.Build then completes the auto-heal: it reads the max stored epoch across the
-		// built loops and re-constructs the Noop via NoopWithEpoch, so writes aren't fenced after an HA→none
-		// downgrade; a fresh single-replica deployment on this backend stays legitimate (effective epoch 1).
+		// [#45] The checkpoint keys aren't known here (the source graph is built later), so the stored
+		// epoch can't be read. app.Build completes the migration: it reads the max stored epoch across the
+		// built loops and re-constructs the Noop via NoopWithEpoch, so an HA→none downgrade stays writable;
+		// a fresh single-replica deployment stays at epoch 1. Build warns per key if that Load fails.
 		if cfg.HA.Checkpoint == "configmap" || cfg.HA.Checkpoint == "dynamodb" {
-			slog.Warn("ha.coordinator=none over a durable checkpoint: if this store was previously advanced by an HA (lease/dynamodb) deployment (epoch ≥ 2), watermark writes will be permanently fenced (checkpoint_fenced) and the loops will re-emit the same window at full cadence. Recovery is manual: delete the checkpoint objects. See internal/coordinate migration note (#45).",
+			slog.Info("ha.coordinator=none over a durable checkpoint: the stored leader epoch is adopted at startup, so a store previously advanced by an HA deployment stays writable",
 				"checkpoint", cfg.HA.Checkpoint)
 		}
 	}
@@ -442,7 +439,9 @@ func runCleanup(ns string, retainCheckpoint bool) {
 // wedged leader would pass liveness for hours instead of minutes before the orchestrator restarts it.
 func livenessThreshold(cfg *config.Config) time.Duration {
 	const (
-		emitRetryBudget = 2 * time.Minute // 3× emit retry (exp backoff ~90s) + checkpoint save + slack
+		// Slack for a tick that is mid-emit. The default emit retry policy allows up to MaxElapsed (5m), but
+		// beats come from tick attempts, not emits, so this need not cover the whole retry budget.
+		emitRetryBudget = 2 * time.Minute
 		livenessMargin  = 4 * time.Minute // headroom for scheduling jitter / clock skew
 	)
 	base := schedule.DegradedBackoff

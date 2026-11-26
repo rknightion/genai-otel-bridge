@@ -1,6 +1,6 @@
 name: Bug report
 description: Report a defect in genai-otel-bridge
-labels: ["bug"]
+labels: ["type:bug", "needs-triage"]
 body:
   - type: markdown
     attributes:

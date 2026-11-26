@@ -3,6 +3,7 @@
 package portkey
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,8 +40,11 @@ type fakeExport struct {
 	total              int
 	pollsUntilSuccess  int
 	failStatus         string
-	startFailStatus    int // when non-zero, POST /start returns this HTTP status + an AB01 body (lost-ack/non-draft test)
-	httpStatusOverride int // when non-zero, every control-plane call returns this HTTP status (auth-fail test)
+	startFailStatus    int    // when non-zero, POST /start returns this HTTP status + an AB01 body (lost-ack/non-draft test)
+	httpStatusOverride int    // when non-zero, every control-plane call returns this HTTP status (auth-fail test)
+	createRaw          string // when non-empty, POST /logs/exports returns this raw JSON body (schema-drift tests)
+	pollStatusCode     int    // when non-zero, GET /logs/exports/<id> (job poll) returns this HTTP status
+	downloadStatusCode int    // when non-zero, GET /logs/exports/<id>/download returns this HTTP status
 	signedURLHost      string
 	pageBody           func(page int) string // JSONL body for a page
 	createBodies       []map[string]json.RawMessage
@@ -78,6 +82,10 @@ func (f *fakeExport) handle(w http.ResponseWriter, r *http.Request) {
 		f.seq++
 		id := fmt.Sprintf("job-%d", f.seq)
 		f.jobs[id] = &fakeJob{page: page, status: statusDraft}
+		if f.createRaw != "" {
+			_, _ = w.Write([]byte(f.createRaw))
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "total": f.total, "object": "export"})
 	case r.Method == http.MethodPost && strings.HasSuffix(p, "/start"):
 		if f.startFailStatus != 0 {
@@ -99,6 +107,10 @@ func (f *fakeExport) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/download"):
 		id := jobIDFromPath(p, "/download")
+		if f.downloadStatusCode != 0 {
+			w.WriteHeader(f.downloadStatusCode)
+			return
+		}
 		host := f.srv.Listener.Addr().String()
 		if f.signedURLHost != "" {
 			host = f.signedURLHost
@@ -114,9 +126,15 @@ func (f *fakeExport) handle(w http.ResponseWriter, r *http.Request) {
 		if j != nil {
 			page = j.page
 		}
-		_, _ = w.Write([]byte(f.pageBody(page)))
+		// RFC 7233 via http.ServeContent (206 + Content-Range, and 416 for a range starting at the object
+		// length), as a real object store behaves, so a Range-at-EOF bug cannot hide behind the fake.
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader([]byte(f.pageBody(page))))
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/logs/exports/"):
 		id := strings.TrimPrefix(p, "/logs/exports/")
+		if f.pollStatusCode != 0 {
+			w.WriteHeader(f.pollStatusCode)
+			return
+		}
 		j := f.jobs[id]
 		if j == nil {
 			w.WriteHeader(http.StatusNotFound)
@@ -794,4 +812,273 @@ func TestLogsExportAuthErrorFiresHook(t *testing.T) {
 	if len(auth) != 1 || auth[0] != [2]string{"logs_export", "pk-test"} {
 		t.Fatalf("OnAuthError want one (logs_export,pk-test), got %v", auth)
 	}
+}
+
+// TestLogsExportExactMultiplePageCompletes: a page whose line count is an exact multiple of
+// chunk_max_records completes without an extra Range request. The fake serves the object with
+// http.ServeContent, which answers a Range at the object length with 416 as an RFC 7233 store does.
+func TestLogsExportExactMultiplePageCompletes(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	f := newFakeExport(t, 8, func(int) string { return nLines(8, "m") })
+	l := mkLogsLoop(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m", "chunk_max_records": "4"}), now)
+	start := model.Watermark{Time: now.Add(-time.Hour)}
+	wm := start
+	emitted := 0
+	for step := 0; step < 30; step++ {
+		b, err := l.Collect(context.Background(), wm)
+		if err != nil {
+			t.Fatalf("step %d: Collect error: %v", step, err)
+		}
+		emitted += len(b.Logs)
+		wm = b.Watermark
+		if wm.Time.After(start.Time) {
+			if emitted != 8 {
+				t.Fatalf("emitted %d records, want 8", emitted)
+			}
+			return
+		}
+	}
+	t.Fatalf("window never completed: cursor=%s", wm.Cursor)
+}
+
+// TestLogsExportParkedAtEndOfObjectRecovers: a checkpoint written by a release that left the byte cursor at
+// the end of the object (eof=false on an exact-multiple chunk) recovers on its own (416 handled as eof).
+func TestLogsExportParkedAtEndOfObjectRecovers(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	body := nLines(8, "m")
+	f := newFakeExport(t, 8, func(int) string { return body })
+	l := mkLogsLoop(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m", "chunk_max_records": "4"}), now)
+	f.jobs["job-parked"] = &fakeJob{page: 0, status: statusSuccess}
+	cur := exportCursor{Phase: phaseDownloading, JobID: "job-parked", WinMin: "2026-06-19T10:00:00Z",
+		WinMax: "2026-06-19T11:00:00Z", Pages: 1, TotalRecords: 8, PageOffsetDone: 8, PageByteOffset: int64(len(body))}
+	start := model.Watermark{Time: now.Add(-2 * time.Hour), Cursor: cur.encode()}
+	b, err := l.Collect(context.Background(), start)
+	if err != nil {
+		t.Fatalf("parked checkpoint must recover, got %v", err)
+	}
+	if !b.Watermark.Time.After(start.Time) {
+		t.Fatalf("watermark did not advance: %+v", b.Watermark)
+	}
+}
+
+// lostJobFixture builds a loop whose persisted cursor is in phase with a job id the control plane does not
+// know, and records every OnDataIncomplete reason.
+func lostJobFixture(t *testing.T, phase string, mut func(*fakeExport), pollDeadline string) (*logsExportLoop, *[]string, model.Watermark) {
+	t.Helper()
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	f := newFakeExport(t, 3, func(int) string { return nLines(3, "m") })
+	if mut != nil {
+		mut(f)
+	}
+	var events []string
+	l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}),
+		source.Deps{OnDataIncomplete: func(_ string, r source.IncompleteReason) { events = append(events, string(r)) }}, now)
+	cur := exportCursor{Phase: phase, JobID: "job-gone", WinMin: "2026-06-19T10:00:00Z",
+		WinMax: "2026-06-19T11:00:00Z", Pages: 1, TotalRecords: 3, PollDeadline: pollDeadline}
+	return l, &events, model.Watermark{Time: now.Add(-2 * time.Hour), Cursor: cur.encode()}
+}
+
+func assertResetIdle(t *testing.T, b model.Batch, err error, events *[]string, want source.IncompleteReason, since model.Watermark) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("a lost job must restart the window, not error: %v", err)
+	}
+	if got := decodeCursor(b.Watermark.Cursor).Phase; got != phaseIdle {
+		t.Fatalf("cursor phase = %q, want idle", got)
+	}
+	if !b.Watermark.Time.Equal(since.Time) {
+		t.Fatalf("watermark time moved to %s; a restart must keep %s", b.Watermark.Time, since.Time)
+	}
+	if len(*events) != 1 || (*events)[0] != string(want) {
+		t.Fatalf("OnDataIncomplete = %v, want exactly [%s]", *events, want)
+	}
+}
+
+// TestLogsExportLostJobPolling: a poll answered 404 (unknown job; the fake default) or 410 resets the
+// cursor to idle and counts export_failed once (AC1).
+func TestLogsExportLostJobPolling(t *testing.T) {
+	for _, code := range []int{0, http.StatusNotFound, http.StatusGone} {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			l, events, since := lostJobFixture(t, phasePolling, func(f *fakeExport) { f.pollStatusCode = code }, "2026-06-19T10:30:00Z")
+			b, err := l.Collect(context.Background(), since)
+			assertResetIdle(t, b, err, events, source.IncompleteExportFailed, since)
+		})
+	}
+}
+
+// TestLogsExportLostJobDownloadURL: the download-URL call answered 404 or 410 resets and counts once (AC2).
+func TestLogsExportLostJobDownloadURL(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusGone} {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			l, events, since := lostJobFixture(t, phaseDownloading, func(f *fakeExport) { f.downloadStatusCode = code }, "")
+			b, err := l.Collect(context.Background(), since)
+			assertResetIdle(t, b, err, events, source.IncompleteExportFailed, since)
+		})
+	}
+}
+
+// TestLogsExportLostJobRecoveryPoll: a /start error whose recovery poll finds the job gone resets and counts once.
+func TestLogsExportLostJobRecoveryPoll(t *testing.T) {
+	l, events, since := lostJobFixture(t, phaseCreated, func(f *fakeExport) { f.startFailStatus = http.StatusBadRequest }, "")
+	b, err := l.Collect(context.Background(), since)
+	assertResetIdle(t, b, err, events, source.IncompleteExportFailed, since)
+}
+
+// TestLogsExportLostJobRecoveryPollStillDraftKeepsStartError: the lost-ACK recovery is unchanged; a poll that
+// shows a draft keeps returning the original start error.
+func TestLogsExportLostJobRecoveryPollStillDraftKeepsStartError(t *testing.T) {
+	l, events, since := lostJobFixture(t, phaseCreated, func(f *fakeExport) {
+		f.startFailStatus = http.StatusBadRequest
+		f.jobs["job-gone"] = &fakeJob{status: statusDraft}
+		f.failStatus = statusDraft // the fake reports this status from every job poll
+	}, "")
+	if _, err := l.Collect(context.Background(), since); err == nil || len(*events) != 0 {
+		t.Fatalf("want the start error and no event, got err=%v events=%v", err, *events)
+	}
+}
+
+// TestLogsExportLostJobPollPersistentFailurePastDeadline: a poll that keeps failing with a 5xx once
+// PollDeadline has passed restarts the window as export_stuck (AC3).
+func TestLogsExportLostJobPollPersistentFailurePastDeadline(t *testing.T) {
+	l, events, since := lostJobFixture(t, phasePolling, func(f *fakeExport) { f.pollStatusCode = http.StatusServiceUnavailable }, "2026-06-19T10:30:00Z")
+	b, err := l.Collect(context.Background(), since)
+	assertResetIdle(t, b, err, events, source.IncompleteExportStuck, since)
+}
+
+// TestLogsExportPollErrorBeforeDeadlineKeepsCursor: 401, 403, 429 and 5xx before the deadline stay an error
+// with no event and no cursor change (AC4); a 404 on the download-URL call is the only lost-job signal there.
+func TestLogsExportPollErrorBeforeDeadlineKeepsCursor(t *testing.T) {
+	for _, code := range []int{401, 403, 429, 500, 503} {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			l, events, since := lostJobFixture(t, phasePolling, func(f *fakeExport) { f.pollStatusCode = code }, "2026-06-19T13:00:00Z")
+			b, err := l.Collect(context.Background(), since)
+			if err == nil {
+				t.Fatalf("want an error, got batch %+v", b)
+			}
+			if len(*events) != 0 || b.Watermark != (model.Watermark{}) {
+				t.Fatalf("an error tick must not advance or count: events=%v wm=%+v", *events, b.Watermark)
+			}
+		})
+	}
+	for _, code := range []int{401, 403, 429, 500} {
+		t.Run(fmt.Sprintf("download_status_%d", code), func(t *testing.T) {
+			l, events, since := lostJobFixture(t, phaseDownloading, func(f *fakeExport) { f.downloadStatusCode = code }, "")
+			if _, err := l.Collect(context.Background(), since); err == nil || len(*events) != 0 {
+				t.Fatalf("want error and no event, got err=%v events=%v", err, *events)
+			}
+		})
+	}
+}
+
+// TestLogsExportCreateResponseSchema: a create response that loses total or id is a loud error plus the
+// schema-changed capability state, never an empty window or an orphan draft per tick. Fixtures are raw JSON
+// strings, not encoded from createExportResp, so a field rename on the vendor side is what is under test.
+func TestLogsExportCreateResponseSchema(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	mk := func(t *testing.T, raw string) (*logsExportLoop, *fakeExport, *[]string) {
+		f := newFakeExport(t, 10, func(int) string { return nLines(1, "m") })
+		f.createRaw = raw
+		var caps []string
+		l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}),
+			source.Deps{OnCapability: func(loop, graph string, st source.CapabilityState) {
+				caps = append(caps, loop+"/"+graph+"/"+string(st))
+			}}, now)
+		return l, f, &caps
+	}
+	wantCap := "logs_export/logs/exports/" + string(source.CapabilitySchemaChanged)
+	start := model.Watermark{Time: now.Add(-time.Hour)}
+
+	t.Run("missing total", func(t *testing.T) {
+		l, _, caps := mk(t, `{"id":"job-1","object":"export","total_records":1234}`)
+		b, err := l.Collect(context.Background(), start)
+		if err == nil {
+			t.Fatalf("a create response with no total must error, got watermark %+v", b.Watermark)
+		}
+		if b.Watermark != (model.Watermark{}) || len(b.Logs) != 0 {
+			t.Fatalf("an error tick must not advance: %+v", b)
+		}
+		if len(*caps) != 1 || (*caps)[0] != wantCap {
+			t.Fatalf("OnCapability = %v, want exactly [%s]", *caps, wantCap)
+		}
+	})
+	t.Run("missing id", func(t *testing.T) {
+		l, f, caps := mk(t, `{"export_id":"job-1","total":10}`)
+		for i := 0; i < 2; i++ {
+			if _, err := l.Collect(context.Background(), start); err == nil {
+				t.Fatalf("tick %d: a create response with no id must error", i)
+			}
+		}
+		if f.seq > 2 {
+			t.Fatalf("%d create calls over 2 ticks; want at most one per tick and no cursor written", f.seq)
+		}
+		if len(*caps) != 2 {
+			t.Fatalf("each failing tick fires the capability, got %v", *caps)
+		}
+		for _, c := range *caps {
+			if c != wantCap {
+				t.Fatalf("OnCapability = %v, want only %s", *caps, wantCap)
+			}
+		}
+	})
+	t.Run("genuine total 0", func(t *testing.T) {
+		l, _, caps := mk(t, `{"id":"job-1","object":"export","total":0}`)
+		b, err := l.Collect(context.Background(), start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !b.Watermark.Time.Equal(now.Add(-10 * time.Minute)) {
+			t.Fatalf("empty settled window must advance to the window end, got %s", b.Watermark.Time)
+		}
+		if len(*caps) != 0 {
+			t.Fatalf("no capability for a well-formed response, got %v", *caps)
+		}
+	})
+}
+
+// TestLogsExportBackfillSkipCounted: a watermark older than max_backfill fires backfill_skipped once, on the
+// tick that goes on to create the export (AC1); an unsettled tick fires nothing (AC2); a zero watermark has
+// no span to skip (AC3).
+func TestLogsExportBackfillSkipCounted(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	mk := func(t *testing.T, settings map[string]string) (*logsExportLoop, *fakeExport, *[]string) {
+		f := newFakeExport(t, 1, func(int) string { return nLines(1, "m") })
+		var events []string
+		l := mkLogsLoopDeps(t, logsCfg(f.srv, settings),
+			source.Deps{OnDataIncomplete: func(_ string, r source.IncompleteReason) { events = append(events, string(r)) }}, now)
+		return l, f, &events
+	}
+	t.Run("old watermark creates the export and counts once", func(t *testing.T) {
+		l, f, events := mk(t, map[string]string{"window": "1h", "settle": "10m", "max_backfill": "1h"})
+		if _, err := l.Collect(context.Background(), model.Watermark{Time: now.Add(-10 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		if f.seq != 1 {
+			t.Fatalf("want the export created on this tick, got %d creates", f.seq)
+		}
+		if len(*events) != 1 || (*events)[0] != string(source.IncompleteBackfillSkipped) {
+			t.Fatalf("OnDataIncomplete = %v, want exactly [backfill_skipped]", *events)
+		}
+	})
+	t.Run("unsettled tick counts nothing", func(t *testing.T) {
+		// A watermark older than the floor whose clamped window has not settled: floor = now-5m is inside the
+		// settle gap (now-10m), so winMax <= winMin. Set directly: config validation rejects this combination.
+		l, f, events := mk(t, map[string]string{"window": "1h", "settle": "10m", "max_backfill": "1h"})
+		l.maxBackfill = 5 * time.Minute
+		wm := model.Watermark{Time: now.Add(-10 * time.Hour)}
+		if _, err := l.Collect(context.Background(), wm); err != nil {
+			t.Fatal(err)
+		}
+		if f.seq != 0 || len(*events) != 0 {
+			t.Fatalf("unsettled tick: creates=%d events=%v", f.seq, *events)
+		}
+	})
+	t.Run("zero watermark counts nothing", func(t *testing.T) {
+		l, f, events := mk(t, map[string]string{"window": "1h", "settle": "10m", "max_backfill": "1h"})
+		if _, err := l.Collect(context.Background(), model.Watermark{}); err != nil {
+			t.Fatal(err)
+		}
+		if f.seq != 1 || len(*events) != 0 {
+			t.Fatalf("zero watermark: creates=%d events=%v", f.seq, *events)
+		}
+	})
 }

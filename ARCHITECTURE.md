@@ -310,8 +310,8 @@ default checkpointer, `configmaps` (get/create/update) in the tool's own namespa
 
 - **Watermark** = forward-only, **monotonic** position (`{Time, Cursor, Epoch}`), persisted by the
   `Checkpointer` under a `CheckpointKey` (`{source_instance, loop, output-fingerprint}` — §4/§5,
-  Cdx-C4). Default impl: a **Kubernetes ConfigMap** (one key per `CheckpointKey`), via a single writer
-  goroutine, throttled, resource-version optimistic concurrency. **`Save` is monotonic + lease-epoch
+  Cdx-C4). Default impl: a **Kubernetes ConfigMap** (one key per `CheckpointKey`): each save is a
+  read-modify-write serialised by one mutex, with resource-version optimistic concurrency. **`Save` is monotonic + lease-epoch
   fenced** (rejects an earlier Time, an equal Time with an unchanged Cursor, or a stale Epoch — Cdx-C14; an equal Time with a changed Cursor is accepted so stateful loops can persist in-flight progress), so a Lease (which only reduces overlap)
   does not have to be a write fence. A **file** impl (atomic temp-then-rename, periodic + on-shutdown
   sync) covers dev — **discouraged for HA/critical prod** (corrupt-file re-bootstrap risks dup-timestamp

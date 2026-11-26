@@ -86,8 +86,11 @@ live.
 | `genai_otel_bridge_emit_request_duration_seconds` | histogram | s | plane, status_class | — | base2 exponential histogram: outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs) |
 | `genai_otel_bridge_emitted_logs_total` | counter | 1 | loop | — | log records emitted (logs-export loop) |
 | `genai_otel_bridge_emitted_total` | counter | 1 | loop | — | samples emitted |
+| `genai_otel_bridge_go_heap_inuse_bytes` | gauge | By | — | — | bytes in in-use heap spans (runtime.MemStats.HeapInuse) |
+| `genai_otel_bridge_go_memory_limit_bytes` | gauge | By | — | — | the Go runtime soft memory limit (GOMEMLIMIT); 0 when no limit is set |
 | `genai_otel_bridge_guard_dropped_total` | counter | 1 | loop | — | data points or log records dropped by the governance guard |
 | `genai_otel_bridge_last_success_timestamp_seconds` | gauge | s | loop | — | unix time of last successful emit |
+| `genai_otel_bridge_leader` | gauge | 1 | — | — | 1 while this replica holds leadership, 0 while it is a standby; recorded by every replica from startup |
 | `genai_otel_bridge_loop_degraded` | gauge | 1 | loop, reason | — | 1 while a loop is degraded (reason attribute), 0 after the clearing commit |
 | `genai_otel_bridge_new_label_values_total` | counter | 1 | series | — | new label-value combinations seen per series |
 | `genai_otel_bridge_queue_depth` | gauge | 1 | loop | — | per-loop queue depth |

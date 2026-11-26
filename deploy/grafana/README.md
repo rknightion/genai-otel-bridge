@@ -80,7 +80,7 @@ The `self-obs/` dir ships **thirteen** alerts (push the whole dir with `gcx reso
 
 | Alert | Severity | Fires when |
 |-------|----------|------------|
-| `GenaiOtelBridgeLeaderAbsent` | critical | `absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m])` — no replica has emitted in 15m (poller down / never reached a first commit). |
+| `GenaiOtelBridgeLeaderAbsent` | critical | `absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m])` or no replica reporting `genai_otel_bridge_leader_ratio == 1` — no replica has emitted in 15m, or none can lead (poller down / never reached a first commit / lease unavailable). |
 | `GenaiOtelBridgePollerStale` | warning | a loop's last-success age exceeds **2× its own trailing-6h p90 baseline AND 300s** — staler than normal *for that loop*. Self-relative, so it does not false-positive on the slow log-export loops (see below). |
 | `GenaiOtelBridgeEmitFailing` | critical | fatal emit errors (`retryable_exhausted`/`checkpoint_*`/`granularity_unexpected`/`bad_encoding`/`unknown_4xx`; the benign `collect` upstream-fetch retries are excluded) in 10m. `unknown_4xx` = an unrecognised non-retryable 4xx from the OTLP gateway (e.g. a rotated/invalid emit token). |
 | `GenaiOtelBridgeAuthErrors` | critical | `increase(genai_otel_bridge_auth_errors_total[10m]) > 0` — upstream returned 401/403 (credential failure). |
@@ -92,7 +92,8 @@ The `self-obs/` dir ships **thirteen** alerts (push the whole dir with `gcx reso
 | `GenaiOtelBridgeBucketRevisedAfterSettle` | warning | >30 settled buckets/h still changing after `bucket_settle` — late arrivals; widen the loop's `bucket_settle`. |
 | `GenaiOtelBridgeQueueBackpressure` | warning | `genai_otel_bridge_queue_depth_ratio > 0` sustained 15m — emit can't keep up with collect. |
 | `GenaiOtelBridgeCardinalitySpike` | warning | sustained creation of new label-value combos on a series — a cardinality early-warning. |
-| `GenaiOtelBridgeNoStandby` | warning | fewer than 2 replicas self-reporting — no failover headroom (expected on intentionally single-replica dev stacks). |
+| `GenaiOtelBridgeNoStandby` | warning | fewer than 2 replicas self-reporting `genai_otel_bridge_leader_ratio` — no failover headroom (expected on intentionally single-replica dev stacks). |
+| `GenaiOtelBridgeMemoryNearLimit` | warning | `genai_otel_bridge_go_heap_inuse_bytes` above 85% of `genai_otel_bridge_go_memory_limit_bytes` for 15m. |
 
 `GenaiOtelBridgeLeaderAbsent` and `GenaiOtelBridgePollerStale` are complementary: *absent* = no series at all (gone), *stale* = series present but ageing past its own baseline (wedged).
 

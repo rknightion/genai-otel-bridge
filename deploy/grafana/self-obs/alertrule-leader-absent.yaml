@@ -9,7 +9,10 @@ metadata:
 spec:
   title: GenaiOtelBridgeLeaderAbsent
   # No genai_otel_bridge_last_success_timestamp_seconds series at all for 15m => no replica has successfully
-  # emitted (leader gone / crashlooping / never reached a first commit). This is the "poller down"
+  # emitted (leader gone / crashlooping / never reached a first commit). The second arm fires when replicas
+  # are alive but none reports leadership (genai_otel_bridge_leader_ratio, recorded by every replica): for
+  # example no replica can win the lease because the Lease API is down. The per-loop gauges cannot show
+  # that, since a demoted process keeps exporting its last values. This is the "poller down"
   # signal and is distinct from a single stale loop (GenaiOtelBridgePollerStale). absent_over_time emits a value
   # (1) only when the metric is missing, so the normal/healthy case is noData => Ok.
   execErrState: Alerting
@@ -21,7 +24,7 @@ spec:
     severity: critical
   annotations:
     summary: "genai-otel-bridge poller is not emitting (no successful emit from any replica in 15m)"
-    description: "genai_otel_bridge_last_success_timestamp_seconds has been absent for 15m. No leader is committing+emitting: check the Deployment/lease, pod readiness, OTLP egress (e.g. the product OTLP port) and credentials. Pull metrics may exist while emit is blocked. See deploy/grafana/README.md."
+    description: "genai_otel_bridge_last_success_timestamp_seconds has been absent for 15m, or no replica reports genai_otel_bridge_leader_ratio == 1. No leader is committing+emitting: check the Deployment/lease, pod readiness, OTLP egress (e.g. the product OTLP port) and credentials. Pull metrics may exist while emit is blocked. See deploy/grafana/README.md."
   expressions:
     query:
       datasourceUID: grafanacloud-prom
@@ -29,7 +32,7 @@ spec:
       relativeTimeRange: {from: 16m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m])'
+        expr: 'absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m]) or max(last_over_time(genai_otel_bridge_leader_ratio[5m])) < 1'
         instant: true
         range: false
         intervalMs: 1000

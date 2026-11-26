@@ -279,7 +279,10 @@ func main() {
 	if err != nil {
 		fatal("build", err)
 	}
-	if err := a.Run(ctx, health.Handler(), *healthAddr, health.MarkReady, health.Beat, health.SetLeader); err != nil && ctx.Err() == nil {
+	if err := a.Run(ctx, health.Handler(), *healthAddr, health.MarkReady, health.Beat, func(leader bool) {
+		health.SetLeader(leader)
+		metrics.SetLeader(leader)
+	}); err != nil && ctx.Err() == nil {
 		fatal("run", err)
 	}
 	gracefulShutdown(stop, mpShutdown, tpShutdown, profStop)

@@ -11,7 +11,7 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/docs/signal"
 )
 
-// instrumentNamesFromSource extracts the string-literal first arg of every mk/mg/mh(...) call in
+// instrumentNamesFromSource extracts the string-literal first arg of every mk/mg/mh/mo(...) call in
 // metrics.go and prefixes "genai_otel_bridge_" (the constructors add that prefix at runtime).
 func instrumentNamesFromSource(t *testing.T) []string {
 	t.Helper()
@@ -27,7 +27,7 @@ func instrumentNamesFromSource(t *testing.T) []string {
 			return true
 		}
 		id, ok := call.Fun.(*ast.Ident)
-		if !ok || (id.Name != "mk" && id.Name != "mg" && id.Name != "mh") || len(call.Args) == 0 {
+		if !ok || (id.Name != "mk" && id.Name != "mg" && id.Name != "mh" && id.Name != "mo") || len(call.Args) == 0 {
 			return true
 		}
 		lit, ok := call.Args[0].(*ast.BasicLit)

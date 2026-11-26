@@ -486,8 +486,8 @@ cleanup:
   # instead of re-bootstrapping (the durable-state-survives-uninstall pattern, like Helm not deleting
   # PVCs). This retains BOTH the checkpoint ConfigMap AND the leader-election Lease: the Lease's
   # LeaseTransitions field is the durable epoch fence that the checkpoint watermark is written against,
-  # so keeping the checkpoint but dropping the Lease would reset the epoch to 0 and permanently fence
-  # (stall) the resumed watermark. Retaining both keeps the epoch domain monotonic across the reinstall.
+  # so keeping the checkpoint but dropping the Lease would restart the epoch at 1 (a fresh Lease), below the stored
+  # checkpoint epoch, and permanently fence (stall) the resumed watermark. Retaining both keeps the epoch domain monotonic across the reinstall.
   # When false (default) both objects are deleted. When true, the cleanup hook also drops the
   # configmap-delete grant from its Role (tighter scope).
   retainCheckpoint: false

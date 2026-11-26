@@ -35,6 +35,10 @@ type groupsSettings struct {
 	apiKeyIDs    string        // optional api-key UUID filter (CSV→comma-joined); scopes groups to those keys, as the notebook does. Empty ⇒ workspace-wide
 }
 
+// maxGroupsPageSize bounds settings.page_size: the default, and the largest page that reliably fits the
+// maxResponseBytes decode cap. A larger page decodes to an error and the endpoint is skipped.
+const maxGroupsPageSize = 1000
+
 // applyGroupsSettings overlays operator-set knobs onto g. A malformed KNOWN key fails fast (loud
 // misconfig); an UNKNOWN key is warned and ignored (forward-compat, mirrors langsmith.applySettings).
 func applyGroupsSettings(g *groupsSettings, s map[string]string) error {
@@ -65,6 +69,9 @@ func applyGroupsSettings(g *groupsSettings, s map[string]string) error {
 			}
 			if n <= 0 {
 				return fmt.Errorf("portkey groups: page_size must be positive, got %d", n)
+			}
+			if n > maxGroupsPageSize {
+				return fmt.Errorf("portkey groups: page_size must be <= %d (a larger page can exceed the %d-byte response decode cap), got %d", maxGroupsPageSize, maxResponseBytes, n)
 			}
 			g.pageSize = n
 		case "max_groups":
@@ -166,7 +173,8 @@ func newGroupsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps source
 // per-dimension total over a fixed trailing window and emits fresh gauges. It deliberately shares NONE
 // of the analytics loop's bucket/settle/watermark/granularity/revision machinery — there are no buckets
 // to settle, no per-bucket frontier to advance, and (because every poll stamps a fresh advancing
-// timestamp) no Mimir duplicate-timestamp hazard. (groups PoC §a + the watermarking decision.)
+// timestamp) no Mimir duplicate-timestamp hazard. (groups PoC §a + the watermarking decision.) NOTE: the
+// minute-truncated stamp can repeat across two polls; Collect guards that from the committed watermark.
 type groupsLoop struct {
 	baseURL, authHdr, authVal string
 	hc                        *httpx.Client
@@ -264,12 +272,24 @@ func (l *groupsLoop) endpoints() []groupsEndpoint {
 
 // Collect fetches each configured dimension INDEPENDENTLY over the fixed trailing window and emits
 // fresh gauges stamped at the window upper bound (now-settle). A failed endpoint emits nothing for
-// itself, is counted via the appropriate source hook, and does NOT block the others (snapshot ⇒ no shared watermark
+// itself, is counted (OnDataIncomplete endpoint_unavailable; a 404 fires OnCapability, a 401/403
+// OnAuthError as well), and does NOT block the others (snapshot ⇒ no shared watermark
 // to corrupt). Only when EVERY endpoint fails does Collect error (loud, no advance) — like the
 // analytics all-404 case. The returned watermark is a forward-only liveness heartbeat (Time=now);
 // `since` is intentionally unused (no replay frontier for a snapshot loop).
 func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.Batch, error) {
 	now := l.now()
+	// Emit at most once per sample timestamp: the backend rejects (does not last-write-wins) a changed
+	// value at an existing (series, ts). A same-stamp poll makes no vendor call and only advances the
+	// liveness watermark.
+	stamp := now.Add(-l.settle).Truncate(time.Minute)
+	// Decided from the COMMITTED watermark (since.Time = poll time of the last committed batch), not
+	// in-memory state: a batch whose emit failed leaves it unchanged, so the retry still emits.
+	if !since.Time.IsZero() && since.Time.Add(-l.settle).Truncate(time.Minute).Equal(stamp) {
+		wm := since
+		wm.Time = now
+		return model.Batch{Key: l.Key(), Watermark: wm}, nil
+	}
 	if l.expectedWorkspace != "" && !l.scopeVerified {
 		ok, err := verifyScopeForCollect(ctx, l.hc, l.baseURL, l.authHdr, l.authVal, l.expectedWorkspace, l.Key().Loop, l.sourceInstance, now, l.onCapability, l.onAuthError)
 		if err != nil {
@@ -283,18 +303,28 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 	// two polls land in the same wall-clock minute (sub-minute cadence, or the jitter edge at ~60s), two
 	// DISTINCT sub-minute timestamps would push >1 point/series/minute past Mimir (CoalesceDPM is
 	// per-batch and can't dedup across polls), violating the 1DPM cap. Truncating to the minute makes
-	// same-minute re-polls share a timestamp (identical values are a Mimir no-op, a changed value is a counted duplicate-timestamp reject) while the
-	// FETCH window still uses the precise now-settle bound. (followup §0 1DPM; groups PoC watermark note.)
-	stamp := until.Truncate(time.Minute)
+	// same-minute re-polls share a timestamp; the backend rejects a changed value at an existing
+	// timestamp, so Collect emits at most once per stamp (committed-watermark check above). The FETCH window
+	// still uses the precise now-settle bound. (followup §0 1DPM; groups PoC watermark note.)
 	eps := l.endpoints()
 	var samples []model.Sample
 	skipped, total := 0, 0
+	quota, quotaStop := false, false // quota: any endpoint hit quota; quotaStop: an HTTP 429 stopped the poll
 	for _, p := range l.passes {
 		for _, ep := range eps {
 			total++
-			rows, ok := l.collectEndpoint(ctx, ep, from, until, p.apiKeyIDsCSV)
+			if quotaStop {
+				// After a 429 the rest of the poll is skipped (the budget is shared; more calls only deepen
+				// the contention). Each skipped endpoint is still counted, never silent.
+				skipped++
+				l.fireIncomplete(source.IncompleteEndpointUnavailable)
+				continue
+			}
+			rows, ok, quotaHit, stop := l.collectEndpoint(ctx, ep, from, until, p.apiKeyIDsCSV)
 			if !ok {
 				skipped++
+				quota = quota || quotaHit
+				quotaStop = quotaStop || stop
 				continue
 			}
 			s := deriveGroups(rows, l.prefix, ep.dim, ep.baseLabels, ep.valueLabelKey, ep.emitCost, stamp)
@@ -303,6 +333,9 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 		}
 	}
 	if skipped == total {
+		if quota {
+			return model.Batch{}, source.ErrQuotaExceeded // every endpoint failed and one was quota-limited: back off (F3/F34)
+		}
 		return model.Batch{}, fmt.Errorf("portkey groups: all %d endpoint fetch(es) failed this poll — capability/permission/transient error, not empty data", total)
 	}
 	wm := since
@@ -316,7 +349,14 @@ func (l *groupsLoop) Collect(ctx context.Context, since model.Watermark) (model.
 // on an empty page (past the end), a short page (the last), the max_groups cap, or a page that adds no
 // NEW dimension value (a backstop against a server that ignores current_page, so we never loop forever).
 // apiKeyIDs is the per-pass UUID filter CSV (empty ⇒ workspace-wide, mirroring the legacy behaviour).
-func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, from, until time.Time, apiKeyIDs string) (rows []groupRow, ok bool) {
+func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, from, until time.Time, apiKeyIDs string) (rows []groupRow, ok, quota, stop bool) {
+	// Every failure arm below (except 404, which is a capability signal) fires endpoint_unavailable so a
+	// failing dimension is alertable while a sibling endpoint keeps the loop green. quota reports a quota
+	// failure (HTTP 429 or is_quota_exceeded); stop reports an HTTP 429, after which the poll stops calling.
+	fail := func() ([]groupRow, bool, bool, bool) {
+		l.fireIncomplete(source.IncompleteEndpointUnavailable)
+		return nil, false, quota, stop
+	}
 	seen := map[string]bool{}
 	// [#140] Count rows dropped by the cross-page dedup. In normal operation (confirmed-string dim values,
 	// an offset-respecting server) this stays 0. It becomes >0 when either the server ignores current_page
@@ -345,7 +385,7 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 		resp, code, err := l.fetchPage(ctx, ep.urlPath, from, until, page, apiKeyIDs)
 		if err != nil {
 			slog.Warn("portkey groups endpoint fetch error", "endpoint", ep.label, "page", page, "source", l.sourceInstance, "err", err)
-			return nil, false
+			return fail()
 		}
 		switch code {
 		case http.StatusOK:
@@ -355,23 +395,27 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 			if l.onCapability != nil {
 				l.onCapability(l.Key().Loop, ep.label, source.CapabilityTransient404)
 			}
-			return nil, false
+			return nil, false, false, false
 		default:
 			// 401/403/429/5xx: discard this endpoint's batch this poll (no shared watermark to advance).
 			slog.Warn("portkey groups endpoint status", "endpoint", ep.label, "status", code, "source", l.sourceInstance)
 			if source.IsAuthStatus(code) && l.onAuthError != nil {
 				l.onAuthError(l.Key().Loop, l.sourceInstance) // followup §9: credential failure = own signal
 			}
-			return nil, false
+			if code == http.StatusTooManyRequests {
+				quota, stop = true, true
+			}
+			return fail()
 		}
 		if resp.IsQuotaExceeded {
 			slog.Warn("portkey groups endpoint quota exceeded", "endpoint", ep.label, "source", l.sourceInstance)
-			return nil, false // mirror the analytics F34 discard, but per-endpoint
+			quota = true
+			return fail() // mirror the analytics F34 discard, but per-endpoint
 		}
 		pageRows, err := parseGroupRows(resp.Data, ep.dimField)
 		if err != nil {
 			slog.Warn("portkey groups parse error", "endpoint", ep.label, "source", l.sourceInstance, "err", err)
-			return nil, false
+			return fail()
 		}
 		for _, r := range pageRows {
 			if seen[r.dimValue] {
@@ -382,7 +426,8 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 			rows = append(rows, r)
 			if len(rows) >= l.maxGroups {
 				slog.Warn("portkey groups truncated at max_groups cap", "endpoint", ep.label, "max_groups", l.maxGroups, "source", l.sourceInstance)
-				return rows, true // bounded coverage — a success, just capped (logged, never silent)
+				l.fireIncomplete(source.IncompleteWindowTruncated)
+				return rows, true, false, false // bounded coverage — a success, just capped (counted and logged)
 			}
 		}
 		if len(pageRows) == 0 || len(pageRows) < l.pageSize {
@@ -390,10 +435,18 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 		}
 		if page+1 >= maxPages {
 			slog.Warn("portkey groups hit page cap (server may be ignoring current_page)", "endpoint", ep.label, "max_pages", maxPages, "source", l.sourceInstance)
+			l.fireIncomplete(source.IncompleteWindowTruncated)
 			break
 		}
 	}
-	return rows, true
+	return rows, true, false, false
+}
+
+// fireIncomplete reports a data-incomplete reason for this loop (nil-safe).
+func (l *groupsLoop) fireIncomplete(r source.IncompleteReason) {
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete(l.Key().Loop, r)
+	}
 }
 
 // fetchPage issues a single paginated request for the given groups endpoint path. apiKeyIDs is the

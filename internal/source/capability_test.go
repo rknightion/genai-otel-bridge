@@ -53,6 +53,7 @@ func TestIncompleteReasonValues(t *testing.T) {
 		{"IncompleteLineUnparseable", IncompleteLineUnparseable, "line_unparseable"},
 		{"IncompleteExportStuck", IncompleteExportStuck, "export_stuck"},
 		{"IncompleteExportFailed", IncompleteExportFailed, "export_failed"},
+		{"IncompleteEndpointUnavailable", IncompleteEndpointUnavailable, "endpoint_unavailable"},
 	}
 	if got := AllIncompleteReasons; len(got) != len(cases) {
 		t.Fatalf("AllIncompleteReasons has %d values, want %d", len(got), len(cases))

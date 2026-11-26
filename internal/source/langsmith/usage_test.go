@@ -3,10 +3,13 @@
 package langsmith
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -25,9 +28,10 @@ import (
 // bodies/queries so the content-leak test can assert nothing content-y was ever sent.
 type fakeUsageServer struct {
 	srv           *httptest.Server
-	sessionsCode  int // 0 ⇒ 200
-	statsCode     int // 0 ⇒ 200
-	spans         int // run_count returned by /runs/stats
+	sessionsCode  int         // 0 ⇒ 200
+	statsCode     int         // 0 ⇒ 200
+	statsCodeAt   map[int]int // 1-based runs/stats call number ⇒ forced status (beats statsCode)
+	spans         int         // run_count returned by /runs/stats
 	statsBodies   []string
 	sessionsQuery []string
 }
@@ -44,6 +48,10 @@ func newFakeUsageServer(t *testing.T, all []json.RawMessage) *fakeUsageServer {
 		case strings.HasSuffix(r.URL.Path, "/runs/stats"):
 			b, _ := io.ReadAll(r.Body)
 			f.statsBodies = append(f.statsBodies, string(b))
+			if c, ok := f.statsCodeAt[len(f.statsBodies)]; ok {
+				w.WriteHeader(c)
+				return
+			}
 			if f.statsCode != 0 {
 				w.WriteHeader(f.statsCode)
 				return
@@ -220,16 +228,17 @@ func TestUsageCollectSpanCallSkipKeepsTraces(t *testing.T) {
 	}
 }
 
-// A span-call 429 backs off the WHOLE batch (quota).
-func TestUsageCollectSpanCall429IsQuota(t *testing.T) {
+// A /sessions page 429 still backs off the WHOLE batch (quota); only the per-project span fan-out keeps
+// partial progress (TestUsageSpanFanout429KeepsProgress).
+func TestUsageCollectSessionsPage429IsQuota(t *testing.T) {
 	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	f := newFakeUsageServer(t, usageFixture())
-	f.statsCode = http.StatusTooManyRequests
+	f.sessionsCode = http.StatusTooManyRequests
 	lp := mkUsageLoop(t, f, now, nil)
 
 	_, err := lp.Collect(context.Background(), model.Watermark{})
 	if !errors.Is(err, source.ErrQuotaExceeded) {
-		t.Fatalf("err=%v want ErrQuotaExceeded on span-call 429", err)
+		t.Fatalf("err=%v want ErrQuotaExceeded on a /sessions 429", err)
 	}
 }
 
@@ -266,5 +275,145 @@ func TestUsageCollectNeverLeaksContent(t *testing.T) {
 				t.Fatalf("unexpected label %q on %s (only session/retention_tier allowed)", k, s.Name)
 			}
 		}
+	}
+}
+
+func TestUsageMaxSessionsTruncationCounted(t *testing.T) {
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		max  int
+		want []string
+	}{
+		{"capped", 1, []string{"usage:sessions_truncated"}},
+		{"below cap", 1000, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeUsageServer(t, usageFixture())
+			lp := mkUsageLoop(t, f, now, func(c *usageConfig) { c.MaxSessions = tc.max; c.EmitSpanCounts = false })
+			var events []string
+			lp.onDataIncomplete = func(loop string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
+			if _, err := lp.Collect(context.Background(), model.Watermark{}); err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != len(tc.want) || (len(tc.want) == 1 && events[0] != tc.want[0]) {
+				t.Fatalf("signals = %v, want %v", events, tc.want)
+			}
+		})
+	}
+}
+
+func manyProjects(n int) []json.RawMessage {
+	all := make([]json.RawMessage, 0, n)
+	for i := 0; i < n; i++ {
+		all = append(all, json.RawMessage(fmt.Sprintf(`{"id":"p%03d","run_count":1,"trace_tier":"shortlived"}`, i)))
+	}
+	return all
+}
+
+func countSuffix(samples []model.Sample, suffix string) int {
+	n := 0
+	for _, s := range samples {
+		if strings.HasSuffix(s.Name, suffix) {
+			n++
+		}
+	}
+	return n
+}
+
+// captureSlog swaps the default logger for a buffer for the test and returns the buffer.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// With runs/stats failing for every project the fan-out stops after spanFanoutBreaker consecutive
+// failures, the traces still emit, the abandoned remainder is counted once and ONE warning is logged.
+func TestUsageSpanFanoutBreaker(t *testing.T) {
+	const projects = 300
+	logs := captureSlog(t)
+	f := newFakeUsageServer(t, manyProjects(projects))
+	f.statsCode = http.StatusServiceUnavailable
+	lp := mkUsageLoop(t, f, time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC), nil)
+	var events int
+	lp.onDataIncomplete = func(loop string, r source.IncompleteReason) {
+		if loop == "usage" && r == source.IncompleteSpanStatsUnavailable {
+			events++
+		}
+	}
+	b, err := lp.Collect(context.Background(), model.Watermark{})
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if n := len(f.statsBodies); n > spanFanoutBreaker {
+		t.Fatalf("runs/stats failed for every project yet Collect issued %d span calls (breaker %d)", n, spanFanoutBreaker)
+	}
+	if got := countSuffix(b.Samples, "_usage_traces"); got != projects {
+		t.Fatalf("usage_traces=%d want %d (traces must still emit)", got, projects)
+	}
+	if got := countSuffix(b.Samples, "_usage_spans"); got != 0 {
+		t.Fatalf("usage_spans=%d want 0", got)
+	}
+	if want := spanFanoutBreaker + 1; events != want { // each failed call + one for the abandoned remainder
+		t.Fatalf("span_stats_unavailable fired %d times, want %d", events, want)
+	}
+	if n := strings.Count(logs.String(), "span counts skipped"); n != 1 {
+		t.Fatalf("want one warning per Collect, got %d:\n%s", n, logs.String())
+	}
+}
+
+// A failure that is followed by a success resets the count: isolated failures never trip the breaker.
+func TestUsageSpanFanoutBreakerResetsOnSuccess(t *testing.T) {
+	const projects = 10
+	f := newFakeUsageServer(t, manyProjects(projects))
+	f.statsCodeAt = map[int]int{}
+	for _, call := range []int{1, 2, 3, 4, 6, 7, 8, 9} { // 4 failures, a success, 4 failures, a success
+		f.statsCodeAt[call] = http.StatusInternalServerError
+	}
+	lp := mkUsageLoop(t, f, time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC), nil)
+	b, err := lp.Collect(context.Background(), model.Watermark{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.statsBodies) != projects {
+		t.Fatalf("span calls=%d want %d: the breaker tripped on non-consecutive failures", len(f.statsBodies), projects)
+	}
+	if got := countSuffix(b.Samples, "_usage_spans"); got != 2 {
+		t.Fatalf("usage_spans=%d want 2", got)
+	}
+}
+
+// A 429 on the Nth span call keeps what was fetched: every project's trace gauge plus spans for the
+// first N-1, with no error and one signal for the abandoned remainder.
+func TestUsageSpanFanout429KeepsProgress(t *testing.T) {
+	const projects, nth = 8, 4
+	f := newFakeUsageServer(t, manyProjects(projects))
+	f.statsCodeAt = map[int]int{nth: http.StatusTooManyRequests}
+	lp := mkUsageLoop(t, f, time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC), nil)
+	var events int
+	lp.onDataIncomplete = func(loop string, r source.IncompleteReason) {
+		if loop == "usage" && r == source.IncompleteSpanStatsUnavailable {
+			events++
+		}
+	}
+	b, err := lp.Collect(context.Background(), model.Watermark{})
+	if err != nil {
+		t.Fatalf("a mid-fan-out 429 must not error the batch: %v", err)
+	}
+	if len(f.statsBodies) != nth {
+		t.Fatalf("span calls=%d want %d (stop after the 429)", len(f.statsBodies), nth)
+	}
+	if got := countSuffix(b.Samples, "_usage_traces"); got != projects {
+		t.Fatalf("usage_traces=%d want %d", got, projects)
+	}
+	if got := countSuffix(b.Samples, "_usage_spans"); got != nth-1 {
+		t.Fatalf("usage_spans=%d want %d", got, nth-1)
+	}
+	if events != 1 {
+		t.Fatalf("span_stats_unavailable fired %d times, want 1", events)
 	}
 }

@@ -5,6 +5,7 @@ package portkey
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -688,5 +689,165 @@ func TestGroupsPromptDimensionOptOut(t *testing.T) {
 		if strings.Contains(q, "/analytics/groups/prompt") {
 			t.Fatalf("emit_prompts=false — must not poll the prompt endpoint, but saw %q", q)
 		}
+	}
+}
+
+// recordDeps returns Deps whose OnDataIncomplete appends "loop:reason" to *events; capability and
+// auth hooks append "cap:<endpoint>" / "auth".
+func recordDeps(events *[]string) source.Deps {
+	return source.Deps{
+		OnCapability:     func(_, g string, _ source.CapabilityState) { *events = append(*events, "cap:"+g) },
+		OnDataIncomplete: func(l string, r source.IncompleteReason) { *events = append(*events, l+":"+string(r)) },
+		OnAuthError:      func(_, _ string) { *events = append(*events, "auth") },
+	}
+}
+
+// A 500 or an is_quota_exceeded body on one endpoint is counted (endpoint_unavailable, once per endpoint)
+// while the sibling ai-models endpoint still emits.
+func TestGroupsEndpointFailureCounted(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	quota := metaRows("x")
+	quota.IsQuotaExceeded = true
+	cases := []struct {
+		name   string
+		pages  map[string][]groupsResponse
+		status map[string]map[int]int
+	}{
+		{"http 500", map[string][]groupsResponse{"ai-models": {modelRows("a", "b")}}, map[string]map[int]int{"metadata/team": {0: http.StatusInternalServerError}}},
+		{"is_quota_exceeded", map[string][]groupsResponse{"ai-models": {modelRows("a", "b")}, "metadata/team": {quota}}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := fakeGroups(t, tc.pages, tc.status, nil)
+			defer srv.Close()
+			var events []string
+			gl := mkGroups(t, groupsCfg(srv, map[string]string{"metadata_keys": "team", "emit_prompts": "false"}), recordDeps(&events), now)
+			b, err := gl.Collect(context.Background(), model.Watermark{})
+			if err != nil {
+				t.Fatalf("one failed endpoint must not fail the poll: %v", err)
+			}
+			if len(events) != 1 || events[0] != "groups:endpoint_unavailable" {
+				t.Fatalf("want exactly one groups:endpoint_unavailable, got %v", events)
+			}
+			if countByName(b.Samples)["portkey_api_requests_by_model"] == 0 {
+				t.Fatalf("ai-models samples missing: %v", countByName(b.Samples))
+			}
+		})
+	}
+}
+
+// A transport-level 404 keeps its capability signal only (no endpoint_unavailable): the 404 path is unchanged.
+func TestGroupsEndpoint404KeepsCapabilitySignalOnly(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	srv := fakeGroups(t, map[string][]groupsResponse{"ai-models": {modelRows("a")}}, map[string]map[int]int{"metadata/team": {0: http.StatusNotFound}}, nil)
+	defer srv.Close()
+	var events []string
+	gl := mkGroups(t, groupsCfg(srv, map[string]string{"metadata_keys": "team", "emit_prompts": "false"}), recordDeps(&events), now)
+	if _, err := gl.Collect(context.Background(), model.Watermark{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0] != "cap:metadata/team" {
+		t.Fatalf("404 must fire only the capability hook, got %v", events)
+	}
+}
+
+// Truncation at max_groups, and at the page cap (a server that ignores current_page), is counted as
+// window_truncated, once for the endpoint.
+func TestGroupsTruncationCounted(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	t.Run("max_groups", func(t *testing.T) {
+		srv := fakeGroups(t, map[string][]groupsResponse{"ai-models": {modelRows("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")}}, nil, nil)
+		defer srv.Close()
+		var events []string
+		gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "max_groups": "3", "emit_prompts": "false"}), recordDeps(&events), now)
+		b, err := gl.Collect(context.Background(), model.Watermark{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := countByName(b.Samples)["portkey_api_requests_by_model"]; n != 3 {
+			t.Fatalf("emitted %d series, want 3", n)
+		}
+		if len(events) != 1 || events[0] != "groups:window_truncated" {
+			t.Fatalf("want exactly one groups:window_truncated, got %v", events)
+		}
+	})
+	t.Run("page cap", func(t *testing.T) {
+		same := modelRows("a", "b") // the server ignores current_page and repeats a full page
+		srv := fakeGroups(t, map[string][]groupsResponse{"ai-models": {same, same, same}}, nil, nil)
+		defer srv.Close()
+		var events []string
+		gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "2", "max_groups": "3", "emit_prompts": "false"}), recordDeps(&events), now)
+		if _, err := gl.Collect(context.Background(), model.Watermark{}); err != nil {
+			t.Fatal(err)
+		}
+		var trunc int
+		for _, e := range events {
+			if e == "groups:window_truncated" {
+				trunc++
+			}
+		}
+		if trunc != 1 {
+			t.Fatalf("want one groups:window_truncated for the page cap, got %v", events)
+		}
+	})
+}
+
+// Every endpoint failing with at least one quota-limited returns ErrQuotaExceeded (so the scheduler backs
+// off and samples_skipped{quota_exceeded} counts); with no quota it is still the generic error.
+func TestGroupsAllQuota(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	quota := metaRows("x")
+	quota.IsQuotaExceeded = true
+	t.Run("one endpoint quota", func(t *testing.T) {
+		srv := fakeGroups(t, map[string][]groupsResponse{"metadata/team": {quota}},
+			map[string]map[int]int{"ai-models": {0: http.StatusInternalServerError}}, nil)
+		defer srv.Close()
+		gl := mkGroups(t, groupsCfg(srv, map[string]string{"metadata_keys": "team", "emit_prompts": "false"}), source.Deps{}, now)
+		if _, err := gl.Collect(context.Background(), model.Watermark{}); !errors.Is(err, source.ErrQuotaExceeded) {
+			t.Fatalf("err=%v, want ErrQuotaExceeded", err)
+		}
+	})
+	t.Run("no quota", func(t *testing.T) {
+		srv := fakeGroups(t, nil, map[string]map[int]int{"ai-models": {0: http.StatusInternalServerError}}, nil)
+		defer srv.Close()
+		gl := mkGroups(t, groupsCfg(srv, map[string]string{"emit_prompts": "false"}), source.Deps{}, now)
+		_, err := gl.Collect(context.Background(), model.Watermark{})
+		if err == nil || errors.Is(err, source.ErrQuotaExceeded) {
+			t.Fatalf("err=%v, want a generic (non-quota) error", err)
+		}
+	})
+}
+
+// After an HTTP 429 the poll issues no further request; each skipped endpoint is counted.
+func TestGroupsQuota429StopsPoll(t *testing.T) {
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	var queries []string
+	srv := fakeGroups(t, nil, map[string]map[int]int{"ai-models": {0: http.StatusTooManyRequests}}, &queries)
+	defer srv.Close()
+	var events []string
+	gl := mkGroups(t, groupsCfg(srv, map[string]string{"metadata_keys": "team,use_case", "emit_prompts": "true"}), recordDeps(&events), now)
+	_, err := gl.Collect(context.Background(), model.Watermark{})
+	if !errors.Is(err, source.ErrQuotaExceeded) {
+		t.Fatalf("err=%v, want ErrQuotaExceeded", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("issued %d requests after a 429, want 1: %v", len(queries), queries)
+	}
+	if want := 4; len(events) != want { // ai-models + 2 metadata + prompt, each counted
+		t.Fatalf("events=%v, want %d endpoint_unavailable", events, want)
+	}
+}
+
+// page_size above the 1000 default can exceed the response decode cap and is rejected at construction.
+func TestGroupsRejectsOversizedPageSize(t *testing.T) {
+	srv := fakeGroups(t, nil, nil, nil)
+	defer srv.Close()
+	for _, v := range []string{"1001", "50000"} {
+		if _, err := New(groupsCfg(srv, map[string]string{"page_size": v}), source.Deps{}); err == nil {
+			t.Fatalf("page_size=%s accepted", v)
+		}
+	}
+	if _, err := New(groupsCfg(srv, map[string]string{"page_size": "1000"}), source.Deps{}); err != nil {
+		t.Fatalf("page_size=1000 must stay valid: %v", err)
 	}
 }

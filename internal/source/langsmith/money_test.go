@@ -59,3 +59,18 @@ func TestMoneyUnmarshalRejectsGarbage(t *testing.T) {
 		t.Fatal("want error for non-numeric cost string, got nil")
 	}
 }
+
+// A quoted NaN/Infinity parses under strconv.ParseFloat but would reach the OTLP encoder as a non-finite
+// gauge; it is garbage like any other malformed cost and must error.
+func TestMoneyUnmarshalRejectsNonFinite(t *testing.T) {
+	for _, raw := range []string{`"NaN"`, `"Inf"`, `"+Inf"`, `"-Infinity"`, `"Infinity"`, `"nan"`, `"1e999"`} {
+		t.Run(raw, func(t *testing.T) {
+			var w struct {
+				C money `json:"c"`
+			}
+			if err := json.Unmarshal([]byte(`{"c":`+raw+`}`), &w); err == nil {
+				t.Fatalf("want error for non-finite cost %s, got set=%v v=%v", raw, w.C.set, w.C.v)
+			}
+		})
+	}
+}

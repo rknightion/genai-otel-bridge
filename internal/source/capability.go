@@ -57,6 +57,9 @@ const (
 	IncompleteLineUnparseable      IncompleteReason = "line_unparseable"
 	IncompleteExportStuck          IncompleteReason = "export_stuck"
 	IncompleteExportFailed         IncompleteReason = "export_failed"
+	// IncompleteEndpointUnavailable marks a sub-endpoint a loop could not fetch this poll (5xx, quota,
+	// transport/decode or row-parse failure) while its siblings still emitted.
+	IncompleteEndpointUnavailable IncompleteReason = "endpoint_unavailable"
 )
 
 // AllIncompleteReasons contains every valid IncompleteReason in stable order.
@@ -72,6 +75,7 @@ var AllIncompleteReasons = []IncompleteReason{
 	IncompleteLineUnparseable,
 	IncompleteExportStuck,
 	IncompleteExportFailed,
+	IncompleteEndpointUnavailable,
 }
 
 // Valid reports whether r is one of the enumerated incomplete-data reasons.
@@ -87,7 +91,8 @@ func (r IncompleteReason) Valid() bool {
 		IncompleteLineOversize,
 		IncompleteLineUnparseable,
 		IncompleteExportStuck,
-		IncompleteExportFailed:
+		IncompleteExportFailed,
+		IncompleteEndpointUnavailable:
 		return true
 	default:
 		return false

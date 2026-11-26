@@ -15,11 +15,15 @@ Paths above are relative to the configured `base_url`, which carries the `/api/v
 `sessions` and `usage` read a **rolling snapshot** over `[now-stats_window, now]`: one current value
 per session, no `data_points`, no per-minute buckets.
 
-- **Every sample is stamped at `now.Truncate(1m)`** (review-M3). Two polls in the same wall-clock
-  minute share a sample timestamp so Mimir last-write-wins dedups them to exactly 1DPM. `CoalesceDPM`
-  is per-batch and cannot dedup across polls, so this truncation is the whole mechanism.
+- **Every sample is stamped at `now.Truncate(1m)`** (review-M3). The backend does NOT
+  last-write-wins a changed value at an existing timestamp: it rejects it, and the runner would count
+  the whole batch as `samples_skipped{reason=duplicate_timestamp}`. So each loop reads the committed watermark (`since.Time`, advanced only when the runner commits a
+  batch, so an emit that failed is retried in the same minute) and a poll in an already-committed minute
+  makes no vendor call, emits nothing and only advances the liveness watermark. `CoalesceDPM` is
+  per-batch and cannot dedup across polls. A failover or restart is covered too, as the watermark is
+  checkpointed.
 - The watermark advances `Time = now` (precise, un-truncated) as a forward-only liveness cursor;
-  `since.Time` is unused.
+  `since.Time` is read only for the same-minute check above, never as a window start.
 - **No settle, bucket-revision or gap-free backfill.** `deps.OnBucketRevised` is deliberately omitted
   (nothing to revise) and `ErrGranularityUnexpected` is not a path here. `bucket_settle`,
   `max_backfill` and `bootstrap_lookback` are portkey-bucket concepts that do not apply.
@@ -49,7 +53,7 @@ The `runs` loop is the exception: it is a forward-only windowed log pull (see be
   null and `""`. Response timestamps are naive (no timezone); the snapshot loops never parse them.
 - **null is not 0.** Nullable stats are `*float64`/`*int`: nil means skip, `0` means emit a real zero.
 - **Pagination is offset/limit with a plain JSON array, no cursor.** Stop on a short page, on the
-  `max_sessions` cap (logged, never silent), OR on a no-progress page - that last arm defends against
+  `max_sessions` cap (counted and logged), OR on a no-progress page - that last arm defends against
   an offset-ignoring server and is what stops the loop hanging.
 - **Error taxonomy:** 429 to `source.ErrQuotaExceeded` (discard, back off, F34); 401/403/5xx/timeout
   to a retryable Collect error (no advance, retry next cadence, loud `window_lag`). A 404 on the sole endpoint is a real
@@ -124,6 +128,11 @@ drives LangSmith's own bill.
 - **`emit_span_counts` is on by default and costs one extra call per project per poll.** Bound the
   fan-out with `session_filter` and `max_sessions`, or set it false to emit trace counts only. The
   loop already logs a warning when it is on with no filter.
+- **The span fan-out stops early and keeps what it fetched.** `spanFanoutBreaker` (5) consecutive failed
+  `runs/stats` calls, or a 429 mid-fan-out, end the fan-out for that Collect: trace gauges still emit for every
+  project, span gauges for the projects already counted, the abandoned remainder fires
+  `span_stats_unavailable` once, and one warning is logged per Collect. A 429 on the `/sessions` page fetch
+  still discards the batch and backs off.
 - The generated Helm example sets the loop's `cadence` equal to `stats_window` so windows tile and
   `sum_over_time` approximates a period total. Changing one without the other double-counts or gaps.
 

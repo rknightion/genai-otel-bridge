@@ -117,3 +117,24 @@ func TestExampleSourceBuilds(t *testing.T) {
 		t.Fatalf("ExampleSource() must be buildable: %v", err)
 	}
 }
+
+// stats_window <= 0 used to parse fine and be silently replaced by the loop default; it is now a hard
+// error for both loops (malformed known value = hard error, never hide operator intent).
+func TestSettingsRejectNonPositiveStatsWindow(t *testing.T) {
+	for _, v := range []string{"-30m", "0s", "0"} {
+		t.Run("sessions/"+v, func(t *testing.T) {
+			if err := applySettings(&Config{}, map[string]string{"stats_window": v}); err == nil {
+				t.Fatalf("applySettings accepted stats_window=%q", v)
+			}
+		})
+		t.Run("usage/"+v, func(t *testing.T) {
+			if err := applyUsageSettings(&usageConfig{}, map[string]string{"stats_window": v}); err == nil {
+				t.Fatalf("applyUsageSettings accepted stats_window=%q", v)
+			}
+		})
+	}
+	var c Config
+	if err := applySettings(&c, map[string]string{"stats_window": "15m"}); err != nil || c.StatsWindow != 15*time.Minute {
+		t.Fatalf("valid stats_window: err=%v got %s", err, c.StatsWindow)
+	}
+}

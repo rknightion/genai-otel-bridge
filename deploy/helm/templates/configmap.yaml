@@ -14,6 +14,11 @@ data:
   config.yaml: |
 {{- if .Values.configOverride }}
 {{ .Values.configOverride | indent 4 }}
+{{- else if .Values.config.tenants }}
+{{- /* Tenant shape: sources and emit.telemetry belong to the legacy shape and must be absent. */}}
+{{- $config := omit .Values.config "sources" }}
+{{- $_ := set $config "emit" (omit (get $config "emit" | default dict) "telemetry") }}
+{{ $config | toYaml | indent 4 }}
 {{- else }}
 {{ .Values.config | toYaml | indent 4 }}
 {{- end }}

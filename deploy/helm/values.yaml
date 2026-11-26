@@ -39,6 +39,7 @@ resources:
 # RollingUpdate is bounded to one pod at a time so a healthy standby is always available to take the
 # Lease during an upgrade.
 revisionHistoryLimit: 3
+# With config.tenants set (see examples/tenants-values.yaml) the chart requires maxUnavailable: 0.
 rollingUpdate:
   maxUnavailable: 1
   maxSurge: 1

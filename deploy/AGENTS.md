@@ -27,6 +27,18 @@
   grant from the hook Role. A failed hook degrades to orphaned objects, never blocks the uninstall.
 - **`podDisruptionBudget` uses `maxUnavailable`, not `minAvailable`,** so it is a no-op at
   `replicas: 1` and cannot deadlock a single-node dev drain.
+- **Tenant shape.** With `config.tenants` set the ConfigMap renders `config` without `sources` and
+  `emit.telemetry`; `configOverride` is still rendered verbatim. The helper `genai-otel-bridge.tenantIDs`
+  reads the ids from whichever of the two is rendered, fails the render on a `configOverride` that does
+  not parse or an id outside `[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?`, and drives one optional, read-only
+  Secret per tenant (`genai-otel-bridge-tenant-<id>`, volume `tenant-<id>`, a shorter name because a
+  volume name is capped at 63 characters) mounted at `/var/run/secrets/genai-otel-bridge/tenants/<id>/`.
+  With any tenant the render fails unless `rollingUpdate.maxUnavailable` is 0, "0" or "0%". The mount
+  root repeats a constant in `cmd/genai-otel-bridge`; change both together. `just helm-lint` renders
+  `helm/examples/tenants-values.yaml`, its failing variants and `helm package` (`.helmignore` keeps
+  `examples/` out), and diffs the default render with `test/helm/default-render.yaml` (version, checksum
+  and default image lines removed). Regenerate it with `just helm-default-render > test/helm/default-render.yaml`
+  only for an intended change to the default render.
 - The termination grace period bounds time to SIGKILL and covers the emit-retry budget; it is not a drain window (see `internal/coordinate/AGENTS.md`).
 - The `checksum/config` pod annotation (gated by `rolloutOnConfigChange`) hashes **only**
   `templates/configmap.yaml`, never the app-created checkpoint state CM.

@@ -1,0 +1,77 @@
+# Example values for the tenant shape: two tenants, each with one destination and one target.
+# Use with: helm template rel deploy/helm -f deploy/helm/examples/tenants-values.yaml
+#
+# Secrets are never set here. Each tenant's token and API key are files in a Secret named
+# genai-otel-bridge-tenant-<tenant id>, mounted at
+# /var/run/secrets/genai-otel-bridge/tenants/<tenant id>/ (keys `otlp-token` and `source-key` below).
+# The chart renders this config without `sources` and `emit.telemetry`.
+
+# A new pod must be ready before an old one is removed (the chart refuses any other value).
+rollingUpdate:
+  maxUnavailable: 0
+
+config:
+  emit:
+    self:
+      otlp:
+        endpoint: ${GC_OTLP_ENDPOINT}
+        instance_id: ${GC_INSTANCE_ID}
+        token: ${GC_OTLP_TOKEN}
+  defaults:
+    portkey:
+      loops:
+        analytics:
+          enabled: true
+          cadence: 60s
+          window: 50m
+          bucket_settle: 10m
+          bootstrap_lookback: 50m
+          max_backfill: 90m
+          metric_prefix: portkey_api
+          graphs: [requests, cost, tokens, latency, errors]
+        groups:
+          enabled: true
+          cadence: 60s
+  tenants:
+    team-a:
+      identity:
+        service_namespace: team-a-llm
+        deployment_environment: prod
+      destinations:
+        main:
+          otlp:
+            endpoint: https://otlp-a.example/otlp
+            instance_id: "100001"
+            token_file: otlp-token
+      targets:
+        prod:
+          source:
+            type: portkey
+            base_url: https://api.portkey.ai/v1
+            auth: { header: x-portkey-api-key, value_file: source-key }
+            rate_limit: { rps: 1, burst: 3 }
+          scope:
+            name: team-a-workspace-slug
+            id: team-a-workspace-id
+          destination: main
+    team-b:
+      identity:
+        service_namespace: team-b-llm
+        deployment_environment: prod
+      destinations:
+        main:
+          otlp:
+            endpoint: https://otlp-b.example/otlp
+            instance_id: "100002"
+            token_file: otlp-token
+      targets:
+        prod:
+          source:
+            type: portkey
+            base_url: https://api.portkey.ai/v1
+            auth: { header: x-portkey-api-key, value_file: source-key }
+            rate_limit: { rps: 1, burst: 3 }
+          scope:
+            name: team-b-workspace-slug
+            id: team-b-workspace-id
+          destination: main

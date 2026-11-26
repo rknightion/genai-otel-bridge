@@ -146,11 +146,19 @@ func newAnalyticsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps sou
 	//   - bootstrap ≤ settle ⇒ until ≤ start=now-bootstrap every tick.
 	// Either way until ≤ start ⇒ empty batch, watermark stays zero, window_lag is skipped (zero watermark),
 	// no samples/errors — a permanent FULLY SILENT data gap. Require both > settle so the loop can advance.
-	if bootstrap := time.Duration(lpCfg.BootstrapLookback); bootstrap <= settle {
-		return nil, fmt.Errorf("portkey: analytics loop requires bootstrap_lookback (%s) > bucket_settle (%s) (else the loop never advances past the settle cutoff — a silent no-op)", bootstrap, settle)
+	//
+	// [F27] Because until is floored to the granularity, > settle is not enough. When start is clamped to
+	// now-X (X = bootstrap_lookback on a zero watermark, max_backfill on a stale one), a poll advances only
+	// if floor(now-settle) > now-X. floor(t) > t-granularity always holds and is tight, so the loop is
+	// guaranteed to progress at every poll iff X >= settle + granularity; for any smaller X there are
+	// instants where floor(now-settle) <= now-X and the window is empty (e.g. X = settle+1s advances only
+	// in the first second of each minute). Require both to be at least settle + granularity.
+	minSpan := settle + granularity
+	if bootstrap := time.Duration(lpCfg.BootstrapLookback); bootstrap < minSpan {
+		return nil, fmt.Errorf("portkey: analytics loop requires bootstrap_lookback (%s) >= bucket_settle (%s) + %s bucket granularity = %s (windows are minute-aligned; a shorter lookback leaves no forward window at most polls — a silent stall)", bootstrap, settle, granularity, minSpan)
 	}
-	if mb := time.Duration(lpCfg.MaxBackfill); mb <= settle {
-		return nil, fmt.Errorf("portkey: analytics loop requires max_backfill (%s) > bucket_settle (%s) (else the backfill floor clamps every window empty — a silent no-op)", mb, settle)
+	if mb := time.Duration(lpCfg.MaxBackfill); mb < minSpan {
+		return nil, fmt.Errorf("portkey: analytics loop requires max_backfill (%s) >= bucket_settle (%s) + %s bucket granularity = %s (windows are minute-aligned; a shorter backfill floor leaves no forward window at most polls — a silent stall)", mb, settle, granularity, minSpan)
 	}
 	band := detectionBand(settle)
 	// Build passes: if use-cases are configured, one pass per use-case; otherwise a single unlabelled

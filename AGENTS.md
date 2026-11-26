@@ -142,8 +142,9 @@ is its contract. Run one test or package locally.
   breaking changes bump the version; `chore`, `style` and `test` are hidden from the changelog.
 - No live network in tests. `httptest.Server` fakes for HTTP, injectable clocks
   (`SetLoopClockForTest`) for determinism.
-- **`*_review_test.go` files encode specific adversarial-review findings** (tagged `[ext-review-14]`,
-  `CP-R3b`, `Cdx-C14`). They are regression guards for known attack and race scenarios; keep them.
+- **Tests tagged with a review finding are regression guards** (a comment carrying `[ext-review-N]`,
+  `CP-*`, `Cdx-*` or `[#N]`, for example `[ext-review-14]`, `CP-R3b`, `Cdx-C14`). They guard known attack and
+  race scenarios; keep them, wherever the file lives and whatever it is called.
 - Config resolves `${ENV}` and `file:/path` refs at load time; `.env`, `*.local.yaml` and
   `*.secret.*` are gitignored.
 - `scripts/forbidden-words.sh` blocks deployment-specific identifiers anywhere in the tracked tree,

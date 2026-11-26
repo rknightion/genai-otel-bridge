@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rknightion/genai-otel-bridge/internal/app"
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 	"github.com/rknightion/genai-otel-bridge/internal/selfobs"
@@ -268,5 +270,25 @@ func TestRunValidateConfig(t *testing.T) {
 	}
 	if stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), "validate-config: FAIL: ") {
 		t.Errorf("bad config: stdout %q stderr %q", stdout.String(), stderr.String())
+	}
+}
+
+// AC5 (#530): main refuses a tenant-shape plan right after app.Prepare. The fixture validates, so the
+// refusal, not a load rule, is what stops it; a legacy plan passes.
+func TestTenantShapeRefused(t *testing.T) {
+	t.Setenv("TENANT_FIXTURE_SELF_TOKEN", "self-token-example")
+	cfg, err := config.Load("../../internal/config/testdata/tenants.yaml")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	plan, err := app.Prepare(cfg)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := refuseTenantShape(plan); !errors.Is(err, tenancy.ErrTenantShapeNotEnabled) {
+		t.Fatalf("refuseTenantShape = %v, want ErrTenantShapeNotEnabled", err)
+	}
+	if err := refuseTenantShape(tenancy.Plan{Rows: []tenancy.Row{{}}}); err != nil {
+		t.Fatalf("a legacy plan is refused: %v", err)
 	}
 }

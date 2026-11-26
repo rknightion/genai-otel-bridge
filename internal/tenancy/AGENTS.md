@@ -13,12 +13,15 @@ imports `internal/config` only.
   identity.ProductIdentity()` (a fresh map per row); tenant, target, pipeline, destination name and
   the two secret file names are empty. A disabled source gives no row. `Resolve` needs no validated
   config for this shape: it only copies enabled sources.
-- **Tenant shape**: not resolved yet. Its rows carry `PipelineID(tenant, target)` (`<tenant>.<target>`),
+- **Tenant shape** (`len(cfg.Tenants) > 0`): in this version `Resolve` returns `Plan{TenantShape: true}`
+  with no rows, and `main` and `app.ValidateConfigFile` refuse it with `ErrTenantShapeNotEnabled` ("the
+  tenant shape is not enabled in this version"). The load rules are `config.Validate`'s. Once resolved,
+  its rows carry `PipelineID(tenant, target)` (`<tenant>.<target>`),
   `SourceInstance(tenant, target)` (`mt.<tenant>.<target>`) and the secrets as file names
   (`AuthValueFile`, `TokenFile`), never values.
 
-`Row`, `Plan`, `Resolve`, `StackKey`, `PipelineID`, `SourceInstance`, `PipelineAttribute` and
-`SecretReader` are seams later work depends on: keep their names and shapes. Add nothing to `Plan` beyond `Rows` and
+`Row`, `Plan`, `Resolve`, `StackKey`, `PipelineID`, `SourceInstance`, `PipelineAttribute`,
+`ErrTenantShapeNotEnabled` and `SecretReader` are seams later work depends on: keep their names and shapes. Add nothing to `Plan` beyond `Rows` and
 `TenantShape` without a design change.
 
 ## Table and hash

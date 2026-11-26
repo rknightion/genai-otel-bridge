@@ -1,0 +1,91 @@
+# A valid tenant-shape config (multi-tenancy design section 2). Tests load variants of it, one per
+# load rule. Every value under tenants and defaults is literal; emit.self keeps an env ref, which is
+# allowed outside those two subtrees. Hosts are example names, ids are made up.
+identity:
+  service_namespace: genai-otel-bridge
+  deployment_environment: test
+
+emit:
+  self:
+    otlp:
+      endpoint: https://otlp-self.example.com/otlp
+      instance_id: "100000"
+      token: ${TENANT_FIXTURE_SELF_TOKEN}
+
+ha:
+  coordinator: lease
+  checkpoint: configmap
+
+queue:
+  emit_workers: 1
+
+defaults:
+  portkey:
+    loops:
+      analytics:
+        enabled: true
+        cadence: 60s
+        window: 50m
+        bucket_settle: 10m
+        bootstrap_lookback: 50m
+        max_backfill: 90m
+        metric_prefix: portkey_api
+        graphs: [requests, cost, tokens, latency, errors]
+      groups:
+        enabled: true
+        cadence: 60s
+
+tenants:
+  team-a:
+    identity:
+      service_namespace: team-a-llm
+      deployment_environment: prod
+    destinations:
+      main:
+        otlp:
+          endpoint: https://otlp-a.example.com/otlp
+          instance_id: "200001"
+          token_file: otlp-token
+    targets:
+      prod:
+        source:
+          type: portkey
+          base_url: https://api.portkey.ai/v1
+          auth: { header: x-portkey-api-key, value_file: prod-key }
+          rate_limit: { rps: 1, burst: 3 }
+        scope:
+          name: example-scope-a1
+          id: example-scope-id-a1
+        destination: main
+      staging:
+        source:
+          type: portkey
+          base_url: https://api.portkey.ai/v1
+          auth: { header: x-portkey-api-key, value_file: staging-key }
+        scope:
+          name: example-scope-a2
+          id: example-scope-id-a2
+        destination: main
+        identity:
+          service_namespace: team-a-llm
+          deployment_environment: staging
+  team-b:
+    identity:
+      service_namespace: team-b-llm
+      deployment_environment: prod
+    destinations:
+      main:
+        otlp:
+          endpoint: https://otlp-b.example.com/otlp
+          instance_id: "200002"
+          token_file: otlp-token
+    targets:
+      prod:
+        source:
+          type: portkey
+          base_url: https://api.portkey.ai/v1
+          auth: { header: x-portkey-api-key, value_file: source-key }
+        scope:
+          name: example-scope-b1
+          id: example-scope-id-b1
+        destination: main

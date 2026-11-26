@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -118,6 +119,14 @@ type Config struct {
 	Log        LogConfig        `yaml:"log"` // surfaced so operators can flip log.level (e.g. to debug) at bring-up
 	Selfobs    SelfobsConfig    `yaml:"selfobs"`
 	Sources    []SourceConfig   `yaml:"sources" helm:"instance"` // chart default carries one example source
+	// Tenants is the tenant shape (multi-tenancy design §2): a map keyed by tenant id, each with its own
+	// identity, destinations and targets. A config with at least one entry has the tenant shape; then
+	// sources must be empty. Every value under it is literal: Load refuses an ${ENV} or file: reference
+	// there, and secrets are file names (token_file, value_file) read from the tenant's secrets directory.
+	Tenants map[string]TenantConfig `yaml:"tenants" helm:"omit"`
+	// Defaults holds, per source type, the loop blocks every target of that type uses (the tenant shape
+	// only; a legacy config must not set it).
+	Defaults map[string]DefaultsConfig `yaml:"defaults" helm:"omit"`
 }
 
 // SelfobsConfig groups the integrator's own-observability options that are not the self-metrics
@@ -334,6 +343,63 @@ type ScopeConfig struct {
 	ID   string `yaml:"id"`
 }
 
+// DefaultsConfig is defaults.<type>: the loop blocks every tenant-shape target of that source type uses.
+// A target has no loops block of its own. Load applies the legacy loop defaults (bucket_settle) to each
+// block, and Validate holds each enabled block to the legacy loop rules.
+type DefaultsConfig struct {
+	Loops map[string]LoopConfig `yaml:"loops" helm:"omit"`
+}
+
+// TenantConfig is tenants.<id>: one tenant's identity, its destinations and its targets. Destination and
+// target names are local to the tenant; there is no syntax for naming another tenant's objects.
+type TenantConfig struct {
+	// Identity is stamped on this tenant's product telemetry. Required, with both fields; it does not fall
+	// back to the install's top-level identity.
+	Identity     IdentityConfig                     `yaml:"identity" helm:"omit"`
+	Destinations map[string]TenantDestinationConfig `yaml:"destinations" helm:"omit"`
+	Targets      map[string]TargetConfig            `yaml:"targets" helm:"omit"`
+}
+
+// TenantDestinationConfig is tenants.<id>.destinations.<name>: one OTLP stack of the tenant.
+type TenantDestinationConfig struct {
+	OTLP TenantOTLPConfig `yaml:"otlp" helm:"omit"`
+}
+
+// TenantOTLPConfig is a tenant destination's endpoint and credentials. It has no allow_insecure: a tenant
+// destination is https (or loopback, for development) and always carries credentials.
+type TenantOTLPConfig struct {
+	Endpoint   string `yaml:"endpoint" helm:"omit"`
+	InstanceID string `yaml:"instance_id" helm:"omit"`
+	// TokenFile is a bare file name in the tenant's secrets directory, never a path or a value.
+	TokenFile string `yaml:"token_file" helm:"omit"`
+}
+
+// TargetConfig is tenants.<id>.targets.<name>: one source API key, the one scope it reads, the destination
+// it sends to and, optionally, an identity that replaces the tenant's whole.
+type TargetConfig struct {
+	Source      TenantSourceConfig `yaml:"source" helm:"omit"`
+	Scope       ScopeConfig        `yaml:"scope" helm:"omit"`
+	Destination string             `yaml:"destination" helm:"omit"`
+	Identity    *IdentityConfig    `yaml:"identity" helm:"omit"`
+}
+
+// TenantSourceConfig is a target's source block. Unlike SourceConfig it has no enabled, source_instance,
+// loops or api_key_use_cases key, and its API key is a file name, not a value.
+type TenantSourceConfig struct {
+	Type      string           `yaml:"type" helm:"omit"`
+	BaseURL   string           `yaml:"base_url" helm:"omit"`
+	Auth      TenantAuthConfig `yaml:"auth" helm:"omit"`
+	RateLimit RateLimitConfig  `yaml:"rate_limit" helm:"omit"`
+	HTTP      HTTPConfig       `yaml:"http" helm:"omit"`
+}
+
+// TenantAuthConfig names the header a target's API key is sent in and the file that holds the key.
+type TenantAuthConfig struct {
+	Header string `yaml:"header" helm:"omit"`
+	// ValueFile is a bare file name in the tenant's secrets directory, never a path or a value.
+	ValueFile string `yaml:"value_file" helm:"omit"`
+}
+
 // APIKeyUseCase binds a use-case label to the Portkey api-key UUIDs whose traffic carries it.
 type APIKeyUseCase struct {
 	// Label is the human use-case name (e.g. "Data Gen"); the portkey source slugifies it.
@@ -414,6 +480,12 @@ func LoadBytes(raw []byte) (*Config, error) {
 	if err := yaml.Unmarshal([]byte(subst), &root); err != nil {
 		return nil, fmt.Errorf("config: parse: %w", err)
 	}
+	// Multi-tenancy design §2: every value under tenants and defaults is literal. Checked on the parsed
+	// tree before resolveSecretsNode, so a refused file: ref is never read and a refused ${ENV} value never
+	// enters the tree; an unset ${VAR} has already failed in injectEnvPlaceholders above.
+	if err := rejectTenantRefs(&root, placeholders); err != nil {
+		return nil, err
+	}
 	if err := resolveSecretsNode(&root, placeholders); err != nil {
 		return nil, err
 	}
@@ -488,7 +560,125 @@ func LoadBytes(raw []byte) (*Config, error) {
 			}
 		}
 	}
+	// The same rate-limit and settle defaults for the tenant shape: each target's source, and each loop
+	// block under defaults (the blocks every target of that type uses).
+	for _, tc := range cfg.Tenants {
+		for name, tg := range tc.Targets {
+			if tg.Source.RateLimit.RPS == 0 {
+				tg.Source.RateLimit.RPS = defaultRateLimitRPS
+			}
+			if tg.Source.RateLimit.Burst == 0 {
+				tg.Source.RateLimit.Burst = defaultRateLimitBurst
+			}
+			tc.Targets[name] = tg
+		}
+	}
+	for _, dc := range cfg.Defaults {
+		for ln, lp := range dc.Loops {
+			if lp.BucketSettle == 0 {
+				lp.BucketSettle = Duration(defaultBucketSettle)
+				dc.Loops[ln] = lp
+			}
+		}
+	}
 	return &cfg, nil
+}
+
+// rejectTenantRefs refuses an ${ENV} or file: reference anywhere under the top-level tenants and defaults
+// keys (multi-tenancy design §2): a scalar, map key included, that holds a placeholder token from
+// injectEnvPlaceholders or starts with "file:". Aliases are followed, so a value anchored elsewhere cannot
+// carry a reference in. The error names the key path, never the value.
+func rejectTenantRefs(root *yaml.Node, ph map[string]string) error {
+	top := root
+	if top.Kind == yaml.DocumentNode && len(top.Content) == 1 {
+		top = top.Content[0]
+	}
+	var errs []error
+	for _, kv := range mergedPairs(top, map[*yaml.Node]bool{}) {
+		if k := kv[0].Value; k == "tenants" || k == "defaults" {
+			walkTenantRefs(k, kv[1], ph, map[*yaml.Node]bool{}, &errs)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// mergedPairs returns a mapping's key and value pairs, with the pairs of any "<<" merge expanded.
+func mergedPairs(n *yaml.Node, seen map[*yaml.Node]bool) [][2]*yaml.Node {
+	for n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
+	if n.Kind != yaml.MappingNode || seen[n] {
+		return nil
+	}
+	seen[n] = true
+	var out [][2]*yaml.Node
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		if k.Tag == "!!merge" {
+			if v.Kind == yaml.SequenceNode {
+				for _, m := range v.Content {
+					out = append(out, mergedPairs(m, seen)...)
+				}
+			} else {
+				out = append(out, mergedPairs(v, seen)...)
+			}
+			continue
+		}
+		out = append(out, [2]*yaml.Node{k, v})
+	}
+	return out
+}
+
+func walkTenantRefs(path string, n *yaml.Node, ph map[string]string, seen map[*yaml.Node]bool, errs *[]error) {
+	if seen[n] {
+		return
+	}
+	seen[n] = true
+	switch n.Kind {
+	case yaml.AliasNode:
+		if n.Alias != nil {
+			walkTenantRefs(path, n.Alias, ph, seen, errs)
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k, v := n.Content[i], n.Content[i+1]
+			if k.Tag == "!!merge" {
+				walkTenantRefs(path, v, ph, seen, errs)
+				continue
+			}
+			if k.Kind == yaml.ScalarNode && isSecretRef(k.Value, ph) {
+				*errs = append(*errs, tenantRefError(path+" (a key)"))
+				continue
+			}
+			walkTenantRefs(path+"."+k.Value, v, ph, seen, errs)
+		}
+	case yaml.SequenceNode:
+		for i, c := range n.Content {
+			walkTenantRefs(fmt.Sprintf("%s[%d]", path, i), c, ph, seen, errs)
+		}
+	case yaml.ScalarNode:
+		if isSecretRef(n.Value, ph) {
+			*errs = append(*errs, tenantRefError(path))
+		}
+	}
+}
+
+// isSecretRef reports whether a parsed scalar is, or contains, a reference resolveSecretsNode would
+// resolve: an ${ENV} placeholder token anywhere in it, or a file: prefix.
+func isSecretRef(v string, ph map[string]string) bool {
+	if strings.HasPrefix(v, "file:") {
+		return true
+	}
+	for tok := range ph {
+		if strings.Contains(v, tok) {
+			return true
+		}
+	}
+	return false
+}
+
+func tenantRefError(path string) error {
+	return fmt.Errorf("config: %s: an ${ENV} or file: reference is not allowed under tenants or defaults; every value there is literal, and a secret is a file named by token_file or value_file", path)
 }
 
 // [AR-M-sec] Match ONLY ${NAME} (never bare $NAME or a literal $), so a secret value containing
@@ -603,7 +793,10 @@ func resolveSecretsNode(n *yaml.Node, ph map[string]string) error {
 // Validate cross-checks the loaded config. `known` is the set of registered source types.
 func (c *Config) Validate(known map[string]struct{}) error {
 	var errs []error
-	if c.Emit.Telemetry.OTLP.Endpoint == "" {
+	// Multi-tenancy design §2: a config with at least one tenant has the tenant shape, where emit.telemetry
+	// must be empty (validateTenantShape); otherwise it is the legacy shape, checked as before.
+	tenantShape := len(c.Tenants) > 0
+	if !tenantShape && c.Emit.Telemetry.OTLP.Endpoint == "" {
 		errs = append(errs, errors.New("emit.telemetry.otlp.endpoint required"))
 	}
 	if c.Queue.MaxBatches < 0 {
@@ -767,50 +960,223 @@ func (c *Config) Validate(known map[string]struct{}) error {
 			errs = append(errs, fmt.Errorf("source %q: rate_limit.burst must be >= 1 (burst 0 fails every request; unset ⇒ default %d applied in Load), got %d", s.SourceInstance, defaultRateLimitBurst, s.RateLimit.Burst))
 		}
 		for name, lp := range s.Loops {
-			if !lp.Enabled {
-				continue
+			errs = append(errs, validateLoop(s.SourceInstance+"/"+name, lp)...)
+		}
+	}
+	if tenantShape {
+		errs = append(errs, c.validateTenantShape(known)...)
+	} else if len(c.Defaults) > 0 {
+		errs = append(errs, errors.New("defaults is allowed only in the tenant shape (a config with at least one tenants entry); a legacy source carries its own loops"))
+	}
+	return errors.Join(errs...)
+}
+
+// validateLoop holds one loop block to the loop rules: a legacy source's loop (field is
+// "<source_instance>/<loop>") or a defaults block of the tenant shape (field is its key path). A disabled
+// block is not checked.
+func validateLoop(field string, lp LoopConfig) []error {
+	if !lp.Enabled {
+		return nil
+	}
+	var errs []error
+	// #38: config.Duration decodes negative strings ("-10m") fine, and negative settle/backfill
+	// silently corrupt the collect window / backfill floor (a negative settle even LOOSENS the M3
+	// window check below). Reject any negative per-loop duration up front, naming the field.
+	for _, f := range []struct {
+		name string
+		v    Duration
+	}{
+		{"cadence", lp.Cadence}, {"window", lp.Window}, {"bucket_settle", lp.BucketSettle},
+		{"bootstrap_lookback", lp.BootstrapLookback}, {"max_backfill", lp.MaxBackfill},
+	} {
+		if f.v < 0 {
+			errs = append(errs, fmt.Errorf("%s: %s must be >= 0, got %s", field, f.name, time.Duration(f.v)))
+		}
+	}
+	if time.Duration(lp.Cadence) < minCadence {
+		errs = append(errs, fmt.Errorf("%s: cadence %s < floor %s", field, time.Duration(lp.Cadence), minCadence))
+	}
+	// A loop with no window is an aggregate-now (snapshot) loop — it pulls a current total each
+	// tick, not a time-bucketed window. The window/settle/backfill checks below encode time-bucket
+	// semantics (graphs-style) and are N/A for it; only the cadence floor above applies. (Decoupled:
+	// keyed on window==0, not on the source type.) A time-bucketed source MUST reject a
+	// non-positive window in its OWN constructor (portkey.New does) — so an omitted window on a
+	// bucketed source fails fast at build, not silently no-ops here (AR-HIGH).
+	if time.Duration(lp.Window) == 0 {
+		return errs
+	}
+	if time.Duration(lp.Window) > maxWindow {
+		errs = append(errs, fmt.Errorf("%s: window %s > %s (would flip bucket granularity, H5)", field, time.Duration(lp.Window), maxWindow))
+	}
+	// [AR-M-win] worst-case gap between two consecutive jittered ticks is cadence*(1+2·jitter)
+	// (a +jitter tick following a −jitter tick), so the window must cover that gap + settle.
+	lower := time.Duration(float64(time.Duration(lp.Cadence))*(1+2*jitterFrac)) + time.Duration(lp.BucketSettle)
+	if time.Duration(lp.Window) < lower {
+		errs = append(errs, fmt.Errorf("%s: window %s < cadence*(1+2·jitter)+settle %s (uncovered time after settle, M3)", field, time.Duration(lp.Window), lower))
+	}
+	if time.Duration(lp.MaxBackfill) > 0 && time.Duration(lp.BootstrapLookback) > time.Duration(lp.MaxBackfill) { // [CP-H7]
+		errs = append(errs, fmt.Errorf("%s: bootstrap_lookback %s > max_backfill %s (first-run would skip storable data)", field, time.Duration(lp.BootstrapLookback), time.Duration(lp.MaxBackfill)))
+	}
+	return errs
+}
+
+// tenantNamePattern is the form of a tenant id and of a destination or target name (design §2).
+const tenantNamePattern = `[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?`
+
+var tenantNameRe = regexp.MustCompile(`^` + tenantNamePattern + `$`)
+
+// validateTenantShape holds a tenant-shape config to the load-phase rules of multi-tenancy design §2 and
+// §3. The resolve-phase rules (a target's destination exists, the stack-sharing and self-telemetry rules)
+// and the assemble-phase rules (scope assertion support, duplicate keys, log-emitting loops) are not
+// here. No rule names a vendor setting: a vendor package refuses its own.
+func (c *Config) validateTenantShape(known map[string]struct{}) []error {
+	var errs []error
+	if len(c.Sources) > 0 {
+		errs = append(errs, errors.New("sources must be empty in the tenant shape: every pipeline is a target under tenants"))
+	}
+	if c.Emit.Telemetry != (OTLPTarget{}) {
+		errs = append(errs, errors.New("emit.telemetry must be empty in the tenant shape: each target sends to its tenant's destination, and self-telemetry goes to emit.self"))
+	}
+	if c.Emit.Self == nil {
+		errs = append(errs, errors.New("emit.self is required in the tenant shape: self-telemetry never falls back to a tenant's destination"))
+	}
+	if c.Identity.ServiceNamespace == "" || c.Identity.DeploymentEnvironment == "" {
+		errs = append(errs, errors.New("identity: service_namespace and deployment_environment are required in the tenant shape (the install's own identity, for self-telemetry)"))
+	}
+	if c.HA.Coordinator != "lease" || c.HA.Checkpoint != "configmap" {
+		errs = append(errs, fmt.Errorf("ha.coordinator must be lease and ha.checkpoint must be configmap in the tenant shape, got %q and %q", c.HA.Coordinator, c.HA.Checkpoint))
+	}
+	for _, typ := range sortedKeys(c.Defaults) {
+		if _, ok := known[typ]; !ok {
+			errs = append(errs, fmt.Errorf("defaults.%s: unknown source type %q", typ, typ))
+		}
+		loops := c.Defaults[typ].Loops
+		for _, name := range sortedKeys(loops) {
+			errs = append(errs, validateLoop("defaults."+typ+".loops."+name, loops[name])...)
+		}
+	}
+	// A scope belongs to one tenant: the first tenant (in id order) to name a scope name or id owns it.
+	scopeNameOwner := map[string]string{}
+	scopeIDOwner := map[string]string{}
+	for _, id := range sortedKeys(c.Tenants) {
+		tc := c.Tenants[id]
+		p := "tenants." + id
+		if !tenantNameRe.MatchString(id) {
+			errs = append(errs, fmt.Errorf("tenant id %q must match %s", id, tenantNamePattern))
+		}
+		if tc.Identity.ServiceNamespace == "" || tc.Identity.DeploymentEnvironment == "" {
+			errs = append(errs, fmt.Errorf("%s.identity: service_namespace and deployment_environment are required (a tenant's identity does not fall back to the top-level identity)", p))
+		}
+		if len(tc.Targets) == 0 {
+			errs = append(errs, fmt.Errorf("%s: at least one target is required", p))
+		}
+		for _, dn := range sortedKeys(tc.Destinations) {
+			dp := p + ".destinations." + dn + ".otlp"
+			if !tenantNameRe.MatchString(dn) {
+				errs = append(errs, fmt.Errorf("%s: destination name %q must match %s", p, dn, tenantNamePattern))
 			}
-			// #38: config.Duration decodes negative strings ("-10m") fine, and negative settle/backfill
-			// silently corrupt the collect window / backfill floor (a negative settle even LOOSENS the M3
-			// window check below). Reject any negative per-loop duration up front, naming the field.
+			o := tc.Destinations[dn].OTLP
+			switch {
+			case o.Endpoint == "":
+				errs = append(errs, fmt.Errorf("%s.endpoint is required", dp))
+			case insecureURL(o.Endpoint) && !loopbackURL(o.Endpoint): // [CP-M7]
+				errs = append(errs, fmt.Errorf("%s.endpoint must be https:// (or loopback for development), got %q: a tenant destination has no setting that allows a plain-text endpoint", dp, o.Endpoint))
+			}
+			if o.InstanceID == "" {
+				errs = append(errs, fmt.Errorf("%s.instance_id is required: a receiver that takes no credentials has no boundary between tenants", dp))
+			}
+			errs = append(errs, bareSecretFileName(dp+".token_file", o.TokenFile)...)
+		}
+		for _, tn := range sortedKeys(tc.Targets) {
+			tg := tc.Targets[tn]
+			tp := p + ".targets." + tn
+			if !tenantNameRe.MatchString(tn) {
+				errs = append(errs, fmt.Errorf("%s: target name %q must match %s", p, tn, tenantNamePattern))
+			}
+			errs = append(errs, c.validateTargetSource(tp+".source", tg.Source, known)...)
+			if tg.Destination == "" {
+				errs = append(errs, fmt.Errorf("%s.destination is required", tp))
+			}
+			if tg.Identity != nil && (tg.Identity.ServiceNamespace == "" || tg.Identity.DeploymentEnvironment == "") {
+				errs = append(errs, fmt.Errorf("%s.identity: service_namespace and deployment_environment are both required when the block is present (it replaces the tenant's identity whole)", tp))
+			}
 			for _, f := range []struct {
-				name string
-				v    Duration
+				field, value string
+				owner        map[string]string
 			}{
-				{"cadence", lp.Cadence}, {"window", lp.Window}, {"bucket_settle", lp.BucketSettle},
-				{"bootstrap_lookback", lp.BootstrapLookback}, {"max_backfill", lp.MaxBackfill},
+				{"name", tg.Scope.Name, scopeNameOwner},
+				{"id", tg.Scope.ID, scopeIDOwner},
 			} {
-				if f.v < 0 {
-					errs = append(errs, fmt.Errorf("%s/%s: %s must be >= 0, got %s", s.SourceInstance, name, f.name, time.Duration(f.v)))
+				switch {
+				case f.value == "":
+					errs = append(errs, fmt.Errorf("%s.scope.%s is required: a target reads one scope, named and asserted", tp, f.field))
+				case strings.ContainsFunc(f.value, unicode.IsControl):
+					errs = append(errs, fmt.Errorf("%s.scope.%s must not contain a control character", tp, f.field))
 				}
-			}
-			if time.Duration(lp.Cadence) < minCadence {
-				errs = append(errs, fmt.Errorf("%s/%s: cadence %s < floor %s", s.SourceInstance, name, time.Duration(lp.Cadence), minCadence))
-			}
-			// A loop with no window is an aggregate-now (snapshot) loop — it pulls a current total each
-			// tick, not a time-bucketed window. The window/settle/backfill checks below encode time-bucket
-			// semantics (graphs-style) and are N/A for it; only the cadence floor above applies. (Decoupled:
-			// keyed on window==0, not on the source type.) A time-bucketed source MUST reject a
-			// non-positive window in its OWN constructor (portkey.New does) — so an omitted window on a
-			// bucketed source fails fast at build, not silently no-ops here (AR-HIGH).
-			if time.Duration(lp.Window) == 0 {
-				continue
-			}
-			if time.Duration(lp.Window) > maxWindow {
-				errs = append(errs, fmt.Errorf("%s/%s: window %s > %s (would flip bucket granularity, H5)", s.SourceInstance, name, time.Duration(lp.Window), maxWindow))
-			}
-			// [AR-M-win] worst-case gap between two consecutive jittered ticks is cadence*(1+2·jitter)
-			// (a +jitter tick following a −jitter tick), so the window must cover that gap + settle.
-			lower := time.Duration(float64(time.Duration(lp.Cadence))*(1+2*jitterFrac)) + time.Duration(lp.BucketSettle)
-			if time.Duration(lp.Window) < lower {
-				errs = append(errs, fmt.Errorf("%s/%s: window %s < cadence*(1+2·jitter)+settle %s (uncovered time after settle, M3)", s.SourceInstance, name, time.Duration(lp.Window), lower))
-			}
-			if time.Duration(lp.MaxBackfill) > 0 && time.Duration(lp.BootstrapLookback) > time.Duration(lp.MaxBackfill) { // [CP-H7]
-				errs = append(errs, fmt.Errorf("%s/%s: bootstrap_lookback %s > max_backfill %s (first-run would skip storable data)", s.SourceInstance, name, time.Duration(lp.BootstrapLookback), time.Duration(lp.MaxBackfill)))
+				if f.value == "" {
+					continue
+				}
+				if owner, ok := f.owner[f.value]; !ok {
+					f.owner[f.value] = id
+				} else if owner != id {
+					errs = append(errs, fmt.Errorf("scope %s %q is used by tenants %s and %s: a scope belongs to one tenant", f.field, f.value, owner, id))
+				}
 			}
 		}
 	}
-	return errors.Join(errs...)
+	return errs
+}
+
+// validateTargetSource checks a target's source block: a known type with a defaults block (every target
+// takes its loops from defaults.<type>.loops), the base_url rule a legacy source has, the auth header and
+// key file, and the rate limit after Load's defaults.
+func (c *Config) validateTargetSource(sp string, s TenantSourceConfig, known map[string]struct{}) []error {
+	var errs []error
+	switch _, isKnown := known[s.Type]; {
+	case s.Type == "":
+		errs = append(errs, fmt.Errorf("%s.type is required", sp))
+	case !isKnown:
+		errs = append(errs, fmt.Errorf("%s.type: unknown source type %q", sp, s.Type))
+	default:
+		if _, ok := c.Defaults[s.Type]; !ok {
+			errs = append(errs, fmt.Errorf("%s.type %q has no defaults.%s block: every target takes its loops from defaults.<type>.loops", sp, s.Type, s.Type))
+		}
+	}
+	if s.BaseURL == "" || (insecureURL(s.BaseURL) && !loopbackURL(s.BaseURL) && !s.HTTP.AllowPrivate) { // [CP-M7/H7]
+		errs = append(errs, fmt.Errorf("%s.base_url must be a non-empty https:// URL (or set http.allow_private for an in-VPC plaintext host); got %q", sp, s.BaseURL))
+	}
+	if s.Auth.Header == "" {
+		errs = append(errs, fmt.Errorf("%s.auth.header is required", sp))
+	}
+	errs = append(errs, bareSecretFileName(sp+".auth.value_file", s.Auth.ValueFile)...)
+	if s.RateLimit.RPS <= 0 {
+		errs = append(errs, fmt.Errorf("%s.rate_limit.rps must be > 0 (unset ⇒ default %d applied in Load), got %v", sp, defaultRateLimitRPS, s.RateLimit.RPS))
+	}
+	if s.RateLimit.Burst < 1 {
+		errs = append(errs, fmt.Errorf("%s.rate_limit.burst must be >= 1 (burst 0 fails every request; unset ⇒ default %d applied in Load), got %d", sp, defaultRateLimitBurst, s.RateLimit.Burst))
+	}
+	return errs
+}
+
+// bareSecretFileName requires a tenant secret to be named by a bare file name in the tenant's own secrets
+// directory: no path separator, and not "." or "..", so one tenant's block cannot name another's file.
+func bareSecretFileName(field, name string) []error {
+	switch {
+	case name == "":
+		return []error{fmt.Errorf("%s is required", field)}
+	case strings.Contains(name, "/") || name == "." || name == "..":
+		return []error{fmt.Errorf("%s must be a bare file name in the tenant's secrets directory (no '/', not . or ..), got %q", field, name)}
+	}
+	return nil
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // validateEmitEndpoint enforces the [CP-M7] cleartext-credential gate for one OTLP emit endpoint

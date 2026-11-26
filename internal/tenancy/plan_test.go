@@ -287,6 +287,34 @@ func TestPipelineNames(t *testing.T) {
 	}
 }
 
+// Unit 6a (#530): a config with at least one tenant resolves to the tenant shape with no rows (resolving
+// tenant rows is not in this version); an empty tenants map is the legacy shape. The sentinel's text is
+// the one main and the config check print.
+func TestResolveTenantShape(t *testing.T) {
+	cfg := legacyConfig()
+	cfg.Sources = nil
+	cfg.Tenants = map[string]config.TenantConfig{"team-a": {}}
+	plan, err := tenancy.Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !plan.TenantShape || len(plan.Rows) != 0 {
+		t.Fatalf("plan = %+v, want TenantShape and no rows", plan)
+	}
+	legacy := legacyConfig()
+	legacy.Tenants = map[string]config.TenantConfig{}
+	plan, err = tenancy.Resolve(legacy)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if plan.TenantShape || len(plan.Rows) == 0 {
+		t.Fatalf("an empty tenants map: TenantShape %v with %d rows, want the legacy shape", plan.TenantShape, len(plan.Rows))
+	}
+	if got := tenancy.ErrTenantShapeNotEnabled.Error(); got != "the tenant shape is not enabled in this version" {
+		t.Errorf("ErrTenantShapeNotEnabled = %q", got)
+	}
+}
+
 // The two scope columns (unit 4b, #526): a row with a scope shows its name and id; a row without one
 // (every legacy row) shows "-" in both, so a legacy plan's table and hash do not change.
 func TestTableShowsScope(t *testing.T) {

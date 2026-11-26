@@ -34,7 +34,8 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
   observer and the settle-exceedance, capability, data-incompleteness and auth-error hooks. One
   auth-warning limiter serves every row; its key carries the source instance.
 - `ValidateConfigFile` validates and resolves the plan itself, then passes it to `BuildFromPlan`
-  with an inert emitter factory and `noopTelemetry`.
+  with an inert emitter factory and `noopTelemetry`. A valid tenant-shape plan stops before
+  `BuildFromPlan`: it returns the plan's table and hash with `tenancy.ErrTenantShapeNotEnabled`.
 - `Options.Secrets` (`tenancy.SecretReader`) reads the secret files a row names. A legacy row names
   none, so `nil` is fine for it. `Options.Now` is the clock of every scope gate (nil: `time.Now`).
 

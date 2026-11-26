@@ -145,7 +145,10 @@ either empty for a legacy install. In this version the shape loads and validates
   included, aliases and `<<` merges followed) that holds a placeholder token or starts with `file:` is an
   error naming the key path, never the value, and the file is never read. Under `Load` an unset `${VAR}`
   fails first, in `injectEnvPlaceholders`; under `app.ValidateConfigFile` it gets a placeholder, so this
-  rule reports. References elsewhere (`emit.self`, say) work as before.
+  rule reports. References elsewhere (`emit.self`, say) work as before. Keys are resolved like values,
+  so a top-level key that is itself a reference is refused in either shape (it could otherwise become
+  `tenants` or `defaults` after the check), and an alias key is followed to its anchor before it is
+  compared or checked (`TestTenantRefAsKeyRejected`).
 - **Defaults.** `LoadBytes` gives each target source the rate-limit defaults and each `defaults` loop
   block the `bucket_settle` default, as for a legacy source.
 - **Load rules** (`validateTenantShape`, one `TestTenantLoadRules` case each): `sources` empty;

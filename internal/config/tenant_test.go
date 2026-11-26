@@ -521,3 +521,70 @@ func TestTenantConfigKeyPathsGolden(t *testing.T) {
 		t.Fatalf("tenant config key paths changed (G8):\ngot  %q\nwant %q", got, want)
 	}
 }
+
+// Repair of #554 (Codex P1): a reference or an alias used as a mapping key is resolved like a value, so a
+// top-level key spelled ${SECTION} (or file:<path>) could become tenants or defaults after the reference
+// check had passed it by, and the whole subtree would go unchecked. Load refuses a reference as a top-level
+// key outright, resolves an alias key before comparing it, and refuses an alias key inside tenants or
+// defaults that carries a reference. Each case also carries a reference inside the subtree, which must
+// never load.
+func TestTenantRefAsKeyRejected(t *testing.T) {
+	sectionFile := filepath.Join(t.TempDir(), "section")
+	if err := os.WriteFile(sectionFile, []byte("tenants"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	innerTenantRef := tenantEdit{"          id: example-scope-id-b1\n", "          id: ${TENANT_KEY_INNER}\n"}
+	cases := []struct {
+		name  string
+		edits []tenantEdit
+		env   map[string]string
+		want  string
+	}{
+		{name: "env ref as the tenants key", edits: []tenantEdit{{"\ntenants:\n", "\n${TENANT_KEY_SECTION}:\n"}, innerTenantRef},
+			env: map[string]string{"TENANT_KEY_SECTION": "tenants", "TENANT_KEY_INNER": "example-scope-id-b1"}, want: "config: a top-level key is an ${ENV} or file: reference"},
+		{name: "env ref as the defaults key", edits: []tenantEdit{{"\ndefaults:\n", "\n${TENANT_KEY_SECTION}:\n"}, {"        metric_prefix: portkey_api\n", "        metric_prefix: ${TENANT_KEY_INNER}\n"}},
+			env: map[string]string{"TENANT_KEY_SECTION": "defaults", "TENANT_KEY_INNER": "portkey_api"}, want: "config: a top-level key is an ${ENV} or file: reference"},
+		{name: "file ref as the tenants key", edits: []tenantEdit{{"\ntenants:\n", "\nfile:" + sectionFile + ":\n"}, innerTenantRef},
+			env: map[string]string{"TENANT_KEY_INNER": "example-scope-id-b1"}, want: "config: a top-level key is an ${ENV} or file: reference"},
+		{name: "alias as the tenants key", edits: []tenantEdit{{"  service_namespace: genai-otel-bridge\n", "  service_namespace: &section tenants\n"}, {"\ntenants:\n", "\n*section :\n"}, innerTenantRef},
+			env: map[string]string{"TENANT_KEY_INNER": "example-scope-id-b1"}, want: "config: tenants.team-b.targets.prod.scope.id: an ${ENV} or file: reference is not allowed"},
+		{name: "alias carrying a ref as a tenant id", edits: []tenantEdit{{"      token: ${TENANT_FIXTURE_SELF_TOKEN}\n", "      token: &self_token ${TENANT_FIXTURE_SELF_TOKEN}\n"}, {"  team-b:\n", "  *self_token :\n"}},
+			want: "config: tenants (a key): an ${ENV} or file: reference is not allowed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := tenantFixture(t)
+			for _, e := range tc.edits {
+				body = tenantVariant(t, body, e.old, e.next)
+			}
+			t.Setenv(tenantFixtureSelfTokenEnv, "self-token-never-shown")
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load accepted a config whose tenants or defaults key hid a reference")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q\ndoes not contain %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "self-token-never-shown") {
+				t.Fatalf("error carries a referenced value: %q", err)
+			}
+		})
+	}
+
+	// A legacy config with references in values, not keys, still loads and validates.
+	setEnv(t)
+	cfg, err := Load("testdata/valid.yaml")
+	if err != nil {
+		t.Fatalf("legacy valid.yaml: %v", err)
+	}
+	if err := cfg.Validate(tenantKnownTypes); err != nil {
+		t.Fatalf("legacy valid.yaml: %v", err)
+	}
+}

@@ -588,6 +588,11 @@ func LoadBytes(raw []byte) (*Config, error) {
 // keys (multi-tenancy design §2): a scalar, map key included, that holds a placeholder token from
 // injectEnvPlaceholders or starts with "file:". Aliases are followed, so a value anchored elsewhere cannot
 // carry a reference in. The error names the key path, never the value.
+//
+// resolveSecretsNode resolves keys as well as values, so a top-level key that is itself a reference could
+// become tenants or defaults only after this check had passed it by. Such a key is refused in either
+// shape (fail closed): a top-level key is always one of the fixed config section names, so no working
+// config spells one as a reference. An alias key is resolved to its anchor before it is compared.
 func rejectTenantRefs(root *yaml.Node, ph map[string]string) error {
 	top := root
 	if top.Kind == yaml.DocumentNode && len(top.Content) == 1 {
@@ -595,11 +600,27 @@ func rejectTenantRefs(root *yaml.Node, ph map[string]string) error {
 	}
 	var errs []error
 	for _, kv := range mergedPairs(top, map[*yaml.Node]bool{}) {
-		if k := kv[0].Value; k == "tenants" || k == "defaults" {
+		key := aliasTarget(kv[0])
+		if key.Kind != yaml.ScalarNode {
+			continue // the strict decoder refuses a complex key
+		}
+		if isSecretRef(key.Value, ph) {
+			errs = append(errs, errors.New("config: a top-level key is an ${ENV} or file: reference; top-level keys are literal section names"))
+			continue
+		}
+		if k := key.Value; k == "tenants" || k == "defaults" {
 			walkTenantRefs(k, kv[1], ph, map[*yaml.Node]bool{}, &errs)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// aliasTarget follows an alias node to the node it names.
+func aliasTarget(n *yaml.Node) *yaml.Node {
+	for seen := 0; n.Kind == yaml.AliasNode && n.Alias != nil && seen < 64; seen++ {
+		n = n.Alias
+	}
+	return n
 }
 
 // mergedPairs returns a mapping's key and value pairs, with the pairs of any "<<" merge expanded.
@@ -641,7 +662,7 @@ func walkTenantRefs(path string, n *yaml.Node, ph map[string]string, seen map[*y
 		}
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			k, v := n.Content[i], n.Content[i+1]
+			k, v := aliasTarget(n.Content[i]), n.Content[i+1]
 			if k.Tag == "!!merge" {
 				walkTenantRefs(path, v, ph, seen, errs)
 				continue

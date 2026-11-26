@@ -111,13 +111,23 @@ type logsExportLoop struct {
 	// nil ⇒ log only.
 	onDataIncomplete func(loop string, reason source.IncompleteReason)
 	onAuthError      func(loop, source string) // followup §9: 401/403 on a lifecycle call → own alertable signal
-	now              func() time.Time
+	// onCapability, if set, receives the schema-changed state when the create response loses id/total.
+	onCapability func(loop, graph string, state source.CapabilityState)
+	now          func() time.Time
 }
 
 // jobFailed records an export-job failure/abandonment as a loud, counted, alertable event.
 func (l *logsExportLoop) jobFailed(reason source.IncompleteReason) {
 	if l.onDataIncomplete != nil {
 		l.onDataIncomplete("logs_export", reason)
+	}
+}
+
+// backfillSkipped records that a watermark older than max_backfill was clamped to the floor, dropping the
+// unstorable span (the LangSmith runs loop counts the same event).
+func (l *logsExportLoop) backfillSkipped() {
+	if l.onDataIncomplete != nil {
+		l.onDataIncomplete("logs_export", source.IncompleteBackfillSkipped)
 	}
 }
 
@@ -304,8 +314,10 @@ func (l *logsExportLoop) stepIdle(ctx context.Context, since model.Watermark, no
 	// clamps winMin to the floor; we log the skipped span here (loud), mirroring the analytics loop's
 	// max_backfill clamp (F25). The abandoned span is honestly logged; downstream too-old rejects would
 	// otherwise count it.
+	skippedBackfill := false
 	if raw := since.Time; !raw.IsZero() {
 		if floor := now.Add(-l.maxBackfill); raw.Before(floor) {
+			skippedBackfill = true
 			slog.Warn("portkey logs_export: watermark older than max_backfill — skipping the unstorable span",
 				"from", raw.UTC().Format(time.RFC3339), "floor", floor.UTC().Format(time.RFC3339), "source", l.sourceInstance)
 		}
@@ -313,6 +325,12 @@ func (l *logsExportLoop) stepIdle(ctx context.Context, since model.Watermark, no
 	winMin, winMax, settled := l.windowBoundsFor(since.Time, now)
 	if !settled {
 		return model.Batch{Key: l.Key(), Watermark: since}, nil // nothing settled yet — empty, no advance
+	}
+	if skippedBackfill {
+		// Counted once, on the tick that goes on to create the export (an unsettled tick returns above), so a
+		// long skip is alertable without counting every waiting tick. The scheduler's backfill_unstorable count
+		// is gated on LoopSpec.Window > 0, which this loop forces to 0, so it never fires here.
+		l.backfillSkipped()
 	}
 	jobID, total, err := l.createExport(ctx, winMin, winMax, 0)
 	if err != nil {
@@ -412,6 +430,9 @@ func (l *logsExportLoop) stepCreated(ctx context.Context, since model.Watermark,
 		// (the start genuinely did not land) or the poll itself errors, surface the original start error and
 		// retry next tick — never a false advance off an un-started draft.
 		status, perr := l.pollExport(ctx, cur.JobID)
+		if isLostJob(perr) {
+			return l.restartLostJob(since, cur), nil
+		}
 		if perr != nil || status == statusDraft {
 			return model.Batch{}, err
 		}
@@ -427,6 +448,14 @@ func (l *logsExportLoop) stepCreated(ctx context.Context, since model.Watermark,
 func (l *logsExportLoop) stepPolling(ctx context.Context, since model.Watermark, cur exportCursor, now time.Time) (model.Batch, error) {
 	status, err := l.pollExport(ctx, cur.JobID)
 	if err != nil {
+		if isLostJob(err) {
+			return l.restartLostJob(since, cur), nil
+		}
+		// A poll that keeps failing must still be bounded by job_poll_timeout, or a persistent 5xx would
+		// retry for ever with no export_stuck count. Before the deadline the error is returned as before.
+		if deadline, ok := parseCursorTime(cur.PollDeadline); ok && now.After(deadline) {
+			return l.abandonStuckJob(ctx, since, cur), nil
+		}
 		return model.Batch{}, err
 	}
 	switch status {
@@ -442,11 +471,7 @@ func (l *logsExportLoop) stepPolling(ctx context.Context, since model.Watermark,
 		// so NTP skew can abandon a hair early/late — but the restart is loud + idempotent (re-create is
 		// free), so the blast radius is wasted work, never loss. job_poll_timeout (30m) >> realistic skew.
 		if deadline, ok := parseCursorTime(cur.PollDeadline); ok && now.After(deadline) {
-			slog.Error("portkey logs_export: job exceeded job_poll_timeout — cancelling + restarting window",
-				"job", cur.JobID, "source", l.sourceInstance)
-			l.jobFailed(source.IncompleteExportStuck)
-			_ = l.cancelExport(ctx, cur.JobID) // best-effort
-			return model.Batch{Key: l.Key(), Watermark: l.resetIdle(since.Time)}, nil
+			return l.abandonStuckJob(ctx, since, cur), nil
 		}
 		return model.Batch{Key: l.Key(), Watermark: since}, nil // still running — no advance, cursor unchanged
 	default: // failed, stopped, or unexpected
@@ -470,6 +495,11 @@ func (l *logsExportLoop) stepDownloading(ctx context.Context, since model.Waterm
 	}
 	signedURL, err := l.getDownloadURL(ctx, cur.JobID)
 	if err != nil {
+		// Only the control-plane call decides "lost job". A 404 on the signed-URL object GET (a different
+		// host, in downloadChunk below) stays a loud error.
+		if isLostJob(err) {
+			return l.restartLostJob(since, cur), nil
+		}
 		return model.Batch{}, err
 	}
 	if verr := l.validateSignedURLHost(signedURL); verr != nil {
@@ -497,6 +527,25 @@ func (l *logsExportLoop) stepDownloading(ctx context.Context, since model.Waterm
 	}
 	// Last page complete ⇒ the whole window is emitted: advance the frontier, clear the cursor.
 	return model.Batch{Key: l.Key(), Logs: recs, Watermark: model.Watermark{Time: winMax}}, nil
+}
+
+// restartLostJob handles a job id the control plane no longer knows (404/410 on a lifecycle call: a
+// corrected workspace_id, a key rotated to another workspace, a purged or expired export). Retrying the same
+// call can never succeed, so restart the window from idle (at-least-once, may re-emit) and count it once.
+func (l *logsExportLoop) restartLostJob(since model.Watermark, cur exportCursor) model.Batch {
+	slog.Error("portkey logs_export: export job unknown to the control plane — restarting window",
+		"job", cur.JobID, "phase", cur.Phase, "source", l.sourceInstance)
+	l.jobFailed(source.IncompleteExportFailed)
+	return model.Batch{Key: l.Key(), Watermark: l.resetIdle(since.Time)}
+}
+
+// abandonStuckJob cancels (best-effort) and restarts a job that outlived job_poll_timeout, counted as stuck.
+func (l *logsExportLoop) abandonStuckJob(ctx context.Context, since model.Watermark, cur exportCursor) model.Batch {
+	slog.Error("portkey logs_export: job exceeded job_poll_timeout — cancelling + restarting window",
+		"job", cur.JobID, "source", l.sourceInstance)
+	l.jobFailed(source.IncompleteExportStuck)
+	_ = l.cancelExport(ctx, cur.JobID) // best-effort
+	return model.Batch{Key: l.Key(), Watermark: l.resetIdle(since.Time)}
 }
 
 // advanceCursor builds a watermark that keeps Time fixed (the window isn't done) and carries the new

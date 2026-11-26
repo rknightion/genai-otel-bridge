@@ -122,18 +122,24 @@ provisioning.
 ## Product recording rules
 
 The `product/` directory ships recording rules over `portkey_api_*` and `langsmith_*` signals.
-These encode the correct query patterns for per-bucket gauges (using `sum_over_time` not
-`rate`/`increase`).
+The Portkey rules encode the correct query patterns for per-bucket gauges (using `sum_over_time` not
+`rate`/`increase`). The LangSmith gauges are different: each poll emits a total over the trailing
+`stats_window`, so the LangSmith rules take the latest value (`last_over_time`) and never sum over time.
 
 | Rule | What it computes |
 |------|-----------------|
 | `portkey:requests:sum_5m` | `sum_over_time(portkey_api_requests[5m])` — total requests over 5m windows |
 | `portkey:error_ratio:5m` | Error ratio derived from `portkey_api_errors` and `portkey_api_requests` |
-| `langsmith:runs:sum_5m` | Total runs across all sessions summed per environment |
-| `langsmith:cost_usd:sum_5m` | Total cost across sessions |
-| `langsmith:tokens:sum_5m` | Total tokens across sessions |
+| `langsmith:runs:window_total` | `last_over_time(langsmith_runs[3m])` summed across sessions per environment: the run count over the trailing `settings.stats_window` (default 1h) |
+| `langsmith:cost_usd:window_total` | The same for cost: spend over the trailing `stats_window` |
+| `langsmith:tokens:window_total` | The same for tokens over the trailing `stats_window` |
+| `langsmith:runs:sum_5m`, `langsmith:cost_usd:sum_5m`, `langsmith:tokens:sum_5m` | **Deprecated**, removed after one release. Mis-named: they apply `sum_over_time(...[5m])` to a trailing-window total, so they overstate the value (about 5x at a 1m cadence) and are not 5 minute sums. Use the `window_total` rules |
 
 !!! note "Per-bucket gauge semantics"
+    `langsmith_runs`, `langsmith_tokens` and `langsmith_cost_usd` are not per-bucket: each point is the
+    total over the trailing `stats_window` (aggregate-now). Read them with `last_over_time`; never
+    `sum_over_time`, which adds overlapping windows.
+
     `portkey_api_*` metrics are **per-bucket gauges**, not counters. An instant query between
     emit cycles may read as absent — use `last_over_time(...[20m])` to see the last known value.
     Always use `sum_over_time` to aggregate; never use `rate()` or `increase()` on these metrics.

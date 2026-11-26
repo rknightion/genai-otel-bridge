@@ -103,6 +103,10 @@ that work; nothing here depends on it.
   bad bucket with a counted gap so the loop always progresses; it never stalls or drops silently.
 - **FROZEN seams.** `model.*` types and `source.Source` / `source.Loop` are marked FROZEN. Adding or
   renaming a field or method there is a design change requiring an `ARCHITECTURE.md` update.
+- **The cross-tenant release gate passes before any version that accepts the tenant shape.**
+  `CGO_ENABLED=1 go test -race -tags acceptance ./internal/app/ -run TestCrossTenant`
+  (`internal/app/crosstenant_gate_test.go`, design §5.3). Its seeded faults are the proof that its
+  four checks can fail: keep every one red against its check, and never weaken a check to ship.
 
 ## Architecture
 

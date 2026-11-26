@@ -146,6 +146,19 @@ func (r *LoopRunner) Reset() {
 	r.mu.Unlock()
 }
 
+// ClearDegradedGauge zeroes the loop_degraded gauge when leadership ends. [#369] Reset zeroes it only
+// at the NEXT election on this process, and a cumulative last-value gauge never clears on its own, so a
+// leader demoted while degraded would otherwise export 1 for as long as it lives while the new leader is
+// healthy. It records 0 on the SAME {loop, reason} series and changes no other state: Reset at the next
+// election still does the full reset. Called by Scheduler.Run after this leadership's goroutines exit.
+func (r *LoopRunner) ClearDegradedGauge() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.degraded {
+		r.m.LoopDegraded(r.name, r.degradeReason, false)
+	}
+}
+
 // Enqueue marks the loop busy and hands the batch to the single worker (block-on-full backpressure).
 func (r *LoopRunner) Enqueue(ctx context.Context, b model.Batch) error {
 	r.mu.Lock()

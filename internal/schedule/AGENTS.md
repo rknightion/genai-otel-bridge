@@ -35,7 +35,9 @@ implements.
 
 - Tick interval is cadence with 10% jitter, to de-align loops and replicas. On a terminal or degraded
   halt the scheduler backs off to 10 minutes, cleared on the next successful save. Five consecutive
-  checkpoint-save failures mark the loop degraded, and so does one epoch-fenced write.
+  checkpoint-save failures mark the loop degraded, and so does one epoch-fenced write. When leadership
+  ends, `Scheduler.Run` zeroes the `loop_degraded` gauge of each degraded loop after its goroutines
+  join; `Reset` at the next election still clears the state.
 - Snapshot loops (`LoopSpec.Window == 0`, for example langsmith sessions and portkey groups) gate out
   both catch-up acceleration and the `backfill_unstorable` count. A snapshot loop's watermark is a
   liveness heartbeat at `now`, not a replay frontier. Without the backfill gate, `MaxBackfill == 0`

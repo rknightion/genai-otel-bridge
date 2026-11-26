@@ -75,7 +75,8 @@ func (s *Scheduler) RunOnceForTest(ctx context.Context, sp LoopSpec, now time.Ti
 // Run starts a worker + a ticker goroutine per loop; all stop when leaderCtx is cancelled.
 // [CP-R3] On each (re-)election it Resets every runner FIRST (drop stale pre-election queued work +
 // re-sync the frontier from the durable checkpoint), and wg.Waits its goroutines out before
-// returning, so a leadership flap cannot leak a stale batch into the next leadership's queue.
+// returning, so a leadership flap cannot leak a stale batch into the next leadership's queue. After the
+// join it zeroes each degraded loop's loop_degraded gauge [#369], so a demoted replica stops exporting 1.
 func (s *Scheduler) Run(leaderCtx context.Context) {
 	var wg sync.WaitGroup
 	for _, sp := range s.specs {
@@ -87,6 +88,11 @@ func (s *Scheduler) Run(leaderCtx context.Context) {
 	}
 	<-leaderCtx.Done()
 	wg.Wait()
+	// [#369] Leadership ended and every goroutine has joined: zero any degraded gauge now, so a demoted
+	// replica does not keep exporting loop_degraded == 1 until it is re-elected or restarted.
+	for _, sp := range s.specs {
+		sp.Runner.ClearDegradedGauge()
+	}
 }
 
 func (s *Scheduler) tickLoop(ctx context.Context, sp LoopSpec) {

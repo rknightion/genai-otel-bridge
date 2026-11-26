@@ -209,3 +209,66 @@ func TestTenantRefsRejected(t *testing.T) {
 		})
 	}
 }
+
+// tenantFixtureVariant is the tenant fixture with each replacement applied once; the test fails if an
+// anchor is not found exactly once.
+func tenantFixtureVariant(t *testing.T, replacements ...[2]string) string {
+	t.Helper()
+	raw, err := os.ReadFile("../config/testdata/tenants.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(raw)
+	for _, r := range replacements {
+		if strings.Count(out, r[0]) != 1 {
+			t.Fatalf("anchor %q is not unique in the fixture", r[0])
+		}
+		out = strings.Replace(out, r[0], r[1], 1)
+	}
+	return out
+}
+
+// TestValidateConfigFileReportsCapabilityError (AC5, #532): the config check assembles a tenant-shape
+// config before it refuses it, so a target whose source type cannot assert its scope (langsmith
+// implements no source.ScopeAsserter) fails with the capability error, not with the not-enabled refusal,
+// although none of the tenant's secret files exists: the check reads none. On the base it returned
+// ErrTenantShapeNotEnabled before assembling. The same holds for a loop that emits log records.
+func TestValidateConfigFileReportsCapabilityError(t *testing.T) {
+	t.Setenv("TENANT_FIXTURE_SELF_TOKEN", "")
+	langsmithDefaults := [2]string{"tenants:\n", "  langsmith:\n    loops:\n      sessions:\n        enabled: true\n        cadence: 60s\n        metric_prefix: langsmith\n\ntenants:\n"}
+	langsmithTarget := [2]string{"          type: portkey\n          base_url: https://api.portkey.ai/v1\n          auth: { header: x-portkey-api-key, value_file: source-key }\n",
+		"          type: langsmith\n          base_url: https://api.smith.langchain.com\n          auth: { header: x-api-key, value_file: source-key }\n"}
+	logsLoop := [2]string{"      groups:\n        enabled: true\n        cadence: 60s\n",
+		"      groups:\n        enabled: true\n        cadence: 60s\n      logs_export:\n        enabled: true\n        cadence: 60s\n        settings:\n          workspace_id: example-workspace-id\n          signed_url_allow_hosts: storage.example.com\n          window: 1h\n          settle: 10m\n"}
+	cases := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{"a scope the source type cannot assert", tenantFixtureVariant(t, langsmithDefaults, langsmithTarget),
+			[]string{"mt.team-b.prod", "langsmith", "cannot assert one (it does not implement source.ScopeAsserter)"}},
+		{"a loop that emits log records", tenantFixtureVariant(t, logsLoop),
+			[]string{"team-a.prod", "logs_export", "emits log records"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "tenants.yaml")
+			if err := os.WriteFile(p, []byte(c.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			table, hash, err := ValidateConfigFile(p)
+			if err == nil || errors.Is(err, tenancy.ErrTenantShapeNotEnabled) {
+				t.Fatalf("ValidateConfigFile = %v, want the assembly error", err)
+			}
+			for _, s := range c.want {
+				if !strings.Contains(err.Error(), s) {
+					t.Errorf("error %q must contain %q", err, s)
+				}
+			}
+			if table != "" || hash != "" {
+				t.Errorf("a failed check returned table %q and hash %q, want neither", table, hash)
+			}
+		})
+	}
+}

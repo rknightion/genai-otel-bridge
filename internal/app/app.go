@@ -71,8 +71,10 @@ func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, 
 // implementations and tests supply fakes. It does not validate cfg (Prepare does); cfg supplies only the
 // install-wide settings (governance, queue). The release gate calls it with rows it constructs.
 //
-//  1. Per row: the row's telemetry from tf, its source hooks from that telemetry, its secret files read
-//     through opts.Secrets into a copy of the row, then its source and loops.
+//  1. Every row's secret files read through opts.Secrets into a copy of the row, blocking a tenant with an
+//     unreadable secret or a duplicate API key (readPlanSecrets). Then per row that is not blocked: the
+//     row's telemetry from tf, its source hooks from that telemetry, its source and loops, its scope gate
+//     and, for a tenant-shape row, the refusal of a loop that emits log records.
 //  2. Per group of rows sharing a stack and an identity: the series-ownership check and one guard.
 //  3. Per row (pipeline.go): the row's own emitter and one runner per loop.
 //
@@ -138,13 +140,17 @@ func BuildFromPlan(ctx context.Context, cfg *config.Config, plan tenancy.Plan, c
 	// content denylist (#130) can be keyed by each loop's real identity (CheckpointKey.String()), which
 	// SanitizeLogs receives — and so we honour a content opt-in ONLY on loops that actually consume it
 	// (the logs loops, identified by the source.IndexedKeyDeclarer capability).
-	pipes := make([]*pipeline, 0, len(plan.Rows))
+	// First every row's secret files, read through opts.Secrets onto copies of the rows. A tenant whose
+	// secret cannot be read, or one of whose targets shares an API key with another target, is blocked: its
+	// rows are not built and opts.OnTenantBlocked reports it (pipeline.go, readPlanSecrets). Only when every
+	// tenant is blocked does assembly fail.
+	rows, err := readPlanSecrets(plan.Rows, opts.Secrets, opts.OnTenantBlocked)
+	if err != nil {
+		return nil, err
+	}
+	pipes := make([]*pipeline, 0, len(rows))
 	nLoops := 0
-	for _, planRow := range plan.Rows {
-		row, err := readRowSecrets(planRow, opts.Secrets)
-		if err != nil {
-			return nil, err
-		}
+	for _, row := range rows {
 		// The row's own telemetry: tenant and pipeline are empty for a legacy row, so every label set is
 		// today's (design §8).
 		t := telemetryFor(row.Tenant, row.Pipeline)
@@ -176,6 +182,10 @@ func BuildFromPlan(ctx context.Context, cfg *config.Config, plan tenancy.Plan, c
 		// its scope, and a loop named scope-match in any row.
 		gate, err := rowScopeGate(row, src, t, cp, opts.Now)
 		if err != nil {
+			return nil, err
+		}
+		// A tenant-shape row runs no loop that emits log records (design §2).
+		if err := refuseLogsLoops(row, src); err != nil {
 			return nil, err
 		}
 		// The identity the row's emitter stamps (pass 3), so the budget counts the same keys.

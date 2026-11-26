@@ -292,3 +292,33 @@ func TestTenantShapeRefused(t *testing.T) {
 		t.Fatalf("a legacy plan is refused: %v", err)
 	}
 }
+
+// TestSelfOTLPTenantShapeNeverFallsBack (#532): a legacy config with no emit.self sends self-telemetry to
+// emit.telemetry, as before; in the tenant shape self-telemetry goes to emit.self only, and with no
+// emit.self it is an error, never a fallback to emit.telemetry (design §2).
+func TestSelfOTLPTenantShapeNeverFallsBack(t *testing.T) {
+	telemetry := config.OTLPConn{Endpoint: "https://telemetry.example", InstanceID: "1", Token: "t"}
+	self := config.OTLPConn{Endpoint: "https://self.example", InstanceID: "2", Token: "s"}
+	tenants := map[string]config.TenantConfig{"team-a": {}}
+
+	legacy := &config.Config{Emit: config.EmitConfig{Telemetry: config.OTLPTarget{OTLP: telemetry}}}
+	if got, _, err := selfOTLP(legacy); err != nil || got != telemetry {
+		t.Errorf("legacy, no emit.self: got %+v, %v; want emit.telemetry", got, err)
+	}
+	withSelf := &config.Config{Tenants: tenants, Emit: config.EmitConfig{Self: &config.OTLPTarget{OTLP: self, MetricInterval: config.Duration(2 * time.Minute)}}}
+	if got, iv, err := selfOTLP(withSelf); err != nil || got != self || iv != 2*time.Minute {
+		t.Errorf("tenant shape with emit.self: got %+v, %s, %v; want emit.self and its interval", got, iv, err)
+	}
+	noSelf := &config.Config{Tenants: tenants, Emit: config.EmitConfig{Telemetry: config.OTLPTarget{OTLP: telemetry}}}
+	if got, _, err := selfOTLP(noSelf); err == nil || got == telemetry {
+		t.Errorf("tenant shape with no emit.self: got %+v, %v; want an error and no fallback", got, err)
+	}
+}
+
+// TestTenantSecretsRoot (#532): the tenant secrets root is the path the chart mounts each tenant's Secret
+// under; it is a contract with deploy/helm, so it is pinned as written.
+func TestTenantSecretsRoot(t *testing.T) {
+	if tenantSecretsRoot != "/var/run/secrets/genai-otel-bridge/tenants" {
+		t.Fatalf("tenantSecretsRoot = %q", tenantSecretsRoot)
+	}
+}

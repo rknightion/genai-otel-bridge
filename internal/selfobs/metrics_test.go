@@ -823,3 +823,33 @@ func TestScopeAssertionCounterLabels(t *testing.T) {
 		t.Fatalf("scope_assertion_total = %v, want %v", got, want)
 	}
 }
+
+// --- unit 6b-2: the tenant_blocked gauge ---
+
+// TestTenantBlockedGaugeLabels (#532): tenant_blocked carries exactly tenant and reason, never pipeline,
+// even when recorded through a With copy; it is 1 under a reason that blocks the tenant and 0 under one that
+// does not, and a Metrics nothing has asked exports no tenant_blocked series (the legacy shape).
+func TestTenantBlockedGaugeLabels(t *testing.T) {
+	const name = "genai_otel_bridge_tenant_blocked"
+	m, r := newTestMetrics(t)
+	driveAll(m)
+	if got := scopePoints(t, r, name); len(got) != 0 {
+		t.Fatalf("unused tenant_blocked exports %v, want nothing", got)
+	}
+	m.TenantBlocked("t1", "secret_unreadable", true)
+	m.TenantBlocked("t1", "duplicate_key", false)
+	m.With("t2", "t2.a").TenantBlocked("t2", "duplicate_key", true)
+	m.With("t2", "t2.a").TenantBlocked("t2", "secret_unreadable", false)
+	for _, s := range seriesByName(t, r)[name] {
+		if k := sortedLabelKeys(s); !slices.Equal(k, []string{"reason", "tenant"}) {
+			t.Fatalf("label keys %v, want [reason tenant]", k)
+		}
+	}
+	want := map[string]float64{
+		"reason=secret_unreadable,tenant=t1": 1, "reason=duplicate_key,tenant=t1": 0,
+		"reason=duplicate_key,tenant=t2": 1, "reason=secret_unreadable,tenant=t2": 0,
+	}
+	if got := scopePoints(t, r, name); !maps.Equal(got, want) {
+		t.Fatalf("tenant_blocked = %v, want %v", got, want)
+	}
+}

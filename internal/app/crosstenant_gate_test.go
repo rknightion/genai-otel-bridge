@@ -5,6 +5,7 @@
 package app
 
 import (
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -257,6 +258,38 @@ func TestCrossTenantSeededFaults(t *testing.T) {
 			want: map[string][]string{checkSelfEndpoint: {pc}},
 		},
 		{
+			// Design §5.5 (unit 6b-2): tenant-b's key file holds tenant-a's key. Both tenants are left unbuilt,
+			// so nothing is sent under either credential or to the vendor for either; both are reported
+			// duplicate_key, on OnTenantBlocked and on the self-telemetry's tenant_blocked; tenant-c delivers.
+			// With the duplicate check skipped, tenant-a builds and delivers under its credential.
+			name: "a duplicate API key in two tenants",
+			run: func(t *testing.T, w *gateWorld) {
+				w.secrets.values[[2]string{"tenant-b", "api-key-secondary"}] = w.tenant("tenant-a").Key
+				w.lead(w.build(w.rows(base...), nil))
+				w.requireNothingUnder("tenant-a", "tenant-b")
+				w.requireDelivered("tenant-c")
+				for _, r := range w.vendor.seen() {
+					if r.Row != pc {
+						t.Errorf("the vendor saw a request from %s, a blocked tenant's row", r.Row)
+					}
+				}
+				for _, n := range []string{"tenant-a", "tenant-b"} {
+					if !w.blockedFor(n, "duplicate_key") {
+						t.Errorf("%s: OnTenantBlocked never reported duplicate_key", n)
+					}
+					if !w.sawTenantBlocked(n, "duplicate_key") {
+						t.Errorf("%s: self-telemetry never reported tenant_blocked{reason=\"duplicate_key\"} 1", n)
+					}
+				}
+				for _, reason := range []string{"duplicate_key", "secret_unreadable"} {
+					if w.blockedFor("tenant-c", reason) || w.sawTenantBlocked("tenant-c", reason) {
+						t.Errorf("tenant-c was reported blocked for %s", reason)
+					}
+				}
+			},
+			want: map[string][]string{},
+		},
+		{
 			name: "a row given the self identity with its own credential",
 			run: func(t *testing.T, w *gateWorld) {
 				rows := w.rows(base...)
@@ -280,5 +313,71 @@ func TestCrossTenantSeededFaults(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// fixtureGateTenants are the targets of config/testdata/tenants.yaml as gate tenants: the scope names and
+// ids, instance ids and file names are the fixture's; the keys, tokens and markers are the gate's. team-a's
+// two targets send to its one destination, so they share one credential.
+func fixtureGateTenants() ([]gateTenant, map[[2]string]string) {
+	tenants := []gateTenant{
+		{Tenant: "team-a", Target: "prod", Workspace: "example-scope-a1", ScopeID: "example-scope-id-a1", Key: "fxka1", InstanceID: "200001", Token: "fxta", Marker: 5551},
+		{Tenant: "team-a", Target: "staging", Workspace: "example-scope-a2", ScopeID: "example-scope-id-a2", Key: "fxka2", InstanceID: "200001", Token: "fxta", Marker: 5552},
+		{Tenant: "team-b", Target: "prod", Workspace: "example-scope-b1", ScopeID: "example-scope-id-b1", Key: "fxkb1", InstanceID: "200002", Token: "fxtb", Marker: 5553},
+	}
+	files := map[[2]string]string{
+		{"team-a", "otlp-token"}: "fxta", {"team-a", "prod-key"}: "fxka1", {"team-a", "staging-key"}: "fxka2",
+		{"team-b", "otlp-token"}: "fxtb", {"team-b", "source-key"}: "fxkb1",
+	}
+	return tenants, files
+}
+
+// TestCrossTenantFromFixture (AC7, unit 6b-2): the gate passes on plans that come from the tenant fixture
+// through config.Load and tenancy.Resolve, not from hand-made rows: each row's base URL and endpoint are
+// rewritten to the fakes after Resolve (with private addresses allowed, the fakes being local), and
+// nothing else. The loops are the fixture's defaults (a ten-minute settle, so the vendor serves twenty
+// minutes of buckets). Every pipeline delivers, all four checks hold, and the fixture and its copy with the
+// tenants in another order give one plan hash and the same deliveries.
+func TestCrossTenantFromFixture(t *testing.T) {
+	tenants, files := fixtureGateTenants()
+	hashes := map[string]string{}
+	deliveries := map[string]map[string]int{}
+	fixtures := []string{"tenants.yaml", "tenants-reordered.yaml"}
+	for _, fixture := range fixtures {
+		t.Run(fixture, func(t *testing.T) {
+			w := newGateWorldWith(t, tenants, 20)
+			w.secrets.values = maps.Clone(files)
+			cfg, plan := loadTenantFixture(t, "../config/testdata/"+fixture)
+			hashes[fixture] = plan.Hash()
+			if len(plan.Rows) != len(tenants) {
+				t.Fatalf("%s resolved to %d rows, want %d", fixture, len(plan.Rows), len(tenants))
+			}
+			for i := range plan.Rows {
+				r := &plan.Rows[i]
+				r.Destination.Endpoint = w.recv.URL
+				r.Source.BaseURL = w.vendor.URL + "/r/" + r.Pipeline
+				r.Source.HTTP.AllowPrivate = true
+			}
+			w.lead(w.buildPlan(cfg, plan, nil))
+			got := map[string]int{}
+			for _, g := range tenants {
+				pts := w.deliveredTo(g)
+				if len(pts) == 0 {
+					t.Errorf("%s: nothing was delivered", g.pipeline())
+				}
+				if !w.sawScopeState(g.pipeline(), "matched") {
+					t.Errorf("%s: self-telemetry never reported scope_state{state=\"matched\"}", g.pipeline())
+				}
+				got[g.pipeline()] = len(pts)
+			}
+			deliveries[fixture] = got
+			w.requireClean()
+		})
+	}
+	if hashes[fixtures[0]] == "" || hashes[fixtures[0]] != hashes[fixtures[1]] {
+		t.Errorf("plan hashes differ by tenant order: %v", hashes)
+	}
+	if !maps.Equal(deliveries[fixtures[0]], deliveries[fixtures[1]]) {
+		t.Errorf("deliveries differ by tenant order: %v", deliveries)
 	}
 }

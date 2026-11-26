@@ -17,8 +17,8 @@ imports `internal/config` only.
   `SourceInstance(tenant, target)` (`mt.<tenant>.<target>`) and the secrets as file names
   (`AuthValueFile`, `TokenFile`), never values.
 
-`Row`, `Plan`, `Resolve`, `StackKey`, `PipelineID`, `SourceInstance` and `PipelineAttribute` are
-seams later work depends on: keep their names and shapes. Add nothing to `Plan` beyond `Rows` and
+`Row`, `Plan`, `Resolve`, `StackKey`, `PipelineID`, `SourceInstance`, `PipelineAttribute` and
+`SecretReader` are seams later work depends on: keep their names and shapes. Add nothing to `Plan` beyond `Rows` and
 `TenantShape` without a design change.
 
 ## Table and hash
@@ -36,8 +36,17 @@ seams later work depends on: keep their names and shapes. Add nothing to `Plan` 
   legacy shape an unset `${ENV}` ref is a placeholder in the config check, so the two hashes match
   only when CI has the same environment.
 
+## SecretReader
+
+`SecretReader.Read(tenant, file)` returns one tenant's secret file value. `app.BuildFromPlan` calls it
+in assembly pass 1 for a row's `AuthValueFile` and `TokenFile` and puts the values on a copy of the
+row, never on the plan. Its error names the tenant and the file and never carries a value. This
+package defines only the interface; the file-backed reader comes later.
+
 ## StackKey
 
 `StackKey(endpoint, instanceID)` is the one definition of "the same stack": the endpoint with its host
 (and scheme) lower-cased and trailing slashes dropped, joined to the instance id with `|`. The path
 keeps its case. It holds the endpoint otherwise as written, so compare it; do not log it.
+`app.BuildFromPlan` groups rows by it plus the identity map for the series-ownership check and the
+guard.

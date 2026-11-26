@@ -114,14 +114,14 @@ func TestGrayFieldPromotedNotSimultaneouslyDenied(t *testing.T) {
 			}},
 		},
 	}}}
-	deny := contentDenylist(optedInContentFields(cfg))
+	deny := contentDenylist(optedInContentFields(cfg.Sources))
 	if slices.Contains(deny, "name") {
 		t.Error("gray key promoted via extra_indexed_fields must be released from the effective denylist (#51)")
 	}
 	if slices.Contains(deny, "error") {
 		t.Error("gray key promoted via metadata_record_fields must be released from the effective denylist (#51)")
 	}
-	if !slices.Contains(optedInIndexedFields(cfg), "name") {
+	if !slices.Contains(optedInIndexedFields(cfg.Sources), "name") {
 		t.Error("extra_indexed_fields key must be auto-allow-listed as an indexed attr (#51)")
 	}
 }

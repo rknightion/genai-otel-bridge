@@ -10,6 +10,7 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
 	"github.com/rknightion/genai-otel-bridge/internal/logging"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 )
 
 // PipelineTelemetry is the self-telemetry one pipeline records through: the scheduler and runner seam
@@ -47,9 +48,13 @@ type EmitterSpec struct {
 // EmitterFactory builds the emitter for one spec, reporting through that pipeline's telemetry.
 type EmitterFactory func(EmitterSpec, PipelineTelemetry) emit.Emitter
 
-// Options carries composition-root inputs that are neither config nor a factory. Empty for now; later
-// units add fields (see the multi-tenancy design).
-type Options struct{}
+// Options carries composition-root inputs that are neither config nor a factory. Later units add fields
+// (see the multi-tenancy design).
+type Options struct {
+	// Secrets reads the secret files a tenant-shape row names (AuthValueFile, TokenFile) at assembly.
+	// nil is fine for a plan whose rows name no file, which every legacy row is.
+	Secrets tenancy.SecretReader
+}
 
 // partialRejectLimitKey is the rate-limit key of the partial-reject warning. With no pipeline it is
 // today's per-plane key, so a legacy install throttles exactly as before; with one it carries the

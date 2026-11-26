@@ -43,6 +43,12 @@ type Row struct {
 	Identity map[string]string
 }
 
+// SecretReader reads one tenant's secret file at assembly (design §4, pass 1). Read returns the
+// file's value; its error names the tenant and the file and never carries a value.
+type SecretReader interface {
+	Read(tenant, file string) (string, error)
+}
+
 // Plan is the resolved config. TenantShape is false for a legacy config.
 type Plan struct {
 	Rows        []Row

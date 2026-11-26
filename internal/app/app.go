@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,12 +21,16 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/source/langsmith"
 	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
+	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 )
 
 type App struct {
 	sched *schedule.Scheduler
 	coord coordinate.Coordinator
 	specs []schedule.LoopSpec
+	// planHash and planRows identify the plan the app was assembled from; Run logs both on every election.
+	planHash string
+	planRows int
 }
 
 func (a *App) Specs() []schedule.LoopSpec { return a.specs }
@@ -42,17 +47,38 @@ func authErrorHook(m schedule.Metrics, lim *logging.Limiter) func(loop, src stri
 	}
 }
 
-// Build assembles the runtime. The checkpoint store and coordinator are injected, and the emitter and
-// the self-telemetry come from two factories, so cmd supplies the real OTLP/k8s/selfobs implementations
-// and tests supply fakes. Build asks the telemetry factory for the unlabelled hooks once and the emitter
-// factory for the one emitter once, and builds the source hooks itself.
-func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, coord coordinate.Coordinator, ef EmitterFactory, tf TelemetryFactory, opts Options) (*App, error) {
-	reg := source.NewRegistry()
-	portkey.Register(reg)
-	langsmith.Register(reg)
-	if err := cfg.Validate(reg.Known()); err != nil {
-		return nil, fmt.Errorf("config invalid: %w", err)
+// Prepare registers every source type, validates the config against them and resolves it into the plan
+// the app is assembled from. main calls it before the startup summary; Build calls it first.
+func Prepare(cfg *config.Config) (tenancy.Plan, error) {
+	if err := ValidateConfig(cfg); err != nil {
+		return tenancy.Plan{}, err
 	}
+	return tenancy.Resolve(cfg)
+}
+
+// Build is Prepare then BuildFromPlan: the composition root for a loaded config.
+func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, coord coordinate.Coordinator, ef EmitterFactory, tf TelemetryFactory, opts Options) (*App, error) {
+	plan, err := Prepare(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return BuildFromPlan(ctx, cfg, plan, cp, coord, ef, tf, opts)
+}
+
+// BuildFromPlan assembles the runtime from a resolved plan, one pipeline per row, in the three passes of
+// the multi-tenancy design (§4). The checkpoint store and coordinator are injected, and each pipeline's
+// emitter and self-telemetry come from the two factories, so cmd supplies the real OTLP/k8s/selfobs
+// implementations and tests supply fakes. It does not validate cfg (Prepare does); cfg supplies only the
+// install-wide settings (governance, queue). The release gate calls it with rows it constructs.
+//
+//  1. Per row: the row's telemetry from tf, its source hooks from that telemetry, its secret files read
+//     through opts.Secrets into a copy of the row, then its source and loops.
+//  2. Per group of rows sharing a stack and an identity: the series-ownership check and one guard.
+//  3. Per row (pipeline.go): the row's own emitter and one runner per loop.
+//
+// A legacy plan is one group whose rows carry no tenant or pipeline, so it assembles as before.
+func BuildFromPlan(ctx context.Context, cfg *config.Config, plan tenancy.Plan, cp checkpoint.Checkpointer, coord coordinate.Coordinator, ef EmitterFactory, tf TelemetryFactory, opts Options) (*App, error) {
+	reg := newRegistry()
 	// Indexed/label allow-list (guard is default-deny, CP-C6): the UNCONDITIONAL union of EVERY registered
 	// vendor package's declared content-free keys — quantile (latency/percentile gauges), ai_model/
 	// metadata_key/metadata_value (groups), ai_org/response_status_code (portkey logs), session/feedback_key
@@ -69,24 +95,244 @@ func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, 
 	// loop's settings.extra_indexed_fields (per-loop). The latter is AUTO-allow-listed here so a strip
 	// that promotes a field to IndexedAttributes can't then be silently dropped by the default-deny guard
 	// (the footgun a separate two-knob design would create).
-	operatorPromoted := append(append([]string{}, cfg.Governance.AllowLabelKeys...), optedInIndexedFields(cfg)...)
-	allowKeys := dedupe(append(append(append([]string{},
-		portkey.AllowedLabelKeys()...), langsmith.AllowedLabelKeys()...), operatorPromoted...))
+	// The allow-list itself is per group (pass 2): that group's own opt-ins only.
+	operatorPromoted := append(append([]string{}, cfg.Governance.AllowLabelKeys...), optedInIndexedFields(rowSources(plan.Rows))...)
 	// Reject a content-floor key (message body / injected PII) named in any operator promotion: the guard's
 	// deny floor would otherwise silently neutralise it (deny beats allow), and a silent no-op of operator
 	// intent violates the operationally-honest rule. (The owning source ALSO rejects it at construction;
 	// this composition-root check is the backstop that can't drift.) source.IsContentFloorKey matches by
 	// EXACT key AND by gen_ai content-namespace PREFIX, so a flattened content attr such as
 	// gen_ai.prompt.0.content is rejected here too, not only the bare gen_ai.prompt (#97). Fail fast at startup.
+	// It runs over every row's opt-ins before any source is built, as it ran over every source entry.
 	for _, k := range operatorPromoted {
 		if source.IsContentFloorKey(k) {
 			return nil, fmt.Errorf("governance.allow_label_keys / settings.extra_indexed_fields: %q is a content-floor key (message body / injected PII) and cannot be promoted to a label", k)
 		}
 	}
-	// The legacy shape is one unlabelled pipeline: tenant and pipeline are empty, so every label set is
-	// today's (design §8).
-	m := tf("", "")
-	deps := source.Deps{
+	// [Loki stream-label budget] A logs loop's IndexedAttributes become OTLP resource attrs → Loki stream
+	// labels once GS1 promotes them; together with genai-otel-bridge's product identity resource attrs (all in the GC
+	// Loki default-promoted set) they consume the tenant's max_label_names_per_series budget. Loki REJECTS
+	// (silently drops) a stream over that limit — which the operationally-honest rule forbids — so fail
+	// fast here, not at emit time. Ceiling = governance.max_stream_label_keys (default = the GC Loki
+	// default 15, tenant-overridable by Grafana staff). NOTE: in the in-cluster-Alloy topology, Alloy's
+	// k8s.*/cloud.* enrichment attrs (also default-promoted) share this budget — operators size with
+	// headroom. (Default applied here too: a struct-built config that bypassed config.Load has 0.)
+	streamLabelCeiling := cfg.Governance.MaxStreamLabelKeys
+	if streamLabelCeiling == 0 {
+		streamLabelCeiling = config.DefaultMaxStreamLabelKeys
+	}
+	authLim := logging.NewLimiter(time.Minute)
+	// One telemetry value per (tenant, pipeline): every legacy row and the scheduler's fallback share the
+	// unlabelled hooks, asked for once, as before plan rows.
+	telemetry := map[[2]string]PipelineTelemetry{}
+	telemetryFor := func(tenant, pipeline string) PipelineTelemetry {
+		k := [2]string{tenant, pipeline}
+		t, ok := telemetry[k]
+		if !ok {
+			t = tf(tenant, pipeline)
+			telemetry[k] = t
+		}
+		return t
+	}
+	// PASS 1: build every row's source and its loops. Loops are built BEFORE the guards so the per-loop
+	// content denylist (#130) can be keyed by each loop's real identity (CheckpointKey.String()), which
+	// SanitizeLogs receives — and so we honour a content opt-in ONLY on loops that actually consume it
+	// (the logs loops, identified by the source.IndexedKeyDeclarer capability).
+	pipes := make([]*pipeline, 0, len(plan.Rows))
+	nLoops := 0
+	for _, planRow := range plan.Rows {
+		row, err := readRowSecrets(planRow, opts.Secrets)
+		if err != nil {
+			return nil, err
+		}
+		// The row's own telemetry: tenant and pipeline are empty for a legacy row, so every label set is
+		// today's (design §8).
+		t := telemetryFor(row.Tenant, row.Pipeline)
+		sc := row.Source
+		src, err := reg.Build(sc, sourceDeps(t, authLim))
+		if err != nil {
+			return nil, err
+		}
+		// #40: loop names are free-form map keys; each source constructs only the fixed names it knows and
+		// silently ignores the rest. A typo'd enabled loop (e.g. `log_export` for `logs_export`) would
+		// otherwise pass Validate (its cadence/window are even checked, feigning validation) and then never
+		// collect — no error, no warning. Reconcile every enabled configured loop name against what the
+		// source actually built and fail fast on an unrecognised one (matching CP-H4's unknown-graph
+		// fail-fast). The known set comes from src.Loops() so no vendor loop-name knowledge leaks here.
+		built := map[string]bool{}
+		var builtNames []string
+		for _, lp := range src.Loops() {
+			if n := lp.Key().Loop; !built[n] {
+				built[n] = true
+				builtNames = append(builtNames, n)
+			}
+		}
+		for lcName, lc := range sc.Loops {
+			if lc.Enabled && !built[lcName] {
+				return nil, fmt.Errorf("source %q (type %q): configured loop %q is enabled but not recognised by the source (built loops: %s) — check for a typo", sc.SourceInstance, sc.Type, lcName, strings.Join(builtNames, ", "))
+			}
+		}
+		// The identity the row's emitter stamps (pass 3), so the budget counts the same keys.
+		identityReserve := len(pipelineIdentity(row))
+		p := &pipeline{row: row, t: t, src: src}
+		for _, lp := range src.Loops() {
+			lcName := lp.Key().Loop
+			lc := sc.Loops[lcName]
+			if d, ok := lp.(source.IndexedKeyDeclarer); ok {
+				if n := identityReserve + len(d.IndexedKeys()); n > streamLabelCeiling {
+					return nil, fmt.Errorf("loop %q would emit %d Loki stream labels (identity %d + indexed %d) > governance.max_stream_label_keys %d (Loki max_label_names_per_series); reduce settings.extra_indexed_fields / governance.allow_label_keys, or raise the limit only if your tenant's max_label_names_per_series was increased by Grafana staff", lcName, n, identityReserve, len(d.IndexedKeys()), streamLabelCeiling)
+				}
+			}
+			p.loops = append(p.loops, loopConfigured{loop: lp, cfg: lc})
+		}
+		nLoops += len(p.loops)
+		pipes = append(pipes, p)
+	}
+	// PASS 2: group the rows that share a stack and an identity. Two writers of one series in one group
+	// would collide at the backend, so the series-ownership check runs per group; two groups write to
+	// different stacks or under different identities, so they may declare the same metric name (design
+	// §4). A legacy plan is one group, so its check is the process-wide one it always was.
+	groups := groupPipelines(pipes)
+	for _, g := range groups {
+		srcs := make([]source.Source, 0, len(g))
+		for _, p := range g {
+			srcs = append(srcs, p.src)
+		}
+		if err := source.ValidateOwnership(srcs); err != nil {
+			return nil, err
+		}
+	}
+	if nLoops == 0 {
+		return nil, fmt.Errorf("no enabled loops")
+	}
+	vendorKeys := append(append([]string{}, portkey.AllowedLabelKeys()...), langsmith.AllowedLabelKeys()...)
+	for _, g := range groups {
+		var gloops []loopConfigured
+		for _, p := range g {
+			gloops = append(gloops, p.loops...)
+		}
+		// Build the group's guard now its per-loop denylists (keyed by loop identity) are known. Its
+		// allow-list is the vendor keys, the install-wide governance.allow_label_keys and the group's own
+		// extra_indexed_fields. It reports through the group's first pipeline's telemetry: in the tenant
+		// shape a group is one pipeline; in the legacy shape every row's telemetry is the unlabelled one.
+		guard := source.NewGuard(source.GuardConfig{
+			AllowLabelKeys: dedupe(append(append(append([]string{}, vendorKeys...), cfg.Governance.AllowLabelKeys...), optedInIndexedFields(pipelineSources(g))...)),
+			// Global content denylist = the never-subtractable floor + the ENTIRE gray backstop, NOTHING
+			// subtracted. It polices the metrics path (Sample labels, additionally allow-list default-denied) and
+			// is the fallback for any logs loop with no per-loop entry. Per-loop gray-field releases live in
+			// DenyFieldKeysByLoop (#130) so one loop's opt-in can never weaken another loop's defence-in-depth
+			// backstop, and a content opt-in on a metrics loop (which merely warns it away as an unknown setting)
+			// has no effect on the guard at all.
+			DenyFieldKeys:       contentDenylist(nil),
+			DenyFieldKeysByLoop: contentDenyByLoop(gloops),
+			PerSeriesBudget:     cfg.Governance.PerMetricCardinalityBudget, // per-metric cap; config-keyed, default 10k
+			OnNewLabelValue:     g[0].t.NewLabelValue,
+		})
+		for _, p := range g {
+			p.guard = guard
+		}
+	}
+	// PASS 3: pair each row's loops with that row's own emitter (pipeline.go).
+	var specs []schedule.LoopSpec
+	for _, p := range pipes {
+		specs = append(specs, p.specs(cfg, cp, ef)...)
+	}
+	// [#45] Auto-heal the ha.coordinator=none migration trap. buildHA constructs the single-replica Noop
+	// with a constant baseline epoch because the checkpoint keys aren't known there (the source graph
+	// hadn't been built yet). Now that the loops — hence their CheckpointKeys — exist, read the max epoch
+	// any of their durable watermarks was advanced to and floor the Noop to it. Without this, a downgrade
+	// from an HA (lease/dynamodb) deployment whose checkpoint reached epoch ≥ 2 would have every Noop write
+	// (epoch 1) rejected by the monotonic fence forever (checkpoint_fenced), re-emitting the same window at
+	// full cadence until an operator deletes the checkpoint. Single-replica has exactly one writer, so
+	// adopting a higher epoch carries no cross-writer risk — but do NOT stamp a maximal sentinel: that
+	// re-creates the trap in the none→lease direction (a fresh lease's low epoch would then be fenced). Only
+	// Noop is auto-healed; lease/dynamodb own their own epoch. A per-key Load error is non-fatal (logged and
+	// skipped — buildHA already emits a loud startup WARN for this hazard); startup must never block on it.
+	if noop, ok := coord.(coordinate.Noop); ok {
+		cur := max(int64(1), noop.Epoch)
+		maxStored := cur
+		for _, p := range pipes {
+			for _, l := range p.loops {
+				wm, err := cp.Load(ctx, l.loop.Key())
+				if err != nil {
+					slog.Warn("could not read stored checkpoint epoch for ha.coordinator=none auto-heal; if a prior HA deployment advanced this store, writes may be fenced (#45)",
+						"loop", l.loop.Key().String(), "err", err)
+					continue
+				}
+				if wm.Epoch > maxStored {
+					maxStored = wm.Epoch
+				}
+			}
+		}
+		if maxStored > cur {
+			coord = coordinate.NoopWithEpoch(maxStored)
+			slog.Info("ha.coordinator=none adopted the stored checkpoint epoch to avoid permanently fencing watermark writes after an HA→none downgrade (#45)",
+				"epoch", maxStored)
+		}
+	}
+	// Seed the alerted {loop, reason} counters at 0 so the first event after startup is visible to
+	// increase() (#499). Optional capability, asserted on each row's PipelineTelemetry value: neither
+	// schedule.Metrics nor PipelineTelemetry carries it. Each row's telemetry seeds that row's loops only.
+	// [#387] samples_skipped is recorded under the runner's {source, loop} identity and
+	// source_data_incomplete under the bare loop name a source hook passes, so the seed takes both.
+	for _, p := range pipes {
+		if s, ok := p.t.(interface {
+			SeedLoop(id schedule.LoopID, hookLoop string)
+		}); ok {
+			for _, l := range p.loops {
+				s.SeedLoop(schedule.MetricsLoopID(l.loop), l.loop.Key().Loop)
+			}
+		}
+	}
+	// Every spec carries its row's telemetry (LoopSpec.Metrics), so the scheduler's own metrics are only
+	// the fallback: the unlabelled hooks.
+	return &App{
+		sched: schedule.NewScheduler(specs, telemetryFor("", "")), coord: coord, specs: specs,
+		planHash: plan.Hash(), planRows: len(plan.Rows),
+	}, nil
+}
+
+// groupPipelines groups pipelines by destination stack (tenancy.StackKey) and identity, in first-seen
+// row order, so assembly is deterministic for a given plan.
+func groupPipelines(pipes []*pipeline) [][]*pipeline {
+	idx := map[string]int{}
+	var out [][]*pipeline
+	for _, p := range pipes {
+		k := groupKey(p.row)
+		i, ok := idx[k]
+		if !ok {
+			i = len(out)
+			idx[k] = i
+			out = append(out, nil)
+		}
+		out[i] = append(out[i], p)
+	}
+	return out
+}
+
+// groupKey is a row's stack plus its identity, NUL-separated so no value can forge another key.
+func groupKey(row tenancy.Row) string {
+	keys := make([]string, 0, len(row.Identity))
+	for k := range row.Identity {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(tenancy.StackKey(row.Destination.Endpoint, row.Destination.InstanceID))
+	for _, k := range keys {
+		b.WriteString("\x00")
+		b.WriteString(k)
+		b.WriteString("\x00")
+		b.WriteString(row.Identity[k])
+	}
+	return b.String()
+}
+
+// sourceDeps builds one pipeline's source hooks from its telemetry (design §4: a source takes its hooks
+// when it is built, so they exist before it). authLim is shared by every pipeline: its key carries the
+// source instance, which differs per pipeline, so one pipeline's failures cannot throttle another's.
+func sourceDeps(m PipelineTelemetry, authLim *logging.Limiter) source.Deps {
+	return source.Deps{
 		// Wire the upstream-request self-obs histogram into every source's HTTP client (decoupled: httpx
 		// emits a RequestInfo, selfobs records it; neither imports the other).
 		UpstreamObserver: func(i httpx.RequestInfo) {
@@ -111,147 +357,8 @@ func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, 
 		// OnAuthError to AuthError{loop,source} so a credential failure (wrong/expired key, missing scope)
 		// is its OWN alertable signal — AND a rate-limited WARN so it's visible on `kubectl logs`, not
 		// only in self-metrics.
-		OnAuthError: authErrorHook(m, logging.NewLimiter(time.Minute)),
+		OnAuthError: authErrorHook(m, authLim),
 	}
-	// [Loki stream-label budget] A logs loop's IndexedAttributes become OTLP resource attrs → Loki stream
-	// labels once GS1 promotes them; together with genai-otel-bridge's product identity resource attrs (all in the GC
-	// Loki default-promoted set) they consume the tenant's max_label_names_per_series budget. Loki REJECTS
-	// (silently drops) a stream over that limit — which the operationally-honest rule forbids — so fail
-	// fast here, not at emit time. Ceiling = governance.max_stream_label_keys (default = the GC Loki
-	// default 15, tenant-overridable by Grafana staff). NOTE: in the in-cluster-Alloy topology, Alloy's
-	// k8s.*/cloud.* enrichment attrs (also default-promoted) share this budget — operators size with
-	// headroom. (Default applied here too: a struct-built config that bypassed config.Load has 0.)
-	streamLabelCeiling := cfg.Governance.MaxStreamLabelKeys
-	if streamLabelCeiling == 0 {
-		streamLabelCeiling = config.DefaultMaxStreamLabelKeys
-	}
-	identityReserve := len(cfg.Identity.ProductIdentity())
-	// FIRST PASS: build every enabled source and its loops. Loops are built BEFORE the guard so the
-	// per-loop content denylist (#130) can be keyed by each loop's real identity (CheckpointKey.String()),
-	// which SanitizeLogs receives — and so we honour a content opt-in ONLY on loops that actually consume
-	// it (the logs loops, identified by the source.IndexedKeyDeclarer capability).
-	var srcs []source.Source
-	var loops []loopConfigured
-	for _, sc := range cfg.Sources {
-		if !sc.Enabled {
-			continue
-		}
-		src, err := reg.Build(sc, deps)
-		if err != nil {
-			return nil, err
-		}
-		srcs = append(srcs, src)
-		// #40: loop names are free-form map keys; each source constructs only the fixed names it knows and
-		// silently ignores the rest. A typo'd enabled loop (e.g. `log_export` for `logs_export`) would
-		// otherwise pass Validate (its cadence/window are even checked, feigning validation) and then never
-		// collect — no error, no warning. Reconcile every enabled configured loop name against what the
-		// source actually built and fail fast on an unrecognised one (matching CP-H4's unknown-graph
-		// fail-fast). The known set comes from src.Loops() so no vendor loop-name knowledge leaks here.
-		built := map[string]bool{}
-		var builtNames []string
-		for _, lp := range src.Loops() {
-			if n := lp.Key().Loop; !built[n] {
-				built[n] = true
-				builtNames = append(builtNames, n)
-			}
-		}
-		for lcName, lc := range sc.Loops {
-			if lc.Enabled && !built[lcName] {
-				return nil, fmt.Errorf("source %q (type %q): configured loop %q is enabled but not recognised by the source (built loops: %s) — check for a typo", sc.SourceInstance, sc.Type, lcName, strings.Join(builtNames, ", "))
-			}
-		}
-		for _, lp := range src.Loops() {
-			lcName := lp.Key().Loop
-			lc := sc.Loops[lcName]
-			if d, ok := lp.(source.IndexedKeyDeclarer); ok {
-				if n := identityReserve + len(d.IndexedKeys()); n > streamLabelCeiling {
-					return nil, fmt.Errorf("loop %q would emit %d Loki stream labels (identity %d + indexed %d) > governance.max_stream_label_keys %d (Loki max_label_names_per_series); reduce settings.extra_indexed_fields / governance.allow_label_keys, or raise the limit only if your tenant's max_label_names_per_series was increased by Grafana staff", lcName, n, identityReserve, len(d.IndexedKeys()), streamLabelCeiling)
-				}
-			}
-			loops = append(loops, loopConfigured{loop: lp, cfg: lc})
-		}
-	}
-	if err := source.ValidateOwnership(srcs); err != nil {
-		return nil, err
-	}
-	if len(loops) == 0 {
-		return nil, fmt.Errorf("no enabled loops")
-	}
-	// Build the guard now the per-loop denylists (keyed by loop identity) are known.
-	guard := source.NewGuard(source.GuardConfig{
-		AllowLabelKeys: allowKeys,
-		// Global content denylist = the never-subtractable floor + the ENTIRE gray backstop, NOTHING
-		// subtracted. It polices the metrics path (Sample labels, additionally allow-list default-denied) and
-		// is the fallback for any logs loop with no per-loop entry. Per-loop gray-field releases live in
-		// DenyFieldKeysByLoop (#130) so one loop's opt-in can never weaken another loop's defence-in-depth
-		// backstop, and a content opt-in on a metrics loop (which merely warns it away as an unknown setting)
-		// has no effect on the guard at all.
-		DenyFieldKeys:       contentDenylist(nil),
-		DenyFieldKeysByLoop: contentDenyByLoop(loops),
-		PerSeriesBudget:     cfg.Governance.PerMetricCardinalityBudget, // per-metric cap; config-keyed, default 10k
-		OnNewLabelValue:     m.NewLabelValue,
-	})
-	// The one legacy emitter: the telemetry destination with the product identity (the same keys the
-	// stream-label budget above counted), reporting through the unlabelled hooks.
-	em := ef(EmitterSpec{
-		Endpoint:   cfg.Emit.Telemetry.OTLP.Endpoint,
-		InstanceID: cfg.Emit.Telemetry.OTLP.InstanceID,
-		Token:      cfg.Emit.Telemetry.OTLP.Token,
-		Identity:   cfg.Identity.ProductIdentity(),
-	}, m)
-	// SECOND PASS: build the runners + specs now the shared guard exists.
-	var specs []schedule.LoopSpec
-	for _, l := range loops {
-		runner := schedule.NewLoopRunner(l.loop, em, cp, guard, cfg.Queue.MaxBatches, cfg.Governance.MaxDPM, m)
-		specs = append(specs, schedule.LoopSpec{
-			Runner: runner, Loop: l.loop, Cadence: time.Duration(l.cfg.Cadence), MaxBackfill: time.Duration(l.cfg.MaxBackfill),
-			Window: time.Duration(l.cfg.Window), MaxCatchupPerTick: cfg.Governance.MaxCatchupPerTick,
-		})
-	}
-	// [#45] Auto-heal the ha.coordinator=none migration trap. buildHA constructs the single-replica Noop
-	// with a constant baseline epoch because the checkpoint keys aren't known there (the source graph
-	// hadn't been built yet). Now that the loops — hence their CheckpointKeys — exist, read the max epoch
-	// any of their durable watermarks was advanced to and floor the Noop to it. Without this, a downgrade
-	// from an HA (lease/dynamodb) deployment whose checkpoint reached epoch ≥ 2 would have every Noop write
-	// (epoch 1) rejected by the monotonic fence forever (checkpoint_fenced), re-emitting the same window at
-	// full cadence until an operator deletes the checkpoint. Single-replica has exactly one writer, so
-	// adopting a higher epoch carries no cross-writer risk — but do NOT stamp a maximal sentinel: that
-	// re-creates the trap in the none→lease direction (a fresh lease's low epoch would then be fenced). Only
-	// Noop is auto-healed; lease/dynamodb own their own epoch. A per-key Load error is non-fatal (logged and
-	// skipped — buildHA already emits a loud startup WARN for this hazard); startup must never block on it.
-	if noop, ok := coord.(coordinate.Noop); ok {
-		cur := max(int64(1), noop.Epoch)
-		maxStored := cur
-		for _, l := range loops {
-			wm, err := cp.Load(ctx, l.loop.Key())
-			if err != nil {
-				slog.Warn("could not read stored checkpoint epoch for ha.coordinator=none auto-heal; if a prior HA deployment advanced this store, writes may be fenced (#45)",
-					"loop", l.loop.Key().String(), "err", err)
-				continue
-			}
-			if wm.Epoch > maxStored {
-				maxStored = wm.Epoch
-			}
-		}
-		if maxStored > cur {
-			coord = coordinate.NoopWithEpoch(maxStored)
-			slog.Info("ha.coordinator=none adopted the stored checkpoint epoch to avoid permanently fencing watermark writes after an HA→none downgrade (#45)",
-				"epoch", maxStored)
-		}
-	}
-	// Seed the alerted {loop, reason} counters at 0 so the first event after startup is visible to
-	// increase() (#499). Optional capability, asserted on the PipelineTelemetry value: neither
-	// schedule.Metrics nor PipelineTelemetry carries it.
-	// [#387] samples_skipped is recorded under the runner's {source, loop} identity and
-	// source_data_incomplete under the bare loop name a source hook passes, so the seed takes both.
-	if s, ok := m.(interface {
-		SeedLoop(id schedule.LoopID, hookLoop string)
-	}); ok {
-		for _, l := range loops {
-			s.SeedLoop(schedule.MetricsLoopID(l.loop), l.loop.Key().Loop)
-		}
-	}
-	return &App{sched: schedule.NewScheduler(specs, m), coord: coord, specs: specs}, nil
 }
 
 // Run serves health and runs the scheduler under the coordinator until ctx is cancelled.
@@ -279,6 +386,9 @@ func (a *App) Run(ctx context.Context, health http.Handler, healthAddr string, m
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 	markReady()
 	err := a.coord.Run(runCtx, func(leaderCtx context.Context) {
+		// Run-time evidence (design §5.4): which plan this leader runs, each time it is elected, so the
+		// hash can be compared with the one the config check printed.
+		slog.Info("leader elected", "plan_hash", a.planHash, "plan_rows", a.planRows)
 		setLeader(true)        // [CP-C5] now leader → /healthz judges this replica's heartbeat
 		defer setLeader(false) // demotion → back to standby-healthy
 		a.sched.Run(leaderCtx) // blocks until leadership/ctx ends
@@ -375,12 +485,13 @@ func optedInContentFieldsForLoop(lc config.LoopConfig) map[string]bool {
 	return out
 }
 
-// optedInContentFields is the union of optedInContentFieldsForLoop across every ENABLED loop. It is no
+// optedInContentFields is the union of optedInContentFieldsForLoop across every ENABLED loop of the given
+// source configs (a group's, or every row's). It is no
 // longer used to build the guard (that is now strictly per-loop — see contentDenyByLoop, #130), but is
 // retained as the union primitive exercised by the focused #51 denylist-composition tests.
-func optedInContentFields(cfg *config.Config) map[string]bool {
+func optedInContentFields(sources []config.SourceConfig) map[string]bool {
 	out := map[string]bool{}
-	for _, sc := range cfg.Sources {
+	for _, sc := range sources {
 		if !sc.Enabled {
 			continue
 		}
@@ -415,7 +526,8 @@ func contentDenyByLoop(loops []loopConfigured) map[string][]string {
 	return out
 }
 
-// optedInIndexedFields is the ordered, de-duplicated union of every enabled loop's
+// optedInIndexedFields is the ordered, de-duplicated union, over the given source configs (a group's for
+// its guard, every row's for the content-floor check), of every enabled loop's
 // settings.extra_indexed_fields — the per-loop INDEXED-tier (Loki stream-label) promotion. The
 // composition root auto-allow-lists these in the guard (so a promoted indexed attr is never silently
 // dropped) and floor-rejects any content key. Same generic-wiring rationale as optedInContentFields (no
@@ -423,10 +535,10 @@ func contentDenyByLoop(loops []loopConfigured) map[string][]string {
 // (portkey logs_export, langsmith runs) actually consume the key in their strip; on a metrics loop the
 // key is a no-op (allow-listing it here is harmless, and a floor key is still rejected) — matching the
 // pre-existing extra_record_fields behaviour.
-func optedInIndexedFields(cfg *config.Config) []string {
+func optedInIndexedFields(sources []config.SourceConfig) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, sc := range cfg.Sources {
+	for _, sc := range sources {
 		if !sc.Enabled {
 			continue
 		}

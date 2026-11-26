@@ -23,8 +23,8 @@ is deleting the checkpoint objects.
 - `NoopWithEpoch(e)` stamps `max(1, e)`, so a baseline at or above the surviving stored epoch lets
   writes succeed. Single-replica has exactly one writer, so a higher epoch carries no cross-writer
   risk.
-- The heal is wired in `app.Build`, not in `buildHA`: checkpoint keys are not known until the source
-  graph is built, so `buildHA` only emits the loud startup warning, and `app.Build` then `Load`s each
+- The heal is wired in `app.BuildFromPlan`, not in `buildHA`: checkpoint keys are not known until the source
+  graph is built, so `buildHA` only emits the loud startup warning, and `app.BuildFromPlan` then `Load`s each
   loop's key, takes the max stored epoch and re-constructs a `Noop` through `NoopWithEpoch`. A read
   error is non-fatal (the warning already flags the hazard) and a fresh store stays at epoch 1.
 - Do not stamp a maximal sentinel epoch to dodge the fence. It re-creates the same trap in the

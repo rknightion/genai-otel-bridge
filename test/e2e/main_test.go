@@ -37,6 +37,15 @@ func ns() string {
 	return "genai-otel-bridge-e2e"
 }
 
+// busyboxImage is the utility image for the kubectl-debug freeze and resume. scripts/k3d-e2e.sh
+// flattens and imports BUSYBOX_IMAGE and exports it; the default matches the script's.
+func busyboxImage() string {
+	if v := os.Getenv("BUSYBOX_IMAGE"); v != "" {
+		return v
+	}
+	return "busybox:1.36"
+}
+
 func kubectlBin() string {
 	if v := os.Getenv("KUBECTL"); v != "" {
 		return v
@@ -138,7 +147,7 @@ func waitSteady(t *testing.T, cs *kubernetes.Clientset) {
 func freezeLeader(t *testing.T, name string) {
 	t.Helper()
 	cmd := exec.Command(kubectlBin(), "debug", "-n", ns(), "pod/"+name,
-		"--image=busybox:1.36", "--attach=false", "--",
+		"--image="+busyboxImage(), "--attach=false", "--",
 		"sh", "-c", "kill -STOP $(pidof genai-otel-bridge); sleep 600")
 	cmd.Env = os.Environ()
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -155,7 +164,7 @@ func freezeLeader(t *testing.T, name string) {
 func resumeLeader(t *testing.T, name string) {
 	t.Helper()
 	cmd := exec.Command(kubectlBin(), "debug", "-n", ns(), "pod/"+name,
-		"--image=busybox:1.36", "--attach=false", "--",
+		"--image="+busyboxImage(), "--attach=false", "--",
 		"sh", "-c", "kill -CONT $(pidof genai-otel-bridge)")
 	cmd.Env = os.Environ()
 	if out, err := cmd.CombinedOutput(); err != nil {

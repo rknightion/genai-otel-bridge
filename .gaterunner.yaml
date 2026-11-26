@@ -8,3 +8,7 @@ env:
   # Gates in other slots share that daemon: give each slot its own k3d cluster and API port.
   E2E_CLUSTER: "gob-e2e-s${GR_SLOT}"
   E2E_API_PORT: "6${GR_SLOT}45"
+  # ...and their own image tags: a shared tag can move between one slot's docker build and its k3d
+  # image import, so that slot would test another tree's binary and still report green.
+  IMAGE: "genai-otel-bridge:dev-s${GR_SLOT}"
+  E2E_HELPER_IMAGE: "genai-otel-bridge-e2e-helper:dev-s${GR_SLOT}"

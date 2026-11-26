@@ -133,6 +133,12 @@ func newAnalyticsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps sou
 		return nil, fmt.Errorf("portkey: analytics loop requires a positive window (time-bucketed source); got %s", window)
 	}
 	settle := time.Duration(lpCfg.BucketSettle)
+	// [F27] Collect floors the window end to the granularity, so a window shorter than one bucket would
+	// truncate back onto the watermark on every poll and never progress: reject it here, naming the key.
+	if window < granularity {
+		return nil, fmt.Errorf("portkey: analytics loop window (%s) must be at least the %s bucket granularity (windows are minute-aligned; a shorter window can never advance)", window, granularity)
+	}
+
 	// [#57] Mirror the AR-HIGH window guard for the OTHER two silent-no-op triggers on a raw-YAML config
 	// (config.Load applies no defaults for these; the chart renders 50m/90m). Collect computes
 	// start=now-bootstrap clamped to the now-max_backfill floor, and until=now-settle:

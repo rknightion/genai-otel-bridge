@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -108,6 +109,27 @@ func (l *logsExportLoop) cancelExport(ctx context.Context, jobID string) error {
 	return l.lifecycle(ctx, http.MethodPost, "/logs/exports/"+url.PathEscape(jobID)+"/cancel", nil, nil)
 }
 
+// statusError is a non-2xx control-plane response. It renders exactly as the plain error did before it was
+// typed; the type lets the step machine tell a job the control plane no longer knows (404/410) from a
+// transient failure.
+type statusError struct {
+	method, path string
+	code         int
+	snippet      string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("portkey logs_export: %s %s status %d%s", e.method, e.path, e.code, errBodySuffix(e.snippet))
+}
+
+// isLostJob reports whether err says the export job id is unknown to the control plane: 404 Not Found or
+// 410 Gone (a corrected workspace_id, a key rotated to another workspace, a purged or expired export).
+// 401, 403, 429 and 5xx are not: they retry.
+func isLostJob(err error) bool {
+	var se *statusError
+	return errors.As(err, &se) && (se.code == http.StatusNotFound || se.code == http.StatusGone)
+}
+
 // lifecycle performs one control-plane call via the SHARED httpx client (rate-limited + egress-guarded),
 // sets the vendor auth header, and decodes a 2xx JSON body into out (nil ⇒ discard). A non-2xx is a
 // plain error carrying the status — these calls drive the step machine, where any error means "no
@@ -140,7 +162,7 @@ func (l *logsExportLoop) lifecycle(ctx context.Context, method, path string, req
 		if source.IsAuthStatus(resp.StatusCode) && l.onAuthError != nil {
 			l.onAuthError(l.Key().Loop, l.sourceInstance)
 		}
-		return fmt.Errorf("portkey logs_export: %s %s status %d%s", method, path, resp.StatusCode, errBodySuffix(httpx.ErrSnippet(resp)))
+		return &statusError{method: method, path: path, code: resp.StatusCode, snippet: httpx.ErrSnippet(resp)}
 	}
 	if out != nil {
 		if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(out); err != nil {

@@ -42,6 +42,8 @@ type fakeExport struct {
 	failStatus         string
 	startFailStatus    int // when non-zero, POST /start returns this HTTP status + an AB01 body (lost-ack/non-draft test)
 	httpStatusOverride int // when non-zero, every control-plane call returns this HTTP status (auth-fail test)
+	pollStatusCode     int // when non-zero, GET /logs/exports/<id> (job poll) returns this HTTP status
+	downloadStatusCode int // when non-zero, GET /logs/exports/<id>/download returns this HTTP status
 	signedURLHost      string
 	pageBody           func(page int) string // JSONL body for a page
 	createBodies       []map[string]json.RawMessage
@@ -100,6 +102,10 @@ func (f *fakeExport) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/download"):
 		id := jobIDFromPath(p, "/download")
+		if f.downloadStatusCode != 0 {
+			w.WriteHeader(f.downloadStatusCode)
+			return
+		}
 		host := f.srv.Listener.Addr().String()
 		if f.signedURLHost != "" {
 			host = f.signedURLHost
@@ -120,6 +126,10 @@ func (f *fakeExport) handle(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader([]byte(f.pageBody(page))))
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/logs/exports/"):
 		id := strings.TrimPrefix(p, "/logs/exports/")
+		if f.pollStatusCode != 0 {
+			w.WriteHeader(f.pollStatusCode)
+			return
+		}
 		j := f.jobs[id]
 		if j == nil {
 			w.WriteHeader(http.StatusNotFound)
@@ -843,5 +853,114 @@ func TestLogsExportParkedAtEndOfObjectRecovers(t *testing.T) {
 	}
 	if !b.Watermark.Time.After(start.Time) {
 		t.Fatalf("watermark did not advance: %+v", b.Watermark)
+	}
+}
+
+// lostJobFixture builds a loop whose persisted cursor is in phase with a job id the control plane does not
+// know, and records every OnDataIncomplete reason.
+func lostJobFixture(t *testing.T, phase string, mut func(*fakeExport), pollDeadline string) (*logsExportLoop, *[]string, model.Watermark) {
+	t.Helper()
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	f := newFakeExport(t, 3, func(int) string { return nLines(3, "m") })
+	if mut != nil {
+		mut(f)
+	}
+	var events []string
+	l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}),
+		source.Deps{OnDataIncomplete: func(_ string, r source.IncompleteReason) { events = append(events, string(r)) }}, now)
+	cur := exportCursor{Phase: phase, JobID: "job-gone", WinMin: "2026-06-19T10:00:00Z",
+		WinMax: "2026-06-19T11:00:00Z", Pages: 1, TotalRecords: 3, PollDeadline: pollDeadline}
+	return l, &events, model.Watermark{Time: now.Add(-2 * time.Hour), Cursor: cur.encode()}
+}
+
+func assertResetIdle(t *testing.T, b model.Batch, err error, events *[]string, want source.IncompleteReason, since model.Watermark) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("a lost job must restart the window, not error: %v", err)
+	}
+	if got := decodeCursor(b.Watermark.Cursor).Phase; got != phaseIdle {
+		t.Fatalf("cursor phase = %q, want idle", got)
+	}
+	if !b.Watermark.Time.Equal(since.Time) {
+		t.Fatalf("watermark time moved to %s; a restart must keep %s", b.Watermark.Time, since.Time)
+	}
+	if len(*events) != 1 || (*events)[0] != string(want) {
+		t.Fatalf("OnDataIncomplete = %v, want exactly [%s]", *events, want)
+	}
+}
+
+// TestLogsExportLostJobPolling: a poll answered 404 (unknown job; the fake default) or 410 resets the
+// cursor to idle and counts export_failed once (AC1).
+func TestLogsExportLostJobPolling(t *testing.T) {
+	for _, code := range []int{0, http.StatusNotFound, http.StatusGone} {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			l, events, since := lostJobFixture(t, phasePolling, func(f *fakeExport) { f.pollStatusCode = code }, "2026-06-19T10:30:00Z")
+			b, err := l.Collect(context.Background(), since)
+			assertResetIdle(t, b, err, events, source.IncompleteExportFailed, since)
+		})
+	}
+}
+
+// TestLogsExportLostJobDownloadURL: the download-URL call answered 404 or 410 resets and counts once (AC2).
+func TestLogsExportLostJobDownloadURL(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusGone} {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			l, events, since := lostJobFixture(t, phaseDownloading, func(f *fakeExport) { f.downloadStatusCode = code }, "")
+			b, err := l.Collect(context.Background(), since)
+			assertResetIdle(t, b, err, events, source.IncompleteExportFailed, since)
+		})
+	}
+}
+
+// TestLogsExportLostJobRecoveryPoll: a /start error whose recovery poll finds the job gone resets and counts once.
+func TestLogsExportLostJobRecoveryPoll(t *testing.T) {
+	l, events, since := lostJobFixture(t, phaseCreated, func(f *fakeExport) { f.startFailStatus = http.StatusBadRequest }, "")
+	b, err := l.Collect(context.Background(), since)
+	assertResetIdle(t, b, err, events, source.IncompleteExportFailed, since)
+}
+
+// TestLogsExportLostJobRecoveryPollStillDraftKeepsStartError: the lost-ACK recovery is unchanged; a poll that
+// shows a draft keeps returning the original start error.
+func TestLogsExportLostJobRecoveryPollStillDraftKeepsStartError(t *testing.T) {
+	l, events, since := lostJobFixture(t, phaseCreated, func(f *fakeExport) {
+		f.startFailStatus = http.StatusBadRequest
+		f.jobs["job-gone"] = &fakeJob{status: statusDraft}
+		f.failStatus = statusDraft // the fake reports this status from every job poll
+	}, "")
+	if _, err := l.Collect(context.Background(), since); err == nil || len(*events) != 0 {
+		t.Fatalf("want the start error and no event, got err=%v events=%v", err, *events)
+	}
+}
+
+// TestLogsExportLostJobPollPersistentFailurePastDeadline: a poll that keeps failing with a 5xx once
+// PollDeadline has passed restarts the window as export_stuck (AC3).
+func TestLogsExportLostJobPollPersistentFailurePastDeadline(t *testing.T) {
+	l, events, since := lostJobFixture(t, phasePolling, func(f *fakeExport) { f.pollStatusCode = http.StatusServiceUnavailable }, "2026-06-19T10:30:00Z")
+	b, err := l.Collect(context.Background(), since)
+	assertResetIdle(t, b, err, events, source.IncompleteExportStuck, since)
+}
+
+// TestLogsExportPollErrorBeforeDeadlineKeepsCursor: 401, 403, 429 and 5xx before the deadline stay an error
+// with no event and no cursor change (AC4); a 404 on the download-URL call is the only lost-job signal there.
+func TestLogsExportPollErrorBeforeDeadlineKeepsCursor(t *testing.T) {
+	for _, code := range []int{401, 403, 429, 500, 503} {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			l, events, since := lostJobFixture(t, phasePolling, func(f *fakeExport) { f.pollStatusCode = code }, "2026-06-19T13:00:00Z")
+			b, err := l.Collect(context.Background(), since)
+			if err == nil {
+				t.Fatalf("want an error, got batch %+v", b)
+			}
+			if len(*events) != 0 || b.Watermark != (model.Watermark{}) {
+				t.Fatalf("an error tick must not advance or count: events=%v wm=%+v", *events, b.Watermark)
+			}
+		})
+	}
+	for _, code := range []int{401, 403, 429, 500} {
+		t.Run(fmt.Sprintf("download_status_%d", code), func(t *testing.T) {
+			l, events, since := lostJobFixture(t, phaseDownloading, func(f *fakeExport) { f.downloadStatusCode = code }, "")
+			if _, err := l.Collect(context.Background(), since); err == nil || len(*events) != 0 {
+				t.Fatalf("want error and no event, got err=%v events=%v", err, *events)
+			}
+		})
 	}
 }

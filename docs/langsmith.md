@@ -17,6 +17,13 @@ independently enabled via its own `loops.<name>` config block.
 
 ---
 
+!!! note "Settings"
+    This page describes the settings that need explanation, not every key. The complete set for
+    each loop, with defaults and a one-line description each, is the generated example block in
+    [`deploy/helm/values.yaml`](https://github.com/rknightion/genai-otel-bridge/blob/main/deploy/helm/values.yaml).
+
+---
+
 ## Sessions loop
 
 The sessions loop polls `GET /sessions?include_stats=true` (relative to `base_url`) and emits per-session

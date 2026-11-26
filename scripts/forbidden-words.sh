@@ -27,16 +27,31 @@ list_candidates() {
   if [ "$#" -gt 0 ]; then printf '%s\n' "$@"; else git ls-files; fi
 }
 
+# Validate the pattern once. grep exits 2 on a malformed regex; without this check that status would be
+# read as "no hit" and the whole sweep (credential shapes included) would pass clean. Never print the
+# pattern: it is the private term list.
+pre=0
+printf '' | grep -E -e "$PATTERN" >/dev/null 2>&1 || pre=$?
+if [ "$pre" -gt 1 ]; then
+  echo "forbidden-words: invalid pattern (grep exit $pre)" >&2
+  exit 2
+fi
+
 hits=""
 scanned=0
 while IFS= read -r f; do
   is_private "$f" && continue          # never scan private-only paths (they legitimately hold infra)
   [ -f "$f" ] || continue              # skip deletions / non-files
   scanned=$((scanned + 1))
-  if m=$(grep -nIiE -e "$PATTERN" "$f" 2>/dev/null); then  # -e: pattern may start with '-' (private-key header)
+  rc=0
+  m=$(grep -nIiE -e "$PATTERN" "$f" 2>/dev/null) || rc=$?  # -e: pattern may start with '-' (private-key header)
+  if [ "$rc" -eq 0 ]; then
     hits="${hits}--- ${f}
 ${m}
 "
+  elif [ "$rc" -ne 1 ]; then  # 1 = no match; anything else is a grep failure, never a pass
+    echo "forbidden-words: grep failed (exit $rc) on $f" >&2
+    exit 2
   fi
 done < <(list_candidates "$@")
 

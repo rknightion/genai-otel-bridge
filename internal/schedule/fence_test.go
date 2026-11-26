@@ -37,7 +37,7 @@ type errCapMetrics struct {
 }
 
 func newErrCap() *errCapMetrics { return &errCapMetrics{kinds: map[string]int{}} }
-func (m *errCapMetrics) EmitError(_, kind string) {
+func (m *errCapMetrics) EmitError(_ LoopID, kind string) {
 	m.mu.Lock()
 	m.kinds[kind]++
 	m.mu.Unlock()
@@ -100,9 +100,9 @@ type stateCapMetrics struct {
 func newStateCap() *stateCapMetrics {
 	return &stateCapMetrics{errCapMetrics: errCapMetrics{kinds: map[string]int{}}}
 }
-func (m *stateCapMetrics) LoopDegraded(loop, reason string, on bool) {
+func (m *stateCapMetrics) LoopDegraded(id LoopID, reason string, on bool) {
 	m.dmu.Lock()
-	m.degrades = append(m.degrades, degradeCall{loop: loop, reason: reason, on: on})
+	m.degrades = append(m.degrades, degradeCall{loop: id.Loop, reason: reason, on: on})
 	m.dmu.Unlock()
 }
 func (m *stateCapMetrics) degradeCalls() []degradeCall {

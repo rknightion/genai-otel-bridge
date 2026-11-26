@@ -54,7 +54,7 @@ threshold alerts/panels rely on the recording rules being present). Re-pull to r
 | Profiling | the poller's OWN Pyroscope profiles (`service_name=genai-otel-bridge`): CPU, heap in-use, goroutines, CPU flame graph |
 
 Three datasource variables — `${datasource}` (Prometheus, `grafanacloud-prom`), `${loki}`
-(`grafanacloud-logs`), `${pyroscope}` (`grafanacloud-profiles`) — plus a multi `$loop` and a multi `$namespace` (a Loki label-values query; the Logs panels use it). Stack-agnostic;
+(`grafanacloud-logs`), `${pyroscope}` (`grafanacloud-profiles`) — plus a multi `$loop` and a multi `$namespace` (a Loki label-values query; the Logs panels use it). `$loop` offers base loop names (a fan-out `logs_export,api_key_use_case=<slug>` instance appears as `logs_export`), so one selection shows both the runner-fed series of every instance and the hook-fed counters, which carry the bare loop name. Stack-agnostic;
 pick the datasources per stack. Push: `gcx resources push -p deploy/grafana/self-obs --context
 <self-obs-stack>` (push the `Folder` first, or the dashboard 404s on the missing folder).
 

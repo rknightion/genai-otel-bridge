@@ -54,6 +54,15 @@ type IndexedKeyDeclarer interface {
 	IndexedKeys() []string
 }
 
+// MetricsLoopNamer is an OPTIONAL capability (not part of the frozen Loop): a loop whose instances share
+// one Key().Loop (a fan-out, such as one logs_export instance per api_key_use_case) returns a distinct,
+// configuration-derived name for the self-metrics `loop` label, so each instance keeps its own series.
+// The value must come from configuration, never from upstream data, to keep the label bounded. A loop
+// without it is labelled with Key().Loop. [#387]
+type MetricsLoopNamer interface {
+	MetricsLoopName() string
+}
+
 // Deps carries composition-root dependencies that are NOT config data — cross-cutting hooks a source
 // needs but can't get from YAML. The zero value is a no-op (nil hooks), so tests can pass Deps{}.
 type Deps struct {

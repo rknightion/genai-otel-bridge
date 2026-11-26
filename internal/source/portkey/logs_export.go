@@ -196,16 +196,25 @@ func (l *logsExportLoop) IndexedKeys() []string {
 // distinct per-cursor watermark — ownership-safe because the loop declares an EMPTY series set (no
 // duplicate-series risk). The legacy unlabelled path (useCase=="") leaves naming=="logs_export" (unchanged key).
 func (l *logsExportLoop) Key() model.CheckpointKey {
-	naming := "logs_export"
-	if l.useCase != "" {
-		naming += ",api_key_use_case=" + l.useCase
-	}
 	return model.CheckpointKey{
 		SourceInstance:    l.sourceInstance,
 		Loop:              "logs_export",
-		OutputFingerprint: model.Fingerprint(l.IndexedKeys(), naming),
+		OutputFingerprint: model.Fingerprint(l.IndexedKeys(), l.naming()),
 	}
 }
+
+// naming is the key's naming component: "logs_export", plus the use-case slug for a fan-out instance.
+func (l *logsExportLoop) naming() string {
+	if l.useCase == "" {
+		return "logs_export"
+	}
+	return "logs_export,api_key_use_case=" + l.useCase
+}
+
+// MetricsLoopName labels the self-metrics of a fan-out instance with the key's naming component
+// (which folds in the configured use-case slug), so instances that share Key().Loop keep distinct
+// last_success / window_lag / queue_depth series. The legacy unlabelled path keeps "logs_export". [#387]
+func (l *logsExportLoop) MetricsLoopName() string { return l.naming() }
 
 // Collect advances the export state machine by one step. It returns either an EMPTY batch with the
 // watermark unchanged (a job is mid-flight — the loop does not stall and window_lag reflects in-flight

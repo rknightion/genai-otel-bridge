@@ -27,7 +27,7 @@ spec:
       relativeTimeRange: {from: 16m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck|window_oversize"}[15m])) > 0'
+        expr: 'sum by (source, loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck|window_oversize"}[15m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

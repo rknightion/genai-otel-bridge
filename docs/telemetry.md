@@ -86,25 +86,25 @@ live.
 | `genai_otel_bridge_auth_errors_total` | `genai_otel_bridge_auth_errors_total` | counter | — | loop, source | — | upstream source API responded 401/403 — a credential failure |
 | `genai_otel_bridge_bucket_revised_after_settle_age_seconds` | `genai_otel_bridge_bucket_revised_after_settle_age_seconds` | histogram | s | loop | — | base2 exponential histogram: age (now − bucketEnd) of a settled bucket observed to change after bucket_settle |
 | `genai_otel_bridge_bucket_revised_after_settle_total` | `genai_otel_bridge_bucket_revised_after_settle_total` | counter | — | loop | — | settled buckets observed to change value after settle (late arrival beyond bucket_settle) |
-| `genai_otel_bridge_emit_errors_total` | `genai_otel_bridge_emit_errors_total` | counter | — | loop, kind | — | emit errors by kind |
+| `genai_otel_bridge_emit_errors_total` | `genai_otel_bridge_emit_errors_total` | counter | — | source, loop, kind | — | emit errors by kind |
 | `genai_otel_bridge_emit_partial_success_rejected_total` | `genai_otel_bridge_emit_partial_success_rejected_total` | counter | — | plane | — | data points or log records the gateway rejected via an OTLP 200 partial_success response (rejected_data_points/rejected_log_records) |
 | `genai_otel_bridge_emit_request_duration_seconds` | `genai_otel_bridge_emit_request_duration_seconds` | histogram | s | plane, status_class | — | base2 exponential histogram: outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs) |
-| `genai_otel_bridge_emitted_logs_total` | `genai_otel_bridge_emitted_logs_total` | counter | — | loop | — | log records emitted (logs-export loop) |
-| `genai_otel_bridge_emitted_total` | `genai_otel_bridge_emitted_total` | counter | — | loop | — | samples emitted |
+| `genai_otel_bridge_emitted_logs_total` | `genai_otel_bridge_emitted_logs_total` | counter | — | source, loop | — | log records emitted (logs-export loop) |
+| `genai_otel_bridge_emitted_total` | `genai_otel_bridge_emitted_total` | counter | — | source, loop | — | samples emitted |
 | `genai_otel_bridge_go_heap_inuse_bytes` | `genai_otel_bridge_go_heap_inuse_bytes` | gauge | By | — | — | bytes in in-use heap spans (runtime.MemStats.HeapInuse) |
 | `genai_otel_bridge_go_memory_limit_bytes` | `genai_otel_bridge_go_memory_limit_bytes` | gauge | By | — | — | the Go runtime soft memory limit (GOMEMLIMIT); 0 when no limit is set |
-| `genai_otel_bridge_guard_dropped_total` | `genai_otel_bridge_guard_dropped_total` | counter | — | loop | — | data points or log records dropped by the governance guard |
-| `genai_otel_bridge_last_success_timestamp_seconds` | `genai_otel_bridge_last_success_timestamp_seconds` | gauge | s | loop | — | unix time of the last fully handled window |
+| `genai_otel_bridge_guard_dropped_total` | `genai_otel_bridge_guard_dropped_total` | counter | — | source, loop | — | data points or log records dropped by the governance guard |
+| `genai_otel_bridge_last_success_timestamp_seconds` | `genai_otel_bridge_last_success_timestamp_seconds` | gauge | s | source, loop | — | unix time of the last fully handled window |
 | `genai_otel_bridge_leader` | `genai_otel_bridge_leader_ratio` | gauge | 1 | — | — | 1 while this replica holds leadership, 0 while it is a standby; recorded by every replica from startup |
-| `genai_otel_bridge_loop_degraded` | `genai_otel_bridge_loop_degraded_ratio` | gauge | 1 | loop, reason | — | 1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends |
+| `genai_otel_bridge_loop_degraded` | `genai_otel_bridge_loop_degraded_ratio` | gauge | 1 | source, loop, reason | — | 1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends |
 | `genai_otel_bridge_new_label_values_total` | `genai_otel_bridge_new_label_values_total` | counter | — | series | — | new label-value combinations seen per series |
-| `genai_otel_bridge_queue_depth` | `genai_otel_bridge_queue_depth_ratio` | gauge | 1 | loop | — | 1 while a batch is queued or being emitted, else 0 |
-| `genai_otel_bridge_samples_capped_total` | `genai_otel_bridge_samples_capped_total` | counter | — | loop, reason | — | samples suppressed by the DPM cap (coalesced last-write-wins per series-minute) |
-| `genai_otel_bridge_samples_skipped_total` | `genai_otel_bridge_samples_skipped_total` | counter | — | loop, reason | — | data points or log records skipped with a counted gap |
+| `genai_otel_bridge_queue_depth` | `genai_otel_bridge_queue_depth_ratio` | gauge | 1 | source, loop | — | 1 while a batch is queued or being emitted, else 0 |
+| `genai_otel_bridge_samples_capped_total` | `genai_otel_bridge_samples_capped_total` | counter | — | source, loop, reason | — | samples suppressed by the DPM cap (coalesced last-write-wins per series-minute) |
+| `genai_otel_bridge_samples_skipped_total` | `genai_otel_bridge_samples_skipped_total` | counter | — | source, loop, reason | — | data points or log records skipped with a counted gap |
 | `genai_otel_bridge_source_capability_total` | `genai_otel_bridge_source_capability_total` | counter | — | loop, graph, state | — | source capability or permission condition by graph and closed state: endpoint-absent, plan-unsupported, permission-denied, no-data, transient-404, or schema-changed. endpoint-absent and plan-unsupported are enumerated but currently producerless because one 404 cannot distinguish them from a transient failure; steady versus intermittent increments remain a query-time judgement |
 | `genai_otel_bridge_source_data_incomplete_total` | `genai_otel_bridge_source_data_incomplete_total` | counter | — | loop, reason | — | source data was incomplete for a closed reason: window_truncated, sessions_truncated, backfill_skipped, window_oversize, span_stats_unavailable, duplicate_dimension, trace_id_unparsed, line_oversize, line_unparseable, export_stuck, export_failed, or endpoint_unavailable |
 | `genai_otel_bridge_upstream_request_duration_seconds` | `genai_otel_bridge_upstream_request_duration_seconds` | histogram | s | target, method, status_class | — | base2 exponential histogram: outbound request latency to upstream source APIs (time to response headers) |
-| `genai_otel_bridge_window_lag_seconds` | `genai_otel_bridge_window_lag_seconds` | gauge | s | loop | — | now minus the watermark frontier |
+| `genai_otel_bridge_window_lag_seconds` | `genai_otel_bridge_window_lag_seconds` | gauge | s | source, loop | — | now minus the watermark frontier |
 
 #### Traces
 

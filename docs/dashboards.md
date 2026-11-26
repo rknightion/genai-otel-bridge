@@ -110,7 +110,7 @@ provisioning.
 
 | Rule | What it computes |
 |------|-----------------|
-| `genai-otel-bridge:last_success_age:seconds` | `time() − max by (loop)(last_success_timestamp_seconds)` — staleness in seconds per loop |
+| `genai-otel-bridge:last_success_age:seconds` | `time() − max by (source, loop)(last_success_timestamp_seconds)` — staleness in seconds per loop instance |
 | `genai-otel-bridge:last_success_age:baseline6h` | Trailing 6h p90 of `last_success_age:seconds` per loop — the self-relative staleness baseline |
 | `genai-otel-bridge:freshness_ratio` | `last_success_age:seconds / clamp_min(last_success_age:baseline6h, 120)` — the ratio the dashboard colours on; the 120s floor stops a fast, quiet loop dividing by about 0 |
 | `genai-otel-bridge:upstream_error_ratio:5m` | Error ratio per upstream `target`, for the upstream-health panel. The `GenaiOtelBridgeUpstreamErrorBudget` alert inlines its own query and does not read this rule |

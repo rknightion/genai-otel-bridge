@@ -116,7 +116,7 @@ spec:
       allValue: .+
       multi: true
       options: []
-      regex: ''
+      regex: /^([^,]+)/
       sort: alphabeticalAsc
       refresh: onDashboardLoad
       skipUrlSync: false
@@ -183,7 +183,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: (max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2) * (max(time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})) < bool 10800)
+                    expr: (max(genai-otel-bridge:freshness_ratio{loop=~"$loop(,.*)?"}) < bool 2) * (max(time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop(,.*)?"})) < bool 10800)
                     legendFormat: ''
                     range: false
                     instant: true
@@ -254,7 +254,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(present_over_time(genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"}[15m]))
+                    expr: max(present_over_time(genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop(,.*)?"}[15m]))
                     legendFormat: ''
                     range: false
                     instant: true
@@ -388,7 +388,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(genai-otel-bridge:freshness_ratio{loop=~"$loop"})
+                    expr: max(genai-otel-bridge:freshness_ratio{loop=~"$loop(,.*)?"})
                     legendFormat: ''
                     range: false
                     instant: true
@@ -450,7 +450,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(genai_otel_bridge_window_lag_seconds{loop=~"$loop"})
+                    expr: max(genai_otel_bridge_window_lag_seconds{loop=~"$loop(,.*)?"})
                     legendFormat: ''
                     range: false
                     instant: true
@@ -512,7 +512,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: (sum(increase(genai_otel_bridge_emit_errors_total{loop=~"$loop",kind!="collect"}[1h])) or vector(0))
+                    expr: (sum(increase(genai_otel_bridge_emit_errors_total{loop=~"$loop(,.*)?",kind!="collect"}[1h])) or vector(0))
                     legendFormat: ''
                     range: false
                     instant: true
@@ -572,8 +572,8 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: genai-otel-bridge:freshness_ratio{loop=~"$loop"}
-                    legendFormat: '{{loop}}'
+                    expr: genai-otel-bridge:freshness_ratio{loop=~"$loop(,.*)?"}
+                    legendFormat: '{{source}} / {{loop}}'
                     range: true
                     instant: false
                     exemplar: false
@@ -643,7 +643,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}} samples'
                     range: true
                     instant: false
@@ -661,7 +661,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_logs_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}} logs'
                     range: true
                     instant: false
@@ -719,8 +719,8 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: genai_otel_bridge_window_lag_seconds{loop=~"$loop"}
-                    legendFormat: '{{loop}}'
+                    expr: genai_otel_bridge_window_lag_seconds{loop=~"$loop(,.*)?"}
+                    legendFormat: '{{source}} / {{loop}}'
                     range: true
                     instant: false
                     exemplar: false
@@ -777,8 +777,8 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})
-                    legendFormat: '{{loop}} age'
+                    expr: time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop(,.*)?"})
+                    legendFormat: '{{source}} / {{loop}} age'
                     range: true
                     instant: false
                     exemplar: false
@@ -795,8 +795,8 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: genai-otel-bridge:last_success_age:baseline6h{loop=~"$loop"}
-                    legendFormat: '{{loop}} baseline'
+                    expr: genai-otel-bridge:last_success_age:baseline6h{loop=~"$loop(,.*)?"}
+                    legendFormat: '{{source}} / {{loop}} baseline'
                     range: true
                     instant: false
                     exemplar: false
@@ -911,7 +911,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: genai-otel-bridge:freshness_ratio{loop="$loop"}
+                    expr: genai-otel-bridge:freshness_ratio{loop=~"$loop(,.*)?"}
                     legendFormat: ''
                     range: false
                     instant: true
@@ -963,7 +963,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1021,7 +1021,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_logs_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_emitted_logs_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1079,7 +1079,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, kind) (rate(genai_otel_bridge_emit_errors_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, kind) (rate(genai_otel_bridge_emit_errors_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{kind}}'
                     range: true
                     instant: false
@@ -1137,8 +1137,8 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max by (loop) (genai_otel_bridge_queue_depth_ratio{loop=~"$loop"})
-                    legendFormat: '{{loop}}'
+                    expr: max by (source, loop) (genai_otel_bridge_queue_depth_ratio{loop=~"$loop(,.*)?"})
+                    legendFormat: '{{source}} / {{loop}}'
                     range: true
                     instant: false
                     exemplar: false
@@ -1195,7 +1195,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop, reason) (rate(genai_otel_bridge_samples_skipped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop, reason) (rate(genai_otel_bridge_samples_skipped_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}} / {{reason}}'
                     range: true
                     instant: false
@@ -1253,7 +1253,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(genai_otel_bridge_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_samples_capped_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1311,7 +1311,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(genai_otel_bridge_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_guard_dropped_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -1503,8 +1503,8 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio{loop=~"$loop"})
-                    legendFormat: '{{loop}} / {{reason}}'
+                    expr: max by (source, loop, reason) (genai_otel_bridge_loop_degraded_ratio{loop=~"$loop(,.*)?"})
+                    legendFormat: '{{source}} / {{loop}} / {{reason}}'
                     range: true
                     instant: false
                     exemplar: false
@@ -2093,7 +2093,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(genai_otel_bridge_guard_dropped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_guard_dropped_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false
@@ -2151,7 +2151,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: sum by (loop) (rate(genai_otel_bridge_samples_capped_total{loop=~"$loop"}[$__rate_interval]))
+                    expr: sum by (loop) (rate(genai_otel_bridge_samples_capped_total{loop=~"$loop(,.*)?"}[$__rate_interval]))
                     legendFormat: '{{loop}}'
                     range: true
                     instant: false

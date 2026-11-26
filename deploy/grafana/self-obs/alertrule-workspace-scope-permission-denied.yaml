@@ -25,7 +25,7 @@ spec:
       relativeTimeRange: {from: 16m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop) (increase(genai_otel_bridge_source_capability_total{graph="workspace_scope",state="permission-denied"}[15m])) > 0'
+        expr: 'sum by (source, loop) (increase(genai_otel_bridge_source_capability_total{graph="workspace_scope",state="permission-denied"}[15m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

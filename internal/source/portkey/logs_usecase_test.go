@@ -131,3 +131,33 @@ func TestLogsExportAPIKeyIDsFilterBody(t *testing.T) {
 		}
 	}
 }
+
+// TestLogsMetricsLoopName [#387]: fan-out instances share Key().Loop but get distinct, config-derived
+// self-metrics loop names (the key's naming component); the legacy unlabelled path keeps "logs_export".
+func TestLogsMetricsLoopName(t *testing.T) {
+	src, err := New(logsUseCaseCfg([]config.APIKeyUseCase{
+		{Label: "Data Gen", APIKeyIDs: []string{"uuid-a"}},
+		{Label: "Content Gen", APIKeyIDs: []string{"uuid-b"}},
+	}), source.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, l := range src.Loops() {
+		n, ok := l.(source.MetricsLoopNamer)
+		if !ok {
+			t.Fatal("logs_export must implement source.MetricsLoopNamer")
+		}
+		names = append(names, n.MetricsLoopName())
+	}
+	if len(names) != 2 || names[0] != "logs_export,api_key_use_case=data_gen" || names[1] != "logs_export,api_key_use_case=content_gen" {
+		t.Fatalf("fan-out metrics loop names=%v", names)
+	}
+	legacy, err := New(logsUseCaseCfg(nil), source.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := legacy.Loops()[0].(source.MetricsLoopNamer).MetricsLoopName(); got != "logs_export" {
+		t.Fatalf("legacy metrics loop name=%q want logs_export", got)
+	}
+}

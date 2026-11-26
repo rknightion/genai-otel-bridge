@@ -228,9 +228,13 @@ func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, 
 	}
 	// Seed the alerted {loop, reason} counters at 0 so the first event after startup is visible to
 	// increase() (#499). Optional capability: schedule.Metrics stays unchanged.
-	if s, ok := m.(interface{ SeedLoop(loop string) }); ok {
+	// [#387] samples_skipped is recorded under the runner's {source, loop} identity and
+	// source_data_incomplete under the bare loop name a source hook passes, so the seed takes both.
+	if s, ok := m.(interface {
+		SeedLoop(id schedule.LoopID, hookLoop string)
+	}); ok {
 		for _, l := range loops {
-			s.SeedLoop(l.loop.Key().Loop)
+			s.SeedLoop(schedule.MetricsLoopID(l.loop), l.loop.Key().Loop)
 		}
 	}
 	return &App{sched: schedule.NewScheduler(specs, m), coord: coord, specs: specs}, nil

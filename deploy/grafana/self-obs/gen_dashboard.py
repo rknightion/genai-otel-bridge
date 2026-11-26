@@ -18,7 +18,15 @@ PROM = "${datasource}"
 LOKI = "${loki}"
 PYRO = "${pyroscope}"
 
-LOOP = '{loop=~"$loop"}'
+# [#387] $loop offers BASE loop names: its regex keeps the part before a comma, so a fan-out
+# logs_export instance ("logs_export,api_key_use_case=<slug>" on the runner-fed metrics) is offered
+# as "logs_export". Runner-fed metrics match the base name plus an optional ",..." suffix (LOOP);
+# hook-fed counters (bucket_revised_after_settle*, source_capability, source_data_incomplete,
+# auth_errors) carry the bare Key().Loop and match it exactly (HOOK_LOOP). Selecting a loop therefore
+# shows both kinds. TestDashboardLoopFilterMatchesEveryInstrument (internal/selfobs) checks every
+# selector against the label each metric really carries.
+LOOP = '{loop=~"$loop(,.*)?"}'
+HOOK_LOOP = '{loop=~"$loop"}'
 RI = "$__rate_interval"
 # The poller's OWN operational logs (Go slog -> stdout -> Alloy -> Loki). This is the
 # integrator process, NOT the high-volume republished product logs (service_namespace=genai-otel-bridge).
@@ -140,33 +148,33 @@ def add(p):
 
 # === Tab: Overview / SLO =====================================================
 add(stat(100, "Loops healthy", "HEALTHY when no selected loop is staler than 2x its OWN 6h baseline (max freshness_ratio < 2) AND none is older than the 3h absolute ceiling of GenaiOtelBridgePollerStale (a long stall absorbs the self-relative baseline, so the ratio alone turns green again). Self-relative — won't read STALE just because a slow log-export loop is legitimately tens of minutes behind. Needs the recording rules pushed.",
-         '(max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2) * (max(time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})) < bool 10800)', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=HEALTHY_MAP))
+         '(max(genai-otel-bridge:freshness_ratio{loop=~"$loop(,.*)?"}) < bool 2) * (max(time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop(,.*)?"})) < bool 10800)', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=HEALTHY_MAP))
 add(stat(101, "Leader present", "1 (PRESENT) if any selected loop exported a timestamp in the last 15m. ABSENT => leader gone / never emitted (distinct from stale). Inline — no recording rule required.",
-         'max(present_over_time(genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"}[15m]))', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=PRESENT_MAP))
+         'max(present_over_time(genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop(,.*)?"}[15m]))', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=PRESENT_MAP))
 add(stat(102, "Replicas emitting", "Distinct service_instance_id self-reporting genai_otel_bridge_leader_ratio (every replica records it from startup). <2 => no standby (GenaiOtelBridgeNoStandby). 2 is the healthy HA steady state.",
          "count(max by (service_instance_id) (last_over_time(genai_otel_bridge_leader_ratio[5m])))", "short", color="value", steps_=steps((None, "red"), (2, "green"))))
 add(stat(103, "Worst freshness ratio", "max(genai-otel-bridge:freshness_ratio): each loop's staleness over its OWN trailing-6h p90 baseline. <1.5 normal, >2 = much staler than this loop's normal. Uniform scale across loops of any cadence. Needs the recording rules pushed.",
-         'max(genai-otel-bridge:freshness_ratio{loop=~"$loop"})', "none", color="background", graph="area", steps_=RATIO_STEPS))
+         'max(genai-otel-bridge:freshness_ratio{loop=~"$loop(,.*)?"})', "none", color="background", graph="area", steps_=RATIO_STEPS))
 add(stat(104, "Max window lag", "now - watermark frontier, worst loop. Floors at ~bucket_settle+cadence by design; a sustained rise = a loop falling behind.",
-         'max(genai_otel_bridge_window_lag_seconds{loop=~"$loop"})', "s", color="value", graph="area", steps_=steps((None, "green"), (1800, "yellow"), (3600, "red"))))
+         'max(genai_otel_bridge_window_lag_seconds{loop=~"$loop(,.*)?"})', "s", color="value", graph="area", steps_=steps((None, "green"), (1800, "yellow"), (3600, "red"))))
 add(stat(105, "Fatal emit errors (1h)", "sum(increase(genai_otel_bridge_emit_errors_total{kind!='collect'}[1h])) — fatal kinds only (retryable_exhausted / checkpoint_* / bad_encoding); the benign upstream-fetch 'collect' retries are excluded. >0 => emit/commit is failing.",
-         '(sum(increase(genai_otel_bridge_emit_errors_total{loop=~"$loop",kind!="collect"}[1h])) or vector(0))', "short", color="background", steps_=steps((None, "green"), (1, "red"))))
+         '(sum(increase(genai_otel_bridge_emit_errors_total{loop=~"$loop(,.*)?",kind!="collect"}[1h])) or vector(0))', "short", color="background", steps_=steps((None, "green"), (1, "red"))))
 add(ts(110, "Freshness ratio by loop (self-relative staleness)", "genai-otel-bridge:freshness_ratio per loop. 1.0 = exactly the loop's own 6h-p90 staleness; the lines mark 1 (baseline) and 2 (alert). This is the decoupled, per-loop staleness view — a flat 15m threshold can't serve loops whose normal ranges from ~2m (sessions) to tens of minutes (runs).",
-       "none", [('genai-otel-bridge:freshness_ratio{loop=~"$loop"}', "{{loop}}")], thresholds=RATIO_LINES))
+       "none", [('genai-otel-bridge:freshness_ratio{loop=~"$loop(,.*)?"}', "{{source}} / {{loop}}")], thresholds=RATIO_LINES))
 add(ts(111, "Emitted throughput by loop", "rate of metric samples (genai_otel_bridge_emitted_total) and log records (genai_otel_bridge_emitted_logs_total) successfully emitted, per loop. Zero across all while data exists upstream => emit broken.",
        "cps", [(f'sum by (loop) (rate(genai_otel_bridge_emitted_total{LOOP}[{RI}]))', "{{loop}} samples"),
                (f'sum by (loop) (rate(genai_otel_bridge_emitted_logs_total{LOOP}[{RI}]))', "{{loop}} logs")]))
 
 # === Tab: Liveness & leadership ==============================================
 add(ts(120, "Window lag by loop", "genai_otel_bridge_window_lag_seconds per loop (now - watermark frontier). Flat-low is healthy; a sustained climb means the loop is not advancing its watermark.",
-       "s", [('genai_otel_bridge_window_lag_seconds{loop=~"$loop"}', "{{loop}}")]))
+       "s", [('genai_otel_bridge_window_lag_seconds{loop=~"$loop(,.*)?"}', "{{source}} / {{loop}}")]))
 add(ts(121, "Last-success age vs each loop's baseline", "Solid = time() - last_success (age). Dashed = genai-otel-bridge:last_success_age:baseline6h (the loop's own 6h-p90 normal). Age sawtoothing under its baseline is healthy; age pulling away above the baseline is the staleness signal GenaiOtelBridgePollerStale fires on.",
-       "s", [('time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})', "{{loop}} age"),
-             ('genai-otel-bridge:last_success_age:baseline6h{loop=~"$loop"}', "{{loop}} baseline")]))
+       "s", [('time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop(,.*)?"})', "{{source}} / {{loop}} age"),
+             ('genai-otel-bridge:last_success_age:baseline6h{loop=~"$loop(,.*)?"}', "{{source}} / {{loop}} baseline")]))
 add(ts(122, "Replicas self-reporting over time", "Distinct service_instance_id. 2 = healthy active/passive HA; a drop to 1 = no standby (failover gap risk); a spike >2 sustained = leader overlap.",
        "short", [('count(max by (service_instance_id) (last_over_time(genai_otel_bridge_leader_ratio[5m])))', "replicas")], calcs=["lastNotNull", "min"]))
 add(stat(123, "Freshness ratio", "Per-loop staleness vs the loop's own 6h baseline (repeats once per selected loop). Green <1.5, red >2.",
-         'genai-otel-bridge:freshness_ratio{loop="$loop"}', "none", viz="gauge", steps_=RATIO_STEPS))
+         'genai-otel-bridge:freshness_ratio{loop=~"$loop(,.*)?"}', "none", viz="gauge", steps_=RATIO_STEPS))
 
 # === Tab: Emit pipeline ======================================================
 add(ts(130, "Emitted samples /s by loop", "rate(genai_otel_bridge_emitted_total). Metric data points successfully emitted.",
@@ -176,7 +184,7 @@ add(ts(131, "Emitted logs /s by loop", "rate(genai_otel_bridge_emitted_logs_tota
 add(ts(132, "Emit errors /s by loop & kind", "rate(genai_otel_bridge_emit_errors_total) by kind. 'collect' = benign upstream-fetch retry; retryable_exhausted / checkpoint_* / bad_encoding are fatal (GenaiOtelBridgeEmitFailing).",
        "cps", [(f'sum by (loop, kind) (rate(genai_otel_bridge_emit_errors_total{LOOP}[{RI}]))', "{{loop}} / {{kind}}")]))
 add(ts(133, "Queue depth by loop", "genai_otel_bridge_queue_depth_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). 1 while a batch is in flight (collection is single-flight, so never more), else 0. Sustained 1 => the emit is slow or failing (GenaiOtelBridgeQueueBackpressure).",
-       "short", [(f'max by (loop) (genai_otel_bridge_queue_depth_ratio{LOOP})', "{{loop}}")]))
+       "short", [(f'max by (source, loop) (genai_otel_bridge_queue_depth_ratio{LOOP})', "{{source}} / {{loop}}")]))
 add(ts(134, "Samples skipped /s (counted gaps) by reason", "rate(genai_otel_bridge_samples_skipped_total) by reason. too_old / payload_too_large / duplicate_timestamp = real loss (GenaiOtelBridgeDataLoss); quota_exceeded / backfill_unstorable are benign. The loop advances past the bad bucket with a counted gap — never silent.",
        "cps", [(f'sum by (loop, reason) (rate(genai_otel_bridge_samples_skipped_total{LOOP}[{RI}]))', "{{loop}} / {{reason}}")]))
 add(ts(135, "Samples capped /s (DPM)", "rate(genai_otel_bridge_samples_capped_total{reason=dpm}). Coalesced last-write-wins per series-minute to honour max_dpm. Expected non-zero when source resolution > cap — NOT data loss.",
@@ -184,13 +192,13 @@ add(ts(135, "Samples capped /s (DPM)", "rate(genai_otel_bridge_samples_capped_to
 add(ts(136, "Guard dropped /s by loop (governance)", "rate(genai_otel_bridge_guard_dropped_total). Data points / logs dropped by the cardinality/content governance Guard (default-deny label allow-list, field denylist). Expected non-zero if a denylist is configured.",
        "cps", [(f'sum by (loop) (rate(genai_otel_bridge_guard_dropped_total{LOOP}[{RI}]))', "{{loop}}")]))
 add(ts(137, "Buckets revised after settle /s", "rate(genai_otel_bridge_bucket_revised_after_settle_total). A settled bucket changed value after bucket_settle (late arrivals). Persistent non-zero => widen the loop's bucket_settle (GenaiOtelBridgeBucketRevisedAfterSettle).",
-       "cps", [(f'sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_total{LOOP}[{RI}]))', "{{loop}}")]))
+       "cps", [(f'sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_total{HOOK_LOOP}[{RI}]))', "{{loop}}")]))
 add(ts(138, "Bucket revision lateness (age p50/p95)", "histogram_quantile over genai_otel_bridge_bucket_revised_after_settle_age_seconds — HOW LATE post-settle revisions are (now - bucketEnd), vs panel 137's how-often. Tune bucket_settle toward p95 to capture them (metrics can't be backfilled — Mimir rejects a changed value at an already-emitted timestamp). Floors at bucket_settle by construction.",
-       "s", [(f'histogram_quantile(0.50, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{LOOP}[{RI}])))', "p50 {{loop}}"),
-             (f'histogram_quantile(0.95, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{LOOP}[{RI}])))', "p95 {{loop}}")], fillop=0))
+       "s", [(f'histogram_quantile(0.50, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{HOOK_LOOP}[{RI}])))', "p50 {{loop}}"),
+             (f'histogram_quantile(0.95, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{HOOK_LOOP}[{RI}])))', "p95 {{loop}}")], fillop=0))
 
 add(ts(139, "Loops degraded (state gauge)", "genai_otel_bridge_loop_degraded_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). 1 while a loop is held in the degraded state, labelled by the degrade reason; 0 after the clearing commit. Sustained 1 for 15m => GenaiOtelBridgeLoopDegraded.",
-       "short", [(f'max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio{LOOP})', "{{loop}} / {{reason}}")], thresholds=steps((None, "green"), (1, "red"))))
+       "short", [(f'max by (source, loop, reason) (genai_otel_bridge_loop_degraded_ratio{LOOP})', "{{source}} / {{loop}} / {{reason}}")], thresholds=steps((None, "green"), (1, "red"))))
 add(ts(146, "Partial-success rejects (10m increase) by plane", "increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]) by plane. Data points / log records the gateway rejected inside a 200 partial_success response: the emit looked successful, so this is the only signal. Any non-zero => GenaiOtelBridgePartialSuccessRejected.",
        "short", [('sum by (plane) (increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]))', "{{plane}}")], thresholds=steps((None, "green"), (1, "red"))))
 
@@ -204,11 +212,11 @@ add(ts(141, "Upstream latency p50/p95/p99 by target", "histogram_quantile over g
 add(ts(142, "Upstream error ratio by target", "genai-otel-bridge:upstream_error_ratio:5m — fraction of requests to each target with status_class 4xx/5xx/error (incl. timeouts). >0.2 sustained => GenaiOtelBridgeUpstreamErrorBudget. Needs the recording rules pushed.",
        "percentunit", [('genai-otel-bridge:upstream_error_ratio:5m', "{{target}}")], thresholds=steps((None, "green"), (0.2, "red"))))
 add(ts(143, "Auth errors /s (401/403)", "rate(genai_otel_bridge_auth_errors_total) by loop & source. Credential failure (wrong/expired key, missing scope) — distinct from slow/erroring endpoints. GenaiOtelBridgeAuthErrors fires on > 0.",
-       "cps", [(f'sum by (loop, source) (rate(genai_otel_bridge_auth_errors_total{LOOP}[{RI}]))', "{{loop}} / {{source}}")]))
+       "cps", [(f'sum by (loop, source) (rate(genai_otel_bridge_auth_errors_total{HOOK_LOOP}[{RI}]))', "{{loop}} / {{source}}")]))
 add(ts(144, "Source capability outcomes /s", "rate(genai_otel_bridge_source_capability_total) by loop, graph, and state. permission-denied means the capability cannot be used; GenaiOtelBridgeWorkspaceScopePermissionDenied covers workspace_scope. endpoint-absent and plan-unsupported are valid reserved states but currently producerless, so no series distinguishes them; a single 404 remains ambiguous and steady versus intermittent increments require query-time judgement.",
-       "cps", [(f'sum by (loop, graph, state) (rate(genai_otel_bridge_source_capability_total{LOOP}[{RI}]))', "{{loop}} / {{graph}} / {{state}}")]))
+       "cps", [(f'sum by (loop, graph, state) (rate(genai_otel_bridge_source_capability_total{HOOK_LOOP}[{RI}]))', "{{loop}} / {{graph}} / {{state}}")]))
 add(ts(145, "Source data incompleteness /s", "rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason. window_truncated (LangSmith runs only) is a counted dropped-records gap; export_failed/export_stuck mean the export pipeline cannot produce data; window_oversize is a parked Portkey logs_export window (nothing dropped, shrink settings.window). GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.",
-       "cps", [(f'sum by (loop, reason) (rate(genai_otel_bridge_source_data_incomplete_total{LOOP}[{RI}]))', "{{loop}} / {{reason}}")]))
+       "cps", [(f'sum by (loop, reason) (rate(genai_otel_bridge_source_data_incomplete_total{HOOK_LOOP}[{RI}]))', "{{loop}} / {{reason}}")]))
 
 # === Tab: Cardinality & governance ===========================================
 add(ts(150, "New label-value combinations /s by series (top 15)", "rate(genai_otel_bridge_new_label_values_total) by series. Each is a never-before-seen label combo — a cardinality early-warning. A sustained climb on one series = unbounded labels (GenaiOtelBridgeCardinalitySpike).",
@@ -302,7 +310,7 @@ variables = [
     {"kind": "QueryVariable", "spec": {
         "name": "loop", "label": "Loop", "definition": "label_values(genai_otel_bridge_window_lag_seconds,loop)",
         "current": {"text": ["All"], "value": ["$__all"]}, "hide": "dontHide", "includeAll": True,
-        "allValue": ".+", "multi": True, "options": [], "regex": "", "sort": "alphabeticalAsc",
+        "allValue": ".+", "multi": True, "options": [], "regex": "/^([^,]+)/", "sort": "alphabeticalAsc",
         "refresh": "onDashboardLoad", "skipUrlSync": False, "allowCustomValue": True,
         "query": {"kind": "DataQuery", "group": "prometheus", "version": "v0", "datasource": {"name": PROM},
                   "spec": {"query": "label_values(genai_otel_bridge_window_lag_seconds,loop)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}}}},

@@ -30,7 +30,7 @@ spec:
       relativeTimeRange: {from: 11m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: 'sum by (loop) (increase(genai_otel_bridge_emit_errors_total{kind=~"retryable_exhausted|checkpoint_load|checkpoint_save|checkpoint_fenced|granularity_unexpected|bad_encoding|unknown_4xx"}[10m])) > 0'
+        expr: 'sum by (source, loop) (increase(genai_otel_bridge_emit_errors_total{kind=~"retryable_exhausted|checkpoint_load|checkpoint_save|checkpoint_fenced|granularity_unexpected|bad_encoding|unknown_4xx"}[10m])) > 0'
         instant: true
         range: false
         intervalMs: 1000

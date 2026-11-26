@@ -203,7 +203,8 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	if s.beat != nil {
 		s.beat() // [AR-H-beat] heartbeat each tick ATTEMPT (progress, not success) so /healthz tracks loop liveness
 	}
-	name := sp.Loop.Key().Loop
+	id := MetricsLoopID(sp.Loop) // [#387] {source, loop}: same-named loop instances keep distinct series
+	name := id.Loop
 	// [followup §4] One span per tick covering the SYNCHRONOUS work (collect → enqueue). The async emit
 	// runs in the runner's worker (decoupled via the queue), so it is NOT in this span — it is covered by
 	// emit_errors_total + the upstream-request histogram; cross-queue span propagation is a future path.
@@ -225,7 +226,7 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 			span.SetAttributes(attribute.String("outcome", "cancelled"))
 			return tickOutcome{}
 		}
-		s.m.EmitError(name, "checkpoint_load")
+		s.m.EmitError(id, "checkpoint_load")
 		if s.lim.Allow("checkpoint_load:" + name) {
 			slog.Warn("checkpoint load failed; skipping tick", "loop", name, "err", err)
 		}
@@ -236,7 +237,7 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	if !wm.Time.IsZero() {
 		// [AR-C6] window_lag floors at ~bucket_settle+cadence (we never emit unsettled buckets), so
 		// staleness alerts must be thresholded ABOVE that baseline, not at zero (deploy README).
-		s.m.WindowLag(name, now.Sub(wm.Time))
+		s.m.WindowLag(id, now.Sub(wm.Time))
 	}
 	// [AR-C6] Count an abandoned-as-unstorable span (older than the backend accept window) ONCE — the
 	// source clamps its start to the same floor and the runner's commit(until) advances past it, so
@@ -251,21 +252,21 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 		// of magnitude. The runner records the last-counted floor per frontier so the initial gap is
 		// counted once and only ~cadence is added per subsequent stuck tick.
 		if mins := sp.Runner.BackfillUnstorableMinutes(wm.Time, floor); mins > 0 {
-			s.m.SamplesSkipped(name, "backfill_unstorable", mins)
+			s.m.SamplesSkipped(id, "backfill_unstorable", mins)
 		}
 	}
 	batch, err := sp.Loop.Collect(ctx, wm)
 	switch {
 	case errors.Is(err, source.ErrQuotaExceeded):
 		// Discard, no advance (F34); the tick loop stretches the wait while the streak lasts [#370].
-		s.m.SamplesSkipped(name, "quota_exceeded", 1)
+		s.m.SamplesSkipped(id, "quota_exceeded", 1)
 		span.SetAttributes(attribute.String("outcome", "quota_exceeded"))
 		return tickOutcome{quota: true}
 	case errors.Is(err, source.ErrGranularityUnexpected):
 		// [Cdx-M5] A granularity flip is alertable + no-advance (F27). Degrade the loop so the scheduler
 		// backs off to degradedBackoff (10m) instead of re-pulling every cadence and hammering the source
 		// with the same loud error; a later good collect+save clears the degrade (commit resets it).
-		s.m.EmitError(name, "granularity_unexpected")
+		s.m.EmitError(id, "granularity_unexpected")
 		sp.Runner.Degrade("granularity_unexpected")
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "granularity_unexpected")
@@ -276,7 +277,7 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 		span.SetAttributes(attribute.String("outcome", "cancelled"))
 		return tickOutcome{}
 	case err != nil:
-		s.m.EmitError(name, "collect")
+		s.m.EmitError(id, "collect")
 		if s.lim.Allow("collect:" + name) {
 			slog.Warn("collect failed", "loop", name, "err", err)
 		}

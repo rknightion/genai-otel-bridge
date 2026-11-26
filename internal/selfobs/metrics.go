@@ -12,6 +12,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/rknightion/genai-otel-bridge/internal/loopid"
 )
 
 // Metrics implements schedule.Metrics over the OTel-Go SDK (its sweet spot — instrumenting live
@@ -133,18 +135,19 @@ var (
 	alertedSkipReasons       = []string{"duplicate_timestamp", "payload_too_large", "too_old"}
 )
 
-// SeedLoop creates, at 0, every {loop, reason} series a bundled alert reads for the named loop. Call
-// it once per configured loop at startup (after app.Build). It adds no series for any other reason,
-// so the series count stays bounded by the alert rules.
-func (m *Metrics) SeedLoop(loop string) {
+// SeedLoop creates, at 0, every series a bundled alert reads with increase() for one configured loop.
+// Call it once per configured loop at startup (after app.Build). It adds no series for any other reason,
+// so the series count stays bounded by the alert rules. Each counter is seeded under the attribute set
+// its producer records [#387]: samples_skipped under the runner's {source, loop, reason} (id), and
+// source_data_incomplete under the {loop, reason} a source hook records (hookLoop, the bare Key().Loop).
+func (m *Metrics) SeedLoop(id loopid.ID, hookLoop string) {
 	ctx := context.Background()
 	for _, reason := range alertedIncompleteReasons {
 		m.sourceDataIncomplete.Add(ctx, 0, metric.WithAttributes(
-			attribute.String("loop", loop), attribute.String("reason", reason)))
+			attribute.String("loop", hookLoop), attribute.String("reason", reason)))
 	}
 	for _, reason := range alertedSkipReasons {
-		m.skipped.Add(ctx, 0, metric.WithAttributes(
-			attribute.String("loop", loop), attribute.String("reason", reason)))
+		m.skipped.Add(ctx, 0, idAttrs(id, attribute.String("reason", reason)))
 	}
 }
 
@@ -152,20 +155,28 @@ func loopAttr(loop string) metric.MeasurementOption {
 	return metric.WithAttributes(attribute.String("loop", loop))
 }
 
-func (m *Metrics) EmittedSamples(loop string, n int) {
-	m.emitted.Add(context.Background(), int64(n), loopAttr(loop))
+// idAttrs are the per-loop-instance attributes [#387]: source (the configured source_instance) and
+// loop. Both are configuration-bounded, so two same-named loop instances keep distinct series without
+// opening the label set to data.
+func idAttrs(id loopid.ID, extra ...attribute.KeyValue) metric.MeasurementOption {
+	return metric.WithAttributes(append([]attribute.KeyValue{
+		attribute.String("source", id.Source), attribute.String("loop", id.Loop)}, extra...)...)
 }
-func (m *Metrics) EmittedLogs(loop string, n int) {
-	m.emittedLogs.Add(context.Background(), int64(n), loopAttr(loop))
+
+func (m *Metrics) EmittedSamples(id loopid.ID, n int) {
+	m.emitted.Add(context.Background(), int64(n), idAttrs(id))
 }
-func (m *Metrics) SamplesSkipped(loop, reason string, n int) {
-	m.skipped.Add(context.Background(), int64(n), metric.WithAttributes(attribute.String("loop", loop), attribute.String("reason", reason)))
+func (m *Metrics) EmittedLogs(id loopid.ID, n int) {
+	m.emittedLogs.Add(context.Background(), int64(n), idAttrs(id))
 }
-func (m *Metrics) EmitError(loop, kind string) {
-	m.emitErr.Add(context.Background(), 1, metric.WithAttributes(attribute.String("loop", loop), attribute.String("kind", kind)))
+func (m *Metrics) SamplesSkipped(id loopid.ID, reason string, n int) {
+	m.skipped.Add(context.Background(), int64(n), idAttrs(id, attribute.String("reason", reason)))
 }
-func (m *Metrics) GuardDropped(loop string, n int) {
-	m.guardDropped.Add(context.Background(), int64(n), loopAttr(loop))
+func (m *Metrics) EmitError(id loopid.ID, kind string) {
+	m.emitErr.Add(context.Background(), 1, idAttrs(id, attribute.String("kind", kind)))
+}
+func (m *Metrics) GuardDropped(id loopid.ID, n int) {
+	m.guardDropped.Add(context.Background(), int64(n), idAttrs(id))
 }
 func (m *Metrics) BucketRevisedAfterSettle(loop string, age time.Duration) {
 	m.revised.Add(context.Background(), 1, loopAttr(loop))
@@ -174,9 +185,8 @@ func (m *Metrics) BucketRevisedAfterSettle(loop string, age time.Duration) {
 func (m *Metrics) NewLabelValue(series string) {
 	m.newLabel.Add(context.Background(), 1, metric.WithAttributes(attribute.String("series", series)))
 }
-func (m *Metrics) SamplesCapped(loop string, n int) {
-	m.capped.Add(context.Background(), int64(n), metric.WithAttributes(
-		attribute.String("loop", loop), attribute.String("reason", "dpm")))
+func (m *Metrics) SamplesCapped(id loopid.ID, n int) {
+	m.capped.Add(context.Background(), int64(n), idAttrs(id, attribute.String("reason", "dpm")))
 }
 func (m *Metrics) SourceCapability(loop, graph, state string) {
 	m.sourceCapability.Add(context.Background(), 1, metric.WithAttributes(
@@ -190,31 +200,28 @@ func (m *Metrics) AuthError(loop, source string) {
 	m.authErr.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("loop", loop), attribute.String("source", source)))
 }
-func (m *Metrics) QueueDepth(loop string, depth int) {
-	m.queueDepth.Record(context.Background(), float64(depth), loopAttr(loop))
+func (m *Metrics) QueueDepth(id loopid.ID, depth int) {
+	m.queueDepth.Record(context.Background(), float64(depth), idAttrs(id))
 }
-func (m *Metrics) LastSuccess(loop string, t time.Time) {
-	m.lastSuccess.Record(context.Background(), float64(t.Unix()), loopAttr(loop))
+func (m *Metrics) LastSuccess(id loopid.ID, t time.Time) {
+	m.lastSuccess.Record(context.Background(), float64(t.Unix()), idAttrs(id))
 }
-func (m *Metrics) WindowLag(loop string, lag time.Duration) {
-	m.windowLag.Record(context.Background(), lag.Seconds(), loopAttr(loop))
+func (m *Metrics) WindowLag(id loopid.ID, lag time.Duration) {
+	m.windowLag.Record(context.Background(), lag.Seconds(), idAttrs(id))
 }
 
 // LoopDegraded reports the loop's degraded state as a 0/1 gauge with the degrade reason as an
 // attribute. [#120] The caller (schedule.LoopRunner) records 1 with the reason on entering degraded
 // and 0 with the SAME reason on the clearing commit or when leadership ends ([#369]), so the
-// {loop,reason} series returns to 0 rather than sticking at 1. reason is the bounded set of fixed strings the runner and scheduler pass
+// {source,loop,reason} series returns to 0 rather than sticking at 1. reason is the bounded set of fixed strings the runner and scheduler pass
 // (terminal emit reject / checkpoint-save failures / checkpoint fenced / granularity_unexpected) —
 // never unbounded free text.
-func (m *Metrics) LoopDegraded(loop, reason string, degraded bool) {
+func (m *Metrics) LoopDegraded(id loopid.ID, reason string, degraded bool) {
 	v := 0.0
 	if degraded {
 		v = 1.0
 	}
-	m.loopDegraded.Record(context.Background(), v, metric.WithAttributes(
-		attribute.String("loop", loop),
-		attribute.String("reason", reason),
-	))
+	m.loopDegraded.Record(context.Background(), v, idAttrs(id, attribute.String("reason", reason)))
 }
 
 // ObserveEmitRequest records one outbound emit POST attempt: its latency bucketed by {plane,

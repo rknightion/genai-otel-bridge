@@ -4,6 +4,7 @@ package selfobs
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/rknightion/genai-otel-bridge/internal/loopid"
 )
 
 // reasonsReadByRules returns, per counter, the reason values read by the bundled rule files. A read of
@@ -109,7 +112,7 @@ func TestSeedLoopCreatesAlertedSeriesAtZeroAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.SeedLoop("loop_a")
+	m.SeedLoop(loopid.ID{Source: "s", Loop: "loop_a"}, "loop_a")
 	read := reasonsReadByRules(t, "source_data_incomplete", "samples_skipped")
 	got := seededSeries(t, reader)
 	for name, reasons := range map[string][]string{
@@ -131,5 +134,42 @@ func TestSeedLoopCreatesAlertedSeriesAtZeroAndNothingElse(t *testing.T) {
 	after := seededSeries(t, reader)["genai_otel_bridge_source_data_incomplete_total"]["loop_a/window_oversize"]
 	if after != 1 {
 		t.Errorf("after first event value=%d, want 1 (0 -> 1 step)", after)
+	}
+}
+
+// TestSeedLoopSeedsTheSeriesTheRunnerRecords [#387]: the runner records samples_skipped under
+// {source, loop, reason}, so the seed must create that same series. A seed under {loop, reason} alone
+// is a different series: the first real event would then be born at 1 and increase() would miss it.
+func TestSeedLoopSeedsTheSeriesTheRunnerRecords(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	m, err := NewMetrics(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := loopid.ID{Source: "portkey-a", Loop: "analytics"}
+	m.SeedLoop(id, id.Loop)
+	m.SamplesSkipped(id, "too_old", 1)
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	var points []string
+	for _, sm := range rm.ScopeMetrics {
+		for _, mt := range sm.Metrics {
+			if mt.Name != "genai_otel_bridge_samples_skipped_total" {
+				continue
+			}
+			for _, dp := range mt.Data.(metricdata.Sum[int64]).DataPoints {
+				if r, _ := dp.Attributes.Value("reason"); r.AsString() == "too_old" {
+					src, _ := dp.Attributes.Value("source")
+					points = append(points, fmt.Sprintf("%s=%d", src.AsString(), dp.Value))
+				}
+			}
+		}
+	}
+	if len(points) != 1 || points[0] != "portkey-a=1" {
+		t.Fatalf("too_old series after seed + one event: %v, want one series {source=portkey-a} stepping 0 -> 1", points)
 	}
 }

@@ -36,9 +36,9 @@ type capMetrics struct {
 	skipped map[string]int // reason → total count, recorded from SamplesSkipped
 }
 
-func (m *capMetrics) WindowLag(_ string, d time.Duration) { m.lag = d }
+func (m *capMetrics) WindowLag(_ LoopID, d time.Duration) { m.lag = d }
 
-func (m *capMetrics) SamplesSkipped(_ string, reason string, n int) {
+func (m *capMetrics) SamplesSkipped(_ LoopID, reason string, n int) {
 	if m.skipped == nil {
 		m.skipped = map[string]int{}
 	}

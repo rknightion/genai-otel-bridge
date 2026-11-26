@@ -411,10 +411,10 @@ type countingMetrics struct {
 	lastSuccessN int
 }
 
-func (c *countingMetrics) SamplesCapped(_ string, n int)     { c.capped += n }
-func (c *countingMetrics) EmittedLogs(_ string, n int)       { c.emittedLogs += n }
-func (c *countingMetrics) GuardDropped(_ string, n int)      { c.guardDrop += n }
-func (c *countingMetrics) LastSuccess(_ string, t time.Time) { c.lastSuccess = t; c.lastSuccessN++ }
+func (c *countingMetrics) SamplesCapped(_ LoopID, n int)     { c.capped += n }
+func (c *countingMetrics) EmittedLogs(_ LoopID, n int)       { c.emittedLogs += n }
+func (c *countingMetrics) GuardDropped(_ LoopID, n int)      { c.guardDrop += n }
+func (c *countingMetrics) LastSuccess(_ LoopID, t time.Time) { c.lastSuccess = t; c.lastSuccessN++ }
 
 // TestProcessBatchLogsRecordsLastSuccess: a clean logs emit must stamp last_success with the committed
 // window-end (Watermark.Time), mirroring the metrics path — otherwise scrape_healthy and the

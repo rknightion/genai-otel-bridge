@@ -140,7 +140,7 @@ def add(p):
 
 # === Tab: Overview / SLO =====================================================
 add(stat(100, "Loops healthy", "HEALTHY when no selected loop is staler than 2x its OWN 6h baseline (max freshness_ratio < 2) AND none is older than the 3h absolute ceiling of GenaiOtelBridgePollerStale (a long stall absorbs the self-relative baseline, so the ratio alone turns green again). Self-relative — won't read STALE just because a slow log-export loop is legitimately tens of minutes behind. Needs the recording rules pushed.",
-         '(max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2) * (max(time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})) < bool 10800)', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=HEALTHY_MAP))
+         '(max(genai-otel-bridge:freshness_ratio{loop=~"$loop"}) < bool 2) * (max(time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})) < bool 10800)', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=HEALTHY_MAP))
 add(stat(101, "Leader present", "1 (PRESENT) if any selected loop exported a timestamp in the last 15m. ABSENT => leader gone / never emitted (distinct from stale). Inline — no recording rule required.",
          'max(present_over_time(genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"}[15m]))', "none", color="background", steps_=steps((None, "red"), (1, "green")), mappings=PRESENT_MAP))
 add(stat(102, "Replicas emitting", "Distinct service_instance_id self-reporting. <2 => no standby (GenaiOtelBridgeNoStandby). Both active+standby self-emit, so 2 is the healthy HA steady state.",
@@ -152,17 +152,17 @@ add(stat(104, "Max window lag", "now - watermark frontier, worst loop. Floors at
 add(stat(105, "Fatal emit errors (1h)", "sum(increase(genai_otel_bridge_emit_errors_total{kind!='collect'}[1h])) — fatal kinds only (retryable_exhausted / checkpoint_* / bad_encoding); the benign upstream-fetch 'collect' retries are excluded. >0 => emit/commit is failing.",
          '(sum(increase(genai_otel_bridge_emit_errors_total{loop=~"$loop",kind!="collect"}[1h])) or vector(0))', "short", color="background", steps_=steps((None, "green"), (1, "red"))))
 add(ts(110, "Freshness ratio by loop (self-relative staleness)", "genai-otel-bridge:freshness_ratio per loop. 1.0 = exactly the loop's own 6h-p90 staleness; the lines mark 1 (baseline) and 2 (alert). This is the decoupled, per-loop staleness view — a flat 15m threshold can't serve loops whose normal ranges from ~2m (sessions) to tens of minutes (runs).",
-       "none", [('genai-otel-bridge:freshness_ratio{loop=~"$loop"}', "{{loop}}")], thresholds=RATIO_LINES))
+       "none", [('genai-otel-bridge:freshness_ratio{loop=~"$loop"}', "{{source}} / {{loop}}")], thresholds=RATIO_LINES))
 add(ts(111, "Emitted throughput by loop", "rate of metric samples (genai_otel_bridge_emitted_total) and log records (genai_otel_bridge_emitted_logs_total) successfully emitted, per loop. Zero across all while data exists upstream => emit broken.",
        "cps", [(f'sum by (loop) (rate(genai_otel_bridge_emitted_total{LOOP}[{RI}]))', "{{loop}} samples"),
                (f'sum by (loop) (rate(genai_otel_bridge_emitted_logs_total{LOOP}[{RI}]))', "{{loop}} logs")]))
 
 # === Tab: Liveness & leadership ==============================================
 add(ts(120, "Window lag by loop", "genai_otel_bridge_window_lag_seconds per loop (now - watermark frontier). Flat-low is healthy; a sustained climb means the loop is not advancing its watermark.",
-       "s", [('genai_otel_bridge_window_lag_seconds{loop=~"$loop"}', "{{loop}}")]))
+       "s", [('genai_otel_bridge_window_lag_seconds{loop=~"$loop"}', "{{source}} / {{loop}}")]))
 add(ts(121, "Last-success age vs each loop's baseline", "Solid = time() - last_success (age). Dashed = genai-otel-bridge:last_success_age:baseline6h (the loop's own 6h-p90 normal). Age sawtoothing under its baseline is healthy; age pulling away above the baseline is the staleness signal GenaiOtelBridgePollerStale fires on.",
-       "s", [('time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})', "{{loop}} age"),
-             ('genai-otel-bridge:last_success_age:baseline6h{loop=~"$loop"}', "{{loop}} baseline")]))
+       "s", [('time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds{loop=~"$loop"})', "{{source}} / {{loop}} age"),
+             ('genai-otel-bridge:last_success_age:baseline6h{loop=~"$loop"}', "{{source}} / {{loop}} baseline")]))
 add(ts(122, "Replicas self-reporting over time", "Distinct service_instance_id. 2 = healthy active/passive HA; a drop to 1 = no standby (failover gap risk); a spike >2 sustained = leader overlap.",
        "short", [('count(group by (service_instance_id) (genai_otel_bridge_window_lag_seconds))', "replicas")], calcs=["lastNotNull", "min"]))
 add(stat(123, "Freshness ratio", "Per-loop staleness vs the loop's own 6h baseline (repeats once per selected loop). Green <1.5, red >2.",
@@ -176,7 +176,7 @@ add(ts(131, "Emitted logs /s by loop", "rate(genai_otel_bridge_emitted_logs_tota
 add(ts(132, "Emit errors /s by loop & kind", "rate(genai_otel_bridge_emit_errors_total) by kind. 'collect' = benign upstream-fetch retry; retryable_exhausted / checkpoint_* / bad_encoding are fatal (GenaiOtelBridgeEmitFailing).",
        "cps", [(f'sum by (loop, kind) (rate(genai_otel_bridge_emit_errors_total{LOOP}[{RI}]))', "{{loop}} / {{kind}}")]))
 add(ts(133, "Queue depth by loop", "genai_otel_bridge_queue_depth_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). 1 while a batch is in flight (collection is single-flight, so never more), else 0. Sustained 1 => the emit is slow or failing (GenaiOtelBridgeQueueBackpressure).",
-       "short", [(f'max by (loop) (genai_otel_bridge_queue_depth_ratio{LOOP})', "{{loop}}")]))
+       "short", [(f'max by (source, loop) (genai_otel_bridge_queue_depth_ratio{LOOP})', "{{source}} / {{loop}}")]))
 add(ts(134, "Samples skipped /s (counted gaps) by reason", "rate(genai_otel_bridge_samples_skipped_total) by reason. too_old / payload_too_large / duplicate_timestamp = real loss (GenaiOtelBridgeDataLoss); quota_exceeded / backfill_unstorable are benign. The loop advances past the bad bucket with a counted gap — never silent.",
        "cps", [(f'sum by (loop, reason) (rate(genai_otel_bridge_samples_skipped_total{LOOP}[{RI}]))', "{{loop}} / {{reason}}")]))
 add(ts(135, "Samples capped /s (DPM)", "rate(genai_otel_bridge_samples_capped_total{reason=dpm}). Coalesced last-write-wins per series-minute to honour max_dpm. Expected non-zero when source resolution > cap — NOT data loss.",
@@ -190,7 +190,7 @@ add(ts(138, "Bucket revision lateness (age p50/p95)", "histogram_quantile over g
              (f'histogram_quantile(0.95, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{LOOP}[{RI}])))', "p95 {{loop}}")], fillop=0))
 
 add(ts(139, "Loops degraded (state gauge)", "genai_otel_bridge_loop_degraded_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). 1 while a loop is held in the degraded state, labelled by the degrade reason; 0 after the clearing commit. Sustained 1 for 15m => GenaiOtelBridgeLoopDegraded.",
-       "short", [(f'max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio{LOOP})', "{{loop}} / {{reason}}")], thresholds=steps((None, "green"), (1, "red"))))
+       "short", [(f'max by (source, loop, reason) (genai_otel_bridge_loop_degraded_ratio{LOOP})', "{{source}} / {{loop}} / {{reason}}")], thresholds=steps((None, "green"), (1, "red"))))
 add(ts(146, "Partial-success rejects (10m increase) by plane", "increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]) by plane. Data points / log records the gateway rejected inside a 200 partial_success response: the emit looked successful, so this is the only signal. Any non-zero => GenaiOtelBridgePartialSuccessRejected.",
        "short", [('sum by (plane) (increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]))', "{{plane}}")], thresholds=steps((None, "green"), (1, "red"))))
 

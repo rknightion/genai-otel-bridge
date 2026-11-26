@@ -43,8 +43,9 @@ type LoopRunner struct {
 	guard  *source.Guard
 	q      chan queuedBatch
 	m      Metrics
-	name   string
-	maxDPM int // hard ≤ N points per (series, minute); from governance.max_dpm (default 1)
+	id     LoopID // [#387] self-metrics identity {source, loop}
+	name   string // id.Loop: the loop's name in logs, spans and limiter keys
+	maxDPM int    // hard ≤ N points per (series, minute); from governance.max_dpm (default 1)
 	// lim throttles the runner's warn lines (retryable-exhausted emit, checkpoint-save fail, skip-with-gap)
 	// to ≤1/min per key so a stuck loop doesn't spam stdout; the metric counters carry the true rate. Keys
 	// are "retry:<loop>" / "save:<loop>" / "skip:<loop>:<reason>" — disjoint from the scheduler's keyspace.
@@ -73,7 +74,8 @@ func NewLoopRunner(loop source.Loop, em emit.Emitter, cp checkpoint.Checkpointer
 	if maxDPM < 1 {
 		maxDPM = 1
 	}
-	return &LoopRunner{loop: loop, em: em, cp: cp, guard: guard, q: make(chan queuedBatch, queueDepth), m: m, name: loop.Key().Loop, maxDPM: maxDPM, lim: logging.NewLimiter(time.Minute)}
+	id := MetricsLoopID(loop)
+	return &LoopRunner{loop: loop, em: em, cp: cp, guard: guard, q: make(chan queuedBatch, queueDepth), m: m, id: id, name: id.Loop, maxDPM: maxDPM, lim: logging.NewLimiter(time.Minute)}
 }
 
 // Busy reports a collected-but-unsaved batch is in flight — the scheduler skips the tick. [CP-C1]
@@ -136,7 +138,7 @@ func (r *LoopRunner) Reset() {
 	}
 	r.mu.Lock()
 	if r.degraded { // [#120] zero the degraded gauge on (re-)election so a new leadership starts clean
-		r.m.LoopDegraded(r.name, r.degradeReason, false)
+		r.m.LoopDegraded(r.id, r.degradeReason, false)
 		r.degradeReason = ""
 	}
 	r.busy, r.hasFront, r.frontier = false, false, model.Watermark{}
@@ -155,7 +157,7 @@ func (r *LoopRunner) ClearDegradedGauge() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.degraded {
-		r.m.LoopDegraded(r.name, r.degradeReason, false)
+		r.m.LoopDegraded(r.id, r.degradeReason, false)
 	}
 }
 
@@ -193,12 +195,12 @@ func (r *LoopRunner) Run(leaderCtx context.Context) {
 			// or in flight per loop and len(r.q) is always 0 here. queue_depth therefore reports the batch in
 			// flight: 1 for the whole emit and commit, 0 once it is handled. A slow or failing emit holds it at
 			// 1, which is what GenaiOtelBridgeQueueBackpressure alerts on.
-			r.m.QueueDepth(r.name, 1)
+			r.m.QueueDepth(r.id, 1)
 			ctx := trace.ContextWithSpanContext(leaderCtx, b.parent)
 			ctx, span := otel.Tracer(tracerName).Start(ctx, "loop.emit", trace.WithAttributes(attribute.String("loop", r.name)))
 			r.ProcessBatch(ctx, b.batch)
 			span.End()
-			r.m.QueueDepth(r.name, 0)
+			r.m.QueueDepth(r.id, 0)
 		}
 	}
 }
@@ -235,7 +237,7 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 	var capped int
 	b.Samples, capped = emit.CoalesceDPM(b.Samples, r.maxDPM)
 	if capped > 0 {
-		r.m.SamplesCapped(r.name, capped)
+		r.m.SamplesCapped(r.id, capped)
 	}
 	epoch := coordinate.EpochFromContext(leaderCtx)
 	var frontier time.Time
@@ -244,7 +246,7 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 		bucketTime := bucket.Samples[0].Timestamp
 		sub, dropped := r.guard.Sanitize(bucket)
 		if dropped > 0 {
-			r.m.GuardDropped(r.name, dropped)
+			r.m.GuardDropped(r.id, dropped)
 		}
 		if len(sub.Samples) == 0 {
 			frontier, advanced = bucketTime, true // [AR-C3] whole bucket guard-dropped → advance past (counted)
@@ -254,16 +256,16 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 		switch {
 		case err == nil:
 			frontier, advanced = bucketTime, true
-			r.m.EmittedSamples(r.name, len(sub.Samples))
-			r.m.LastSuccess(r.name, bucketTime)
+			r.m.EmittedSamples(r.id, len(sub.Samples))
+			r.m.LastSuccess(r.id, bucketTime)
 		case isAdvancePast(err): // duplicate-timestamp / too-old / 413: known sample-reject → skip-with-gap
-			r.m.SamplesSkipped(r.name, rejectReason(err), len(sub.Samples))
+			r.m.SamplesSkipped(r.id, rejectReason(err), len(sub.Samples))
 			if r.lim.Allow("skip:" + r.name + ":" + rejectReason(err)) {
 				slog.Warn("samples skipped (advancing past, counted gap)", "loop", r.name, "reason", rejectReason(err), "count", len(sub.Samples))
 			}
 			frontier, advanced = bucketTime, true
 		case isTerminalHalt(err): // [CP-C7/C8] bad-encoding OR unknown request-level 400 → degrade, no advance
-			r.m.EmitError(r.name, rejectReason(err))
+			r.m.EmitError(r.id, rejectReason(err))
 			if advanced {
 				// [round3-#2] partial advance to an INTERIOR bucket (`frontier`), NOT the window end —
 				// so it must carry an EMPTY cursor, not b.Watermark.Cursor (the window-END resume token).
@@ -285,7 +287,7 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 				// alert). Nothing advances: the interior commit below would no-op on the cancelled ctx anyway.
 				return
 			}
-			r.m.EmitError(r.name, "retryable_exhausted")
+			r.m.EmitError(r.id, "retryable_exhausted")
 			if r.lim.Allow("retry:" + r.name) {
 				slog.Warn("emit failed after retries; will re-pull next tick", "loop", r.name)
 			}
@@ -307,7 +309,7 @@ func (r *LoopRunner) ProcessBatch(leaderCtx context.Context, b model.Batch) {
 		// a non-zero Time (a cursor-only first-window step has no completed window). Interior partial
 		// commits above deliberately do not stamp.
 		if r.commit(leaderCtx, b.Key, target, b.Watermark.Cursor, epoch) && !target.IsZero() {
-			r.m.LastSuccess(r.name, target)
+			r.m.LastSuccess(r.id, target)
 		}
 	}
 }
@@ -322,7 +324,7 @@ func (r *LoopRunner) processLogs(leaderCtx context.Context, b model.Batch) bool 
 	// starve) one budget pool. Key().String() is a FROZEN-safe accessor, so no seam changes.
 	kept, dropped := r.guard.SanitizeLogs(r.loop.Key().String(), b.Logs)
 	if dropped > 0 {
-		r.m.GuardDropped(r.name, dropped)
+		r.m.GuardDropped(r.id, dropped)
 	}
 	if len(kept) == 0 {
 		return true // nothing to emit (all guard-dropped / empty) — still commit the cursor/time
@@ -330,27 +332,27 @@ func (r *LoopRunner) processLogs(leaderCtx context.Context, b model.Batch) bool 
 	err := r.em.Emit(leaderCtx, model.Batch{Key: b.Key, Logs: kept})
 	switch {
 	case err == nil:
-		r.m.EmittedLogs(r.name, len(kept))
+		r.m.EmittedLogs(r.id, len(kept))
 		// [self-obs] last_success for the logs loops (logs_export, runs) is stamped at the shared commit in
 		// ProcessBatch [#371], at the committed window-end (the same Time window_lag is measured against)
 		// and only at a non-zero Time, so they feed scrape_healthy and the poller-stale/leader-absent
 		// alerts. Stamping here as well would record the same value twice, and before the commit landed.
 		return true
 	case isAdvancePast(err): // known per-record reject → skip-with-gap, advance
-		r.m.SamplesSkipped(r.name, rejectReason(err), len(kept))
+		r.m.SamplesSkipped(r.id, rejectReason(err), len(kept))
 		if r.lim.Allow("skip:" + r.name + ":" + rejectReason(err)) {
 			slog.Warn("log records skipped (advancing past, counted gap)", "loop", r.name, "reason", rejectReason(err), "count", len(kept))
 		}
 		return true
 	case isTerminalHalt(err): // [CP-C7/C8] bad-encoding / unknown 4xx → degrade, no advance
-		r.m.EmitError(r.name, rejectReason(err))
+		r.m.EmitError(r.id, rejectReason(err))
 		r.enterDegraded("terminal emit reject (logs)")
 		return false
 	default: // retryable exhausted → no advance, re-pull (idempotent: cursor not committed)
 		if leaderCtx.Err() != nil {
 			return false // [#368] cancelled mid-emit (leadership loss / shutdown): not a failure, no count
 		}
-		r.m.EmitError(r.name, "retryable_exhausted")
+		r.m.EmitError(r.id, "retryable_exhausted")
 		if r.lim.Allow("retry:" + r.name) {
 			slog.Warn("emit failed after retries; will re-pull next tick (logs)", "loop", r.name)
 		}
@@ -390,10 +392,10 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 				return false
 			}
 			r.saveFails++
-			r.m.EmitError(r.name, "checkpoint_save")
+			r.m.EmitError(r.id, "checkpoint_save")
 			if r.saveFails >= checkpointFailThreshold && !r.degraded {
 				r.degraded, r.degradeReason = true, "checkpoint-save failures"
-				r.m.LoopDegraded(r.name, r.degradeReason, true) // [#120] this path sets degraded directly, so route the gauge too
+				r.m.LoopDegraded(r.id, r.degradeReason, true) // [#120] this path sets degraded directly, so route the gauge too
 				slog.Error("loop degraded: repeated checkpoint-save failures", "loop", r.name, "fails", r.saveFails)
 			} else if r.lim.Allow("save:" + r.name) {
 				slog.Warn("checkpoint save failed", "loop", r.name, "fails", r.saveFails)
@@ -412,7 +414,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 			// leader, not a stuck loop: the write stays rejected, but it is neither counted nor degraded.
 			if isFencedWrite(stored, w) && ctx.Err() == nil {
 				span.SetAttributes(attribute.String("outcome", "fenced"))
-				r.m.EmitError(r.name, "checkpoint_fenced")
+				r.m.EmitError(r.id, "checkpoint_fenced")
 				slog.Warn("checkpoint forward-write fenced (stale-epoch or concurrent leader); not advancing",
 					"loop", r.name, "attempted", w.Time, "durable", stored.Time, "epoch", epoch, "durable_epoch", stored.Epoch)
 				// [#367] A fenced loop is stuck until the epoch situation changes, so back off instead of
@@ -421,7 +423,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 				// it; Reset on re-election clears it too.
 				if !r.degraded {
 					r.degraded, r.degradeReason = true, "checkpoint fenced"
-					r.m.LoopDegraded(r.name, r.degradeReason, true)
+					r.m.LoopDegraded(r.id, r.degradeReason, true)
 					slog.Error("loop degraded (loud halt, scheduler will back off)", "loop", r.name, "reason", r.degradeReason)
 				}
 			}
@@ -434,7 +436,7 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 	span.SetAttributes(attribute.String("outcome", "committed"))
 	r.saveFails = 0
 	if r.degraded { // [#120] zero the gauge on the SAME {loop,reason} series before clearing (no stuck-at-1)
-		r.m.LoopDegraded(r.name, r.degradeReason, false)
+		r.m.LoopDegraded(r.id, r.degradeReason, false)
 		r.degradeReason = ""
 	}
 	r.degraded = false // a successful save clears a transient (e.g. ConfigMap-outage) degrade
@@ -479,7 +481,7 @@ func (r *LoopRunner) enterDegraded(reason string) {
 	defer r.mu.Unlock()
 	if !r.degraded {
 		r.degraded, r.degradeReason = true, reason
-		r.m.LoopDegraded(r.name, reason, true) // [#120] queryable non-flapping state gauge
+		r.m.LoopDegraded(r.id, reason, true) // [#120] queryable non-flapping state gauge
 		slog.Error("loop degraded (loud halt, scheduler will back off)", "loop", r.name, "reason", reason)
 	}
 }

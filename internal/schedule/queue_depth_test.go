@@ -19,7 +19,7 @@ type depthMetrics struct {
 	depths []int
 }
 
-func (m *depthMetrics) QueueDepth(_ string, d int) {
+func (m *depthMetrics) QueueDepth(_ LoopID, d int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.depths = append(m.depths, d)

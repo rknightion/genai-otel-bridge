@@ -33,6 +33,15 @@ SDK, so SDK features (cardinality limits, views) apply here and only here.
   `NewProvider` / `NewTracerProvider` (CP-H9), identically to the product emitter, so they cannot
   diverge on path. Traces ride the SAME gateway and creds as self-metrics - no separate egress channel.
 
+## Per-loop identity
+
+The instruments the scheduler records (emitted, skipped, emit errors, guard drops, capped, and the
+`last_success`, `window_lag`, `queue_depth` and `loop_degraded` gauges) carry `source` (the configured
+`source_instance`) and `loop`, from the leaf `internal/loopid.ID` (#387). Both are configuration-bounded;
+never add a data-derived value. The hook-fed counters (`bucket_revised_after_settle`,
+`source_capability`, `source_data_incomplete`) still carry only `loop`; `auth_errors_total` already
+carries `source` with the same meaning.
+
 ## `signals.go` is a gate, not documentation
 
 It is the static catalogue the docs generator renders into `docs/telemetry.md`, and
@@ -77,9 +86,10 @@ Only a configured sub-floor value is clamped up, and that clamp is logged.
 
 ## Seeded alert series (#499)
 
-`Metrics.SeedLoop(loop)` (called by `app.Build` once per loop, via an optional interface so `schedule.Metrics`
-is unchanged) creates the `{loop, reason}` series that a bundled alert reads with `increase()` at 0 for
-`source_data_incomplete_total` and `samples_skipped_total`. Without it the first event is a series born
+`Metrics.SeedLoop(id, hookLoop)` (called by `app.Build` once per loop, via an optional interface so
+`schedule.Metrics` is unchanged) creates at 0 the series that a bundled alert reads with `increase()`:
+`samples_skipped_total` under the runner's `{source, loop, reason}` and `source_data_incomplete_total`
+under the hook's `{loop, reason}` (#387: a seed under any other attribute set is a different series). Without it the first event is a series born
 at 1 and the alert misses it. `TestSeededReasonsMatchBundledAlertRules` reads the rule files: a rule
 reading an unseeded reason, or a seeded reason no rule reads, fails. Edit the seed lists when you edit a rule.
 

@@ -92,7 +92,9 @@ alert firing until the loop recovers. It also catches a parked `logs_export` win
 
 **What to check:**
 
-1. Which loop is stale? Check `genai_otel_bridge_window_lag_seconds` labelled by `loop`.
+1. Which loop is stale? Check `genai_otel_bridge_window_lag_seconds` labelled by `source` (the
+   configured `source_instance`) and `loop`. A fan-out `logs_export` instance carries its use case in
+   `loop` (`logs_export,api_key_use_case=<slug>`).
 2. Check `genai_otel_bridge_emit_errors_total` for that loop — failed emits prevent watermark advancement.
 3. Check `genai_otel_bridge_upstream_request_duration_seconds` — slow source API responses increase
    collect time, which can cause the window lag to grow.

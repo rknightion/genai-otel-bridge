@@ -27,7 +27,7 @@ spec:
         # metric) so it does not depend on genai-otel-bridge:last_success_age:seconds being recorded. Ramps over the
         # first ~6h after deploy; during a sustained outage the baseline drifts up (the climbing age series
         # feeds it) — GenaiOtelBridgeLeaderAbsent is the absolute backstop for that case.
-        expr: 'quantile_over_time(0.9, (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])'
+        expr: 'quantile_over_time(0.9, (time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])'
         instant: true
         range: false
         intervalMs: 1000

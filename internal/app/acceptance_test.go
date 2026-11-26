@@ -190,7 +190,7 @@ type metricsCounter struct {
 	skip map[string]int
 }
 
-func (m *metricsCounter) SamplesSkipped(_, reason string, n int) {
+func (m *metricsCounter) SamplesSkipped(_ schedule.LoopID, reason string, n int) {
 	m.mu.Lock()
 	m.skip[reason] += n
 	m.mu.Unlock()

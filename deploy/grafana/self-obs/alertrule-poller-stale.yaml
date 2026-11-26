@@ -36,7 +36,7 @@ spec:
       relativeTimeRange: {from: 6h0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
-        expr: '(((time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > (2 * quantile_over_time(0.9, (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])) and (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 300) or (time() - max by (loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 10800)'
+        expr: '(((time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) > (2 * quantile_over_time(0.9, (time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds))[6h:1m])) and (time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 300) or (time() - max by (source, loop) (genai_otel_bridge_last_success_timestamp_seconds)) > 10800)'
         instant: true
         range: false
         intervalMs: 1000

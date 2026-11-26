@@ -25,13 +25,13 @@ type recMetrics struct {
 func newRecMetrics() *recMetrics {
 	return &recMetrics{errs: map[string]int{}, skipped: map[string]int{}}
 }
-func (m *recMetrics) EmitError(_, kind string) { m.mu.Lock(); m.errs[kind]++; m.mu.Unlock() }
-func (m *recMetrics) SamplesSkipped(_, reason string, n int) {
+func (m *recMetrics) EmitError(_ LoopID, kind string) { m.mu.Lock(); m.errs[kind]++; m.mu.Unlock() }
+func (m *recMetrics) SamplesSkipped(_ LoopID, reason string, n int) {
 	m.mu.Lock()
 	m.skipped[reason] += n
 	m.mu.Unlock()
 }
-func (m *recMetrics) GuardDropped(_ string, n int) { m.mu.Lock(); m.guardDrop += n; m.mu.Unlock() }
+func (m *recMetrics) GuardDropped(_ LoopID, n int) { m.mu.Lock(); m.guardDrop += n; m.mu.Unlock() }
 
 // logsPlaneRun seeds a durable mid-window position, processes one logs batch that would step the cursor
 // (and, for a final page, the Time) and returns what was persisted.

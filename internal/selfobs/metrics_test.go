@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
+	"github.com/rknightion/genai-otel-bridge/internal/loopid"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 )
@@ -84,9 +85,10 @@ func TestMetricsRecordViaManualReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.EmittedSamples("analytics", 5)
-	m.SamplesSkipped("analytics", "duplicate_timestamp", 1)
-	m.LastSuccess("analytics", time.Unix(1700, 0))
+	id := loopid.ID{Source: "portkey", Loop: "analytics"}
+	m.EmittedSamples(id, 5)
+	m.SamplesSkipped(id, "duplicate_timestamp", 1)
+	m.LastSuccess(id, time.Unix(1700, 0))
 
 	var rm metricdata.ResourceMetrics
 	if err := r.Collect(context.Background(), &rm); err != nil {
@@ -235,7 +237,7 @@ func TestLoopDegradedGauge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.LoopDegraded("portkey/analytics", "terminal emit reject", true)
+	m.LoopDegraded(loopid.ID{Source: "portkey", Loop: "analytics"}, "terminal emit reject", true)
 
 	var rm metricdata.ResourceMetrics
 	if err := r.Collect(context.Background(), &rm); err != nil {
@@ -254,7 +256,7 @@ func TestLoopDegradedGauge(t *testing.T) {
 	}
 
 	// Clearing commit records 0 on the SAME {loop,reason} series → gauge returns to 0 (not stuck at 1).
-	m.LoopDegraded("portkey/analytics", "terminal emit reject", false)
+	m.LoopDegraded(loopid.ID{Source: "portkey", Loop: "analytics"}, "terminal emit reject", false)
 	if err := r.Collect(context.Background(), &rm); err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +287,7 @@ func TestSamplesCappedCounter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.SamplesCapped("portkey/analytics", 3)
+	m.SamplesCapped(loopid.ID{Source: "portkey", Loop: "analytics"}, 3)
 
 	var rm metricdata.ResourceMetrics
 	if err := r.Collect(context.Background(), &rm); err != nil {

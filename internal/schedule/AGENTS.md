@@ -3,7 +3,9 @@
 The tick, collect, enqueue, emit driver plus the watermark state machine. `scheduler.go` orchestrates
 per-loop ticks; `LoopRunner` in `runner.go` owns the queue, the single-flight emit worker, the
 in-memory frontier and the epoch-fenced commit. `metrics.go` is the `Metrics` seam that `selfobs`
-implements.
+implements. The runner and scheduler record under a `LoopID` {source, loop} from `MetricsLoopID`:
+`Key().SourceInstance`, and `Key().Loop` or a loop's `source.MetricsLoopNamer` name (the
+`logs_export` use-case fan-out), so same-named loop instances never share a gauge series (#387).
 
 ## Invariants, each backed by a test
 

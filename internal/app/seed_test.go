@@ -17,9 +17,13 @@ import (
 type seedRecorder struct {
 	schedule.NoopMetrics
 	seeded []string
+	ids    []schedule.LoopID
 }
 
-func (s *seedRecorder) SeedLoop(loop string) { s.seeded = append(s.seeded, loop) }
+func (s *seedRecorder) SeedLoop(id schedule.LoopID, hookLoop string) {
+	s.ids = append(s.ids, id)
+	s.seeded = append(s.seeded, hookLoop)
+}
 
 // Build seeds the alerted counters once per configured loop, under the loop name the runner reports (#499).
 func TestBuildSeedsEachConfiguredLoop(t *testing.T) {
@@ -41,6 +45,10 @@ func TestBuildSeedsEachConfiguredLoop(t *testing.T) {
 	for i, sp := range specs {
 		if rec.seeded[i] != sp.Loop.Key().Loop {
 			t.Errorf("seeded[%d]=%q want %q", i, rec.seeded[i], sp.Loop.Key().Loop)
+		}
+		// [#387] the skipped seed must use the identity the runner records under.
+		if want := schedule.MetricsLoopID(sp.Loop); rec.ids[i] != want {
+			t.Errorf("seeded id[%d]=%+v want %+v", i, rec.ids[i], want)
 		}
 	}
 }

@@ -19,7 +19,7 @@ type stampMetrics struct {
 	stamps []time.Time
 }
 
-func (m *stampMetrics) LastSuccess(_ string, t time.Time) { m.stamps = append(m.stamps, t) }
+func (m *stampMetrics) LastSuccess(_ LoopID, t time.Time) { m.stamps = append(m.stamps, t) }
 
 // TestQuietWindowRefreshesLastSuccess [#371]: an empty window (no samples, no log records) still commits
 // its watermark at until, and that fully handled window must stamp last_success at the committed time.

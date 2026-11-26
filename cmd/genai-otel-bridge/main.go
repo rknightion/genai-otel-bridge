@@ -35,11 +35,9 @@ import (
 	ddbcoord "github.com/rknightion/genai-otel-bridge/internal/coordinate/dynamodb"
 	leasecoord "github.com/rknightion/genai-otel-bridge/internal/coordinate/lease"
 	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
-	"github.com/rknightion/genai-otel-bridge/internal/httpx"
 	"github.com/rknightion/genai-otel-bridge/internal/logging"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 	"github.com/rknightion/genai-otel-bridge/internal/selfobs"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 	"github.com/rknightion/genai-otel-bridge/internal/version"
 )
@@ -237,41 +235,18 @@ func main() {
 		tpShutdown = shutdown
 	}
 
-	partialRejectLim := logging.NewLimiter(time.Minute) // [#80] rate-limit the partial-success WARN (per-plane)
-	em := otlp.New(otlp.Config{
-		Endpoint: cfg.Emit.Telemetry.OTLP.Endpoint, InstanceID: cfg.Emit.Telemetry.OTLP.InstanceID,
-		Token: cfg.Emit.Telemetry.OTLP.Token, MaxBytes: cfg.Queue.MaxBatchBytes,
-		// Single source of truth (config.IdentityConfig.ProductIdentity) — the composition root counts the
-		// same keys against governance.max_stream_label_keys (Loki stream-label budget), so they can't drift.
-		Identity: cfg.Identity.ProductIdentity(),
-		// [#60] Emit-leg latency into selfobs (the emit client is outside the httpx observer chokepoint).
-		Observer: func(plane string, statusCode int, err error, d time.Duration) {
-			metrics.ObserveEmitRequest(plane, statusCode, err, d)
-		},
-		// [#80] A 200 + partial_success response silently drops N items past the reject taxonomy. Count
-		// them into an alertable self-metric AND emit a rate-limited WARN (a persistent partial-reject
-		// would otherwise log every emit) — the loop-agnostic emitter owns neither, so it calls back here.
-		OnPartialReject: func(plane string, rejected int64, msg string) {
-			metrics.ObserveEmitPartialReject(plane, rejected)
-			if partialRejectLim.Allow("partial:" + plane) {
-				slog.Warn("OTLP gateway rejected part of an emit batch via a 200 partial_success response; the rejected data was NOT delivered (alert on genai_otel_bridge_emit_partial_success_rejected_total)",
-					"plane", plane, "rejected", rejected, "gateway_message", msg)
-			}
-		},
-	})
-
 	cp, coord := buildHA(ctx, cfg, *ns, *identity, *cpFile)
 
 	// [CP-C5] /healthz liveness threshold = the worst LEGITIMATE gap between two tick-ATTEMPT beats, so a
 	// leader blocked in an intended emit-retry/backpressure, or a degraded loop on its slow backoff, is
 	// NOT killed — but a genuinely wedged scheduler (no beat at all) IS. See livenessThreshold.
 	health := selfobs.NewHealth(livenessThreshold(plan))
-	// Wire the upstream-request self-obs histogram into every source's HTTP client (decoupled: httpx
-	// emits a RequestInfo, selfobs records it; neither imports the other).
-	deps := source.Deps{UpstreamObserver: func(i httpx.RequestInfo) {
-		metrics.ObserveUpstreamRequest(i.Target, i.Method, i.StatusCode, i.Err, i.Duration)
-	}}
-	a, err := app.Build(ctx, cfg, cp, coord, em, metrics, deps)
+	// The emitter, its request observers and the partial-reject warning (rate-limited per plane, #80),
+	// and the source hooks including the upstream-request observer, are built inside app.Build from these
+	// two factories. The telemetry factory's With copies share every instrument with metrics.
+	ef := app.OTLPEmitterFactory(cfg.Queue.MaxBatchBytes, otlp.DefaultRetryPolicy(), logging.NewLimiter(time.Minute))
+	tf := func(tenant, pipeline string) app.PipelineTelemetry { return metrics.With(tenant, pipeline) }
+	a, err := app.Build(ctx, cfg, cp, coord, ef, tf, app.Options{})
 	if err != nil {
 		fatal("build", err)
 	}

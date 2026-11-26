@@ -11,8 +11,8 @@ import (
 
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/emit"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
-	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/source/langsmith"
 	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
@@ -97,7 +97,7 @@ func ValidateConfigFile(path string) (table, hash string, err error) {
 		return "", "", err
 	}
 	// Constructors only build clients; the first network call is the lazy first Collect, which never runs.
-	if _, err := Build(context.Background(), cfg, inertCheckpointer{}, coordinate.Noop{}, inertEmitter{}, schedule.NoopMetrics{}, source.Deps{}); err != nil {
+	if _, err := Build(context.Background(), cfg, inertCheckpointer{}, coordinate.Noop{}, inertEmitterFactory, noopTelemetryFactory, Options{}); err != nil {
 		return "", "", err
 	}
 	return plan.Table(), plan.Hash(), nil
@@ -117,3 +117,9 @@ func (inertCheckpointer) Save(context.Context, model.CheckpointKey, model.Waterm
 type inertEmitter struct{}
 
 func (inertEmitter) Emit(context.Context, model.Batch) error { return nil }
+
+// inertEmitterFactory and noopTelemetryFactory are the factories ValidateConfigFile hands Build: no
+// emitter reaches a backend and no self-telemetry is recorded.
+func inertEmitterFactory(EmitterSpec, PipelineTelemetry) emit.Emitter { return inertEmitter{} }
+
+func noopTelemetryFactory(string, string) PipelineTelemetry { return noopTelemetry{} }

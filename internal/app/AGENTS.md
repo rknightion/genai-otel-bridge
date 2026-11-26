@@ -1,27 +1,47 @@
 # internal/app - composition root
 
-Wiring only, no business logic. `Build` assembles the app from injected dependencies; `Run` serves
-health and runs the scheduler under the coordinator. `checkpoint.Checkpointer`,
-`coordinate.Coordinator`, `emit.Emitter` and `schedule.Metrics` are injected so `cmd` supplies real
-ones and tests supply fakes.
+Wiring only, no business logic. `Build(ctx, cfg, cp, coord, ef, tf, opts)` assembles the app; `Run`
+serves health and runs the scheduler under the coordinator. `checkpoint.Checkpointer` and
+`coordinate.Coordinator` are injected, and the emitter and the self-telemetry come from two factories,
+so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardinality budget comes from
+`cfg.Governance.PerMetricCardinalityBudget`, never a literal.
 
-`deps source.Deps` carries composition-root hooks that are not config data (the upstream-request
-observer, settle-exceedance, capability, data-incompleteness and auth-error hooks), forwarded to each source. The
-guard's per-metric cardinality budget comes from `cfg.Governance.PerMetricCardinalityBudget`, never a
-literal.
+## Factories (`factories.go`)
+
+- `PipelineTelemetry` is `schedule.Metrics` plus `ObserveUpstreamRequest`, `ObserveEmitRequest` and
+  `ObserveEmitPartialReject`. `*selfobs.Metrics` satisfies it, so this package does not import
+  `selfobs`. `SeedLoop` stays an optional capability: `Build` type-asserts it on the
+  `PipelineTelemetry` value, so an adapter that wraps another value must forward it
+  (`helpers_test.go`'s `telemetryAdapter` does).
+- `TelemetryFactory(tenant, pipeline)` returns a pipeline's hooks; `main` passes one over
+  `metrics.With`. The legacy shape asks once, for `("", "")`, so every label set is today's.
+- `EmitterFactory(EmitterSpec, PipelineTelemetry)` builds one emitter. `Build` calls it once, with the
+  spec from `emit.telemetry.otlp` and `identity` (`ProductIdentity()`, the same keys the stream-label
+  budget counts). `OTLPEmitterFactory(maxBatchBytes, retry, warn)` is the production one: it wires
+  the emit-leg observer and the partial-success counter to the telemetry and owns the rate-limited
+  partial-reject warning. Its limit key is `partialRejectLimitKey(pipeline, plane)`:
+  `partial:<plane>` with no pipeline (the legacy key), `partial:<pipeline>:<plane>` otherwise; with a
+  pipeline the warning also carries `tenant` and `pipeline`.
+- `Build` builds `source.Deps` itself from the telemetry: the upstream-request observer and the
+  settle-exceedance, capability, data-incompleteness and auth-error hooks, forwarded to each source.
+- `ValidateConfigFile` passes an inert emitter factory and `noopTelemetry`. `Options` is empty
+  for now.
 
 ## Build order (two passes, and the order is load-bearing)
 
 1. Build the source registry and register every source type. This is the extension point for a new
    source.
 2. `cfg.Validate(reg.Known())` - fails if a configured source type is not registered.
-3. Compute the indexed/label allow-list, then reject content-floor keys in it (below).
+3. Compute the indexed/label allow-list, then reject content-floor keys in it (below). Then ask the
+   telemetry factory for the unlabelled hooks and build `source.Deps` from them: a source takes its
+   hooks when it is built.
 4. **First pass:** build every enabled source and its loops, `source.ValidateOwnership` (no duplicate
    output series), error if zero enabled loops. Loops are built **before** the guard so the per-loop
    content denylist can be keyed by each loop's real identity (`CheckpointKey.String()`), which
    `SanitizeLogs` receives, and so a content opt-in is honoured only on loops that consume it.
 5. Build the guard from the now-known per-loop denylists.
-6. **Second pass:** build the loop runners and specs against the shared guard.
+6. Ask the emitter factory for the one emitter.
+7. **Second pass:** build the loop runners and specs against the shared guard and that emitter.
 
 ## Guard composition
 
@@ -66,7 +86,9 @@ because struct-built test configs bypass `config.Load`'s defaulting.
 
 ## Tests
 
-`minimalConfig()` plus fake source and fake OTLP gateway `httptest.Server`s. The `acceptance` build
+`minimalConfig()` plus fake source and fake OTLP gateway `httptest.Server`s. Tests call
+`Build(ctx, cfg, cp, coord, ef, tf, Options{})` with `ef, tf := fixedFactories(em, m)`, which wraps a
+fixed emitter and any `schedule.Metrics` (observers are no-ops). The `acceptance` build
 tag runs the acceptance gates against a Mimir-model recorder that **400s on a series value change**,
 which is what catches value-divergent re-emits: failover handoff contiguity, stale-queue drop on
 re-election, empty-window advance.

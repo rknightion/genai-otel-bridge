@@ -29,7 +29,6 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/emit/otlp"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 )
 
@@ -292,7 +291,8 @@ func buildCycleApp(t *testing.T, cpPath, pkURL, gwURL string, clock func() time.
 		Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20,
 		Retry: otlp.RetryPolicy{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Multiplier: 1.5, MaxElapsed: 30 * time.Millisecond, Jitter: 0},
 	})
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, m, source.Deps{})
+	ef, tf := fixedFactories(em, m)
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

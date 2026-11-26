@@ -13,7 +13,6 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/source/langsmith"
 	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
 )
@@ -45,7 +44,8 @@ func TestBuildRejectsFloorKeyInAllowLabelKeys(t *testing.T) {
 	cfg := minimalConfig("http://127.0.0.1:1")
 	cfg.Governance.AllowLabelKeys = []string{"messages"} // a floor key (AbsoluteNeverDenyKeys)
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err == nil || !strings.Contains(err.Error(), "content-floor") {
 		t.Fatalf("want a content-floor rejection error, got %v", err)
 	}
@@ -56,7 +56,8 @@ func TestBuildAcceptsContentFreeAllowLabelKey(t *testing.T) {
 	cfg := minimalConfig("http://127.0.0.1:1")
 	cfg.Governance.AllowLabelKeys = []string{"deployment_env"} // content-free, not a floor key
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{}); err != nil {
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	if _, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{}); err != nil {
 		t.Fatalf("content-free allow_label_keys opt-in must be accepted, got %v", err)
 	}
 }
@@ -73,7 +74,8 @@ func TestBuildRejectsFloorKeyInExtraIndexedFields(t *testing.T) {
 	lp.Settings["extra_indexed_fields"] = "messages" // a content-floor key
 	cfg.Sources[0].Loops["analytics"] = lp
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err == nil || !strings.Contains(err.Error(), "content-floor") {
 		t.Fatalf("want a content-floor rejection for extra_indexed_fields, got %v", err)
 	}
@@ -92,7 +94,8 @@ func TestBuildRejectsContentFloorPrefixInExtraIndexedFields(t *testing.T) {
 	lp.Settings["extra_indexed_fields"] = "gen_ai.prompt.0.content" // flattened content attr — prefix floor
 	cfg.Sources[0].Loops["analytics"] = lp
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err == nil || !strings.Contains(err.Error(), "content-floor") {
 		t.Fatalf("want a content-floor rejection for the gen_ai prefix variant, got %v", err)
 	}

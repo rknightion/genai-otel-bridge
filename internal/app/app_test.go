@@ -187,7 +187,8 @@ func TestBuildAndOneEmitCycle(t *testing.T) {
 	cfg := minimalConfig(pk.URL)
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	em := otlp.New(otlp.Config{Endpoint: gw.URL, InstanceID: "1", Token: "t", Identity: map[string]string{"service.namespace": "genai-otel-bridge"}, MaxBytes: 1 << 20})
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, em, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(em, schedule.NoopMetrics{})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +224,8 @@ func TestBuildRejectsUnknownLoopName(t *testing.T) {
 		MaxBackfill: config.Duration(55 * time.Minute), MetricPrefix: "portkey_api", Graphs: []string{"requests"},
 	}
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	_, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err == nil || !strings.Contains(err.Error(), "log_export") {
 		t.Fatalf("expected Build to reject the typo'd loop name log_export, got %v", err)
 	}
@@ -237,7 +239,8 @@ func buildMinimalApp(t *testing.T) *App {
 	t.Helper()
 	cfg := minimalConfig("http://127.0.0.1:1") // unreachable; Collect errors are logged, not fatal
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

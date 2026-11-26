@@ -14,7 +14,7 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
-	"github.com/rknightion/genai-otel-bridge/internal/emit"
+	"github.com/rknightion/genai-otel-bridge/internal/httpx"
 	"github.com/rknightion/genai-otel-bridge/internal/logging"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
@@ -42,9 +42,11 @@ func authErrorHook(m schedule.Metrics, lim *logging.Limiter) func(loop, src stri
 	}
 }
 
-// Build assembles the runtime. Deps (cp/coord/emitter/metrics) are injected so cmd supplies the
-// real OTLP/k8s/selfobs implementations and tests supply fakes.
-func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, coord coordinate.Coordinator, em emit.Emitter, m schedule.Metrics, deps source.Deps) (*App, error) {
+// Build assembles the runtime. The checkpoint store and coordinator are injected, and the emitter and
+// the self-telemetry come from two factories, so cmd supplies the real OTLP/k8s/selfobs implementations
+// and tests supply fakes. Build asks the telemetry factory for the unlabelled hooks once and the emitter
+// factory for the one emitter once, and builds the source hooks itself.
+func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, coord coordinate.Coordinator, ef EmitterFactory, tf TelemetryFactory, opts Options) (*App, error) {
 	reg := source.NewRegistry()
 	portkey.Register(reg)
 	langsmith.Register(reg)
@@ -81,32 +83,35 @@ func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, 
 			return nil, fmt.Errorf("governance.allow_label_keys / settings.extra_indexed_fields: %q is a content-floor key (message body / injected PII) and cannot be promoted to a label", k)
 		}
 	}
-	// [settle-exceedance] Wire the settle-exceedance signal: a source that re-observes an
-	// already-emitted (settled) bucket change value calls this hook; it does NOT re-emit (DESIGN
-	// §3.3/F6). Mirrors the guard's OnNewLabelValue wiring above. Only set if a source didn't already
-	// supply one (it doesn't today), so the composition root owns the metrics binding.
-	if deps.OnBucketRevised == nil {
-		deps.OnBucketRevised = m.BucketRevisedAfterSettle
-	}
-	// Capability/permission conditions and incomplete-data events are separate closed contracts.
-	// Source packages pass typed constants; these adapters are the only conversion to the schedule
-	// metrics seam's deliberately plain strings.
-	if deps.OnCapability == nil {
-		deps.OnCapability = func(loop, graph string, state source.CapabilityState) {
+	// The legacy shape is one unlabelled pipeline: tenant and pipeline are empty, so every label set is
+	// today's (design §8).
+	m := tf("", "")
+	deps := source.Deps{
+		// Wire the upstream-request self-obs histogram into every source's HTTP client (decoupled: httpx
+		// emits a RequestInfo, selfobs records it; neither imports the other).
+		UpstreamObserver: func(i httpx.RequestInfo) {
+			m.ObserveUpstreamRequest(i.Target, i.Method, i.StatusCode, i.Err, i.Duration)
+		},
+		// [settle-exceedance] Wire the settle-exceedance signal: a source that re-observes an
+		// already-emitted (settled) bucket change value calls this hook; it does NOT re-emit (DESIGN
+		// §3.3/F6). Mirrors the guard's OnNewLabelValue wiring below, so the composition root owns the
+		// metrics binding.
+		OnBucketRevised: m.BucketRevisedAfterSettle,
+		// Capability/permission conditions and incomplete-data events are separate closed contracts.
+		// Source packages pass typed constants; these adapters are the only conversion to the schedule
+		// metrics seam's deliberately plain strings.
+		OnCapability: func(loop, graph string, state source.CapabilityState) {
 			m.SourceCapability(loop, graph, string(state))
-		}
-	}
-	if deps.OnDataIncomplete == nil {
-		deps.OnDataIncomplete = func(loop string, reason source.IncompleteReason) {
+		},
+		OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
 			m.SourceDataIncomplete(loop, string(reason))
-		}
-	}
-	// [followup §9] An upstream 401/403 already surfaces as a retryable Collect error (window_lag rises),
-	// but that is indistinguishable in metrics from a generic slow/erroring endpoint. Wire OnAuthError to
-	// AuthError{loop,source} so a credential failure (wrong/expired key, missing scope) is its OWN
-	// alertable signal — AND a rate-limited WARN so it's visible on `kubectl logs`, not only in self-metrics.
-	if deps.OnAuthError == nil {
-		deps.OnAuthError = authErrorHook(m, logging.NewLimiter(time.Minute))
+		},
+		// [followup §9] An upstream 401/403 already surfaces as a retryable Collect error (window_lag
+		// rises), but that is indistinguishable in metrics from a generic slow/erroring endpoint. Wire
+		// OnAuthError to AuthError{loop,source} so a credential failure (wrong/expired key, missing scope)
+		// is its OWN alertable signal — AND a rate-limited WARN so it's visible on `kubectl logs`, not
+		// only in self-metrics.
+		OnAuthError: authErrorHook(m, logging.NewLimiter(time.Minute)),
 	}
 	// [Loki stream-label budget] A logs loop's IndexedAttributes become OTLP resource attrs → Loki stream
 	// labels once GS1 promotes them; together with genai-otel-bridge's product identity resource attrs (all in the GC
@@ -186,6 +191,14 @@ func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, 
 		PerSeriesBudget:     cfg.Governance.PerMetricCardinalityBudget, // per-metric cap; config-keyed, default 10k
 		OnNewLabelValue:     m.NewLabelValue,
 	})
+	// The one legacy emitter: the telemetry destination with the product identity (the same keys the
+	// stream-label budget above counted), reporting through the unlabelled hooks.
+	em := ef(EmitterSpec{
+		Endpoint:   cfg.Emit.Telemetry.OTLP.Endpoint,
+		InstanceID: cfg.Emit.Telemetry.OTLP.InstanceID,
+		Token:      cfg.Emit.Telemetry.OTLP.Token,
+		Identity:   cfg.Identity.ProductIdentity(),
+	}, m)
 	// SECOND PASS: build the runners + specs now the shared guard exists.
 	var specs []schedule.LoopSpec
 	for _, l := range loops {
@@ -227,7 +240,8 @@ func Build(ctx context.Context, cfg *config.Config, cp checkpoint.Checkpointer, 
 		}
 	}
 	// Seed the alerted {loop, reason} counters at 0 so the first event after startup is visible to
-	// increase() (#499). Optional capability: schedule.Metrics stays unchanged.
+	// increase() (#499). Optional capability, asserted on the PipelineTelemetry value: neither
+	// schedule.Metrics nor PipelineTelemetry carries it.
 	// [#387] samples_skipped is recorded under the runner's {source, loop} identity and
 	// source_data_incomplete under the bare loop name a source hook passes, so the seed takes both.
 	if s, ok := m.(interface {

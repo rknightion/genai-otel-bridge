@@ -12,7 +12,6 @@ import (
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
-	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
 // TestNoopEpochAutoHealsFromStoredCheckpoint (#45) — when ha.coordinator=none runs over a checkpoint a
@@ -28,7 +27,8 @@ func TestNoopEpochAutoHealsFromStoredCheckpoint(t *testing.T) {
 	cfg := minimalConfig("http://127.0.0.1:1")
 
 	// Discover the loop's real CheckpointKey (OutputFingerprint is only known post-build) via a first build.
-	probe, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	probe, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestNoopEpochAutoHealsFromStoredCheckpoint(t *testing.T) {
 	}
 
 	// Rebuild over the surviving checkpoint with coordinator=none.
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,8 @@ func TestNoopEpochAutoHealsFromStoredCheckpoint(t *testing.T) {
 func TestNoopEpochStaysMinimalWithoutStoredCheckpoint(t *testing.T) {
 	cp, _ := file.New(filepath.Join(t.TempDir(), "wm.yaml"), false)
 	cfg := minimalConfig("http://127.0.0.1:1")
-	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, noopEmitter{}, schedule.NoopMetrics{}, source.Deps{})
+	ef, tf := fixedFactories(noopEmitter{}, schedule.NoopMetrics{})
+	a, err := Build(context.Background(), cfg, cp, coordinate.Noop{}, ef, tf, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

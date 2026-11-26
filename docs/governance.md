@@ -99,6 +99,11 @@ The `governance.per_metric_cardinality_budget` config key sets the **per-metric*
 distinct label-value combinations (default: 10,000). This is a per-metric cap, not a global
 one — total cardinality across all metrics is the sum.
 
+The cap counts **active** label sets. A label set stops counting once it has not been emitted
+for an hour, so a churning dimension such as per-experiment sessions keeps admitting new values
+as old ones go quiet. Only more than the budget active within the same hour are dropped. The
+same budget, with the same rule, caps the distinct stream label sets of each logs loop.
+
 ```yaml
 governance:
   per_metric_cardinality_budget: 10000

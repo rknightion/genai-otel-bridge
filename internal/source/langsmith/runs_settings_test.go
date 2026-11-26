@@ -108,6 +108,20 @@ func TestRunsExtraRecordFields(t *testing.T) {
 	}
 }
 
+// TestOptInRejectsFlattenedFloorKey: a flattened content key (prefix match on the floor) must be rejected
+// by the hard-denied check itself, not merely by the later select-enum check.
+func TestOptInRejectsFlattenedFloorKey(t *testing.T) {
+	for _, knob := range []string{"extra_record_fields", "extra_indexed_fields"} {
+		_, err := buildRunsSettings(map[string]string{"session_ids": "s1", knob: "gen_ai.prompt.0.content"})
+		if err == nil || !strings.Contains(err.Error(), "hard-denied") {
+			t.Errorf("%s: want a hard-denied rejection, got %v", knob, err)
+		}
+	}
+	if _, err := buildRunsSettings(map[string]string{"session_ids": "s1", "extra_record_fields": "tags", "extra_indexed_fields": "app_path"}); err != nil {
+		t.Fatalf("non-floor opt-ins must still load: %v", err)
+	}
+}
+
 // TestRunsExtraIndexedFields: the per-loop indexed-tier opt-in parses a csv and rejects a hard-denied
 // content/floor field exactly as extra_record_fields does (a body must never become a stream label).
 func TestRunsExtraIndexedFields(t *testing.T) {

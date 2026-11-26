@@ -311,7 +311,7 @@ func TestAuditTerminalHaltOnLaterBucketStaysDegraded(t *testing.T) {
 		t.Fatal("[#93] degrade must stick through the interior commit so the scheduler backs off")
 	}
 	// tickPlan must now choose the slow backoff (degraded precedence), proving the scheduler stops hammering.
-	if w, _, _ := tickPlan(r.Degraded(), false, 0, 4, time.Minute); w != DegradedBackoff {
+	if w, _, _ := tickPlan(r.Degraded(), false, 0, 4, 0, time.Minute); w != DegradedBackoff {
 		t.Fatalf("degraded loop must back off to %v, got %v", DegradedBackoff, w)
 	}
 }

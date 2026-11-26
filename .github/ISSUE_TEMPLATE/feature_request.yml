@@ -1,6 +1,6 @@
 name: Feature request
 description: Suggest an enhancement or a new source/loop
-labels: ["enhancement"]
+labels: ["type:feature", "needs-triage"]
 body:
   - type: textarea
     id: problem

@@ -30,9 +30,14 @@ from three cooperating mechanisms:
    is unchanged and the cursor is too (an unchanged time with a new cursor is how the log loops
    save progress inside a window). A demoted leader cannot move the frontier backward or
    double-advance it.
-3. **Lease epoch** — the current `LeaseTransitions` count is threaded into the leader context
-   as an epoch integer. Every checkpoint write carries the epoch; a stale-epoch write is
-   rejected by `CheckMonotonic`.
+3. **Lease epoch** — the Lease's `LeaseTransitions` count plus one is threaded into the leader
+   context as an epoch integer, so the first leader on a fresh Lease runs at epoch 1, the same
+   epoch a single-replica (`coordinator: none`) deployment writes. Enabling HA over that
+   deployment's checkpoint therefore does not fence the first leader. Every checkpoint write
+   carries the epoch; a stale-epoch write is rejected by `CheckMonotonic`. The epoch is read
+   from the Lease once at election: if that read fails, the leader keeps retrying and does not
+   start its loops until the read succeeds or it loses the Lease, so it never runs at a guessed
+   epoch.
 
 ```text
 new leader elected (epoch N+1)
@@ -107,6 +112,9 @@ ha:
 a `version` attribute, retried up to five times on a condition failure. The same table also backs
 the leader lock (`ha.dynamodb.table`, CAS acquire + a monotonic `fence` epoch — the DynamoDB
 analogue of `LeaseTransitions`). Requires `coordinator: dynamodb` (they share the table).
+The leader steps down once `renew_deadline` has passed since the start of its last successful
+acquire or renew request, so a slow renew cannot keep it leading past the lock expiry that
+request wrote.
 
 ```yaml
 ha:

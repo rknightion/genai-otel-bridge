@@ -48,6 +48,12 @@ var hardDeniedRunsFields = func() map[string]bool {
 	return m
 }()
 
+// isHardDeniedRunsField applies the floor by PREFIX (source.IsContentFloorKey, as the guard does) as well
+// as the exact set, so a flattened gen_ai.prompt.0.content is rejected with the hard-denied reason.
+func isHardDeniedRunsField(k string) bool {
+	return source.IsContentFloorKey(k) || hardDeniedRunsFields[k]
+}
+
 func defaultRunsSettings() runsSettings {
 	return runsSettings{
 		maxSessions: 1000, window: time.Hour, settle: 10 * time.Minute, maxBackfill: 24 * time.Hour,
@@ -128,12 +134,12 @@ func validateRunsSettings(rs *runsSettings) error {
 		return fmt.Errorf("langsmith runs: settle (%s) must be < window (%s)", rs.settle, rs.window)
 	}
 	for _, f := range rs.extraRecordFields {
-		if hardDeniedRunsFields[f] {
+		if isHardDeniedRunsField(f) {
 			return fmt.Errorf("langsmith runs: extra_record_fields cannot include %q — it is a hard-denied message-body field (the content guard would drop the whole record)", f)
 		}
 	}
 	for _, f := range rs.extraIndexedFields {
-		if hardDeniedRunsFields[f] {
+		if isHardDeniedRunsField(f) {
 			return fmt.Errorf("langsmith runs: extra_indexed_fields cannot include %q — it is a hard-denied message-body field (a body must never become a Loki stream label)", f)
 		}
 	}

@@ -33,7 +33,7 @@ func Signals() []signal.Signal {
 		selfMetric("last_success_timestamp_seconds", "gauge", "s", "unix time of last successful emit", "loop"),
 		selfMetric("window_lag_seconds", "gauge", "s", "now minus the watermark frontier", "loop"),
 		selfMetric("queue_depth", "gauge", "1", "per-loop queue depth", "loop"),
-		selfMetric("loop_degraded", "gauge", "1", "1 while a loop is degraded (reason attribute), 0 after the clearing commit", "loop", "reason"),
+		selfMetric("loop_degraded", "gauge", "1", "1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends", "loop", "reason"),
 		selfMetric("leader", "gauge", "1", "1 while this replica holds leadership, 0 while it is a standby; recorded by every replica from startup"),
 		selfMetric("go_heap_inuse_bytes", "gauge", "By", "bytes in in-use heap spans (runtime.MemStats.HeapInuse)"),
 		selfMetric("go_memory_limit_bytes", "gauge", "By", "the Go runtime soft memory limit (GOMEMLIMIT); 0 when no limit is set"),

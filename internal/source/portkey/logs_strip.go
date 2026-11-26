@@ -225,7 +225,7 @@ func (p fieldPolicy) liftMetadata(metaRaw json.RawMessage, lr *model.LogRecord) 
 		return // metadata absent / null / not an object — nothing to lift
 	}
 	for k := range p.metadataRecord {
-		if hardDeniedLogFields[k] {
+		if isHardDeniedLogField(k) {
 			continue // never lift a hard-denied content sub-key (defence beyond the config-time reject)
 		}
 		s, ok := scalarToString(meta[k])

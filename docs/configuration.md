@@ -16,7 +16,9 @@ This page is a narrative walk-through of the most important config sections. For
 Two syntax forms are supported anywhere in the config:
 
 - `${ENV_VAR}` — resolved from the process environment at startup. An unset variable is a fatal error.
-- `file:/path/to/file` — the entire scalar is replaced with the trimmed contents of the file.
+- `file:/path/to/file` — the entire scalar is replaced with the trimmed contents of the file. A file that is missing, or empty after trimming, is a fatal error.
+
+A resolved reference is always a string, so refs work for string and duration fields, not for booleans or numbers (a `${VAR}` there fails at load with a type error). A config error never echoes a resolved secret.
 
 ```yaml
 auth:
@@ -183,7 +185,7 @@ governance:
   allow_label_keys: []
 ```
 
-- **`per_metric_cardinality_budget`** — caps the number of distinct label-sets per metric name. Over-budget series are dropped and counted as `genai_otel_bridge_guard_dropped_total`.
+- **`per_metric_cardinality_budget`** — caps the number of distinct label-sets per metric name that are active (emitted within the last hour). Over-budget series are dropped and counted as `genai_otel_bridge_guard_dropped_total`.
 - **`max_dpm`** — hard cap on data points per minute per series, on both planes. Default 1 (the Grafana Cloud standard).
 - **`max_stream_label_keys`** — caps how many OTLP resource attributes a single logs loop may contribute as Loki stream labels. The Grafana Cloud Loki default limit is 15 per series; the bridge fails fast at startup if a loop would exceed it.
 - **`allow_label_keys`** — extra content-free attribute keys the operator opts into the label allow-list, on top of every registered source's declared keys (the base union is unconditional — not gated on which sources are enabled; every key is content-free by declaration, so a disabled vendor's keys only widen the default-deny surface, never leak). Default empty. See [Content governance](./governance.md).

@@ -87,7 +87,8 @@ func TestRunRetainCheckpointKeepsConfigMapAndLease(t *testing.T) {
 // The #33 acceptance scenario end-to-end over the real configmap store: install → a leader at epoch N≥1
 // saves a watermark → uninstall with retainCheckpoint → reinstall (reads the retained Lease's epoch) →
 // the FIRST commit ADVANCES the watermark instead of being fenced. The guard assertion shows the bug:
-// had the Lease been deleted, the reinstall's fresh epoch 0 would be fenced against the retained epoch N.
+// had the Lease been deleted, the reinstall's fresh epoch 1 would be fenced against the retained epoch
+// N+1. The lease epoch is LeaseTransitions+1 (#375).
 func TestRetainCheckpointResumesWithoutFenceStorm(t *testing.T) {
 	ctx := context.Background()
 	transitions := int32(2) // a prior install with ≥1 leadership transition (any rollout/restart)
@@ -98,9 +99,9 @@ func TestRetainCheckpointResumesWithoutFenceStorm(t *testing.T) {
 	cs := fake.NewSimpleClientset(lease)
 	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
 
-	// Install: leader at epoch 2 persists a watermark.
+	// Install: leader at epoch 3 (2 transitions + 1) persists a watermark.
 	store := configmap.New(cs, testNS, testCM)
-	w1 := model.Watermark{Time: time.Unix(1000, 0).UTC(), Epoch: 2}
+	w1 := model.Watermark{Time: time.Unix(1000, 0).UTC(), Epoch: int64(transitions) + 1}
 	if err := store.Save(ctx, key, w1); err != nil {
 		t.Fatalf("initial save: %v", err)
 	}
@@ -113,19 +114,19 @@ func TestRetainCheckpointResumesWithoutFenceStorm(t *testing.T) {
 		t.Fatal("both checkpoint and lease must survive a retain cleanup")
 	}
 
-	// Guard: a DELETED lease would give a fresh reinstall epoch 0, which is fenced against the retained
-	// checkpoint at epoch 2 — the exact stall the fix prevents.
-	if err := checkpoint.CheckMonotonic(w1, model.Watermark{Time: time.Unix(2000, 0).UTC(), Epoch: 0}); !errors.Is(err, checkpoint.ErrStaleWrite) {
-		t.Fatalf("guard: fresh-lease epoch 0 must be fenced against the retained checkpoint, got %v", err)
+	// Guard: a DELETED lease would give a fresh reinstall epoch 1 (0 transitions + 1), which is fenced
+	// against the retained checkpoint at epoch 3 — the exact stall the fix prevents.
+	if err := checkpoint.CheckMonotonic(w1, model.Watermark{Time: time.Unix(2000, 0).UTC(), Epoch: 1}); !errors.Is(err, checkpoint.ErrStaleWrite) {
+		t.Fatalf("guard: fresh-lease epoch 1 must be fenced against the retained checkpoint, got %v", err)
 	}
 
-	// Reinstall: the new leader reads the retained Lease's LeaseTransitions as its epoch. Because the
+	// Reinstall: the new leader reads the retained Lease's LeaseTransitions+1 as its epoch. Because the
 	// Lease survived, that epoch (≥ the stored epoch) makes the first commit advance, not fence.
 	got, err := cs.CoordinationV1().Leases(testNS).Get(ctx, testLease, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("read retained lease: %v", err)
 	}
-	electedEpoch := int64(*got.Spec.LeaseTransitions) // == 2, ≥ stored 2 (and only ever increases)
+	electedEpoch := int64(*got.Spec.LeaseTransitions) + 1 // == 3, ≥ stored 3 (and only ever increases)
 	resume := model.Watermark{Time: time.Unix(2000, 0).UTC(), Epoch: electedEpoch}
 	store2 := configmap.New(cs, testNS, testCM)
 	if err := store2.Save(ctx, key, resume); err != nil {

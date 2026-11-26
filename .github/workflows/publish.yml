@@ -5,9 +5,11 @@
 # ci.yml's `ci-success` check for that same commit (see wait-for-ci below — a red
 # ci-success must never let a broken build reach the edge tag / snapshot chart that
 # dev EKS ArgoCD tracks); called by release-please.yml when a release is created
-# (release_tag set, ungated — release-please only merges once ci-success is already
-# green, so latency is unchanged); also workflow_dispatch-able: leave release_tag
-# empty for an edge (:main) test build, or set it to re-publish a tag.
+# (release_tag set) and by auto-rc.yml for a release candidate; also
+# workflow_dispatch-able: leave release_tag empty for an edge (:main) test build, or
+# set it to re-publish a tag. In a called workflow github.event_name is the caller's
+# event, so the release-please call (a push) waits for ci-success too; the auto-rc
+# call (workflow_run, fired by CI's completion) and a manual dispatch skip the wait.
 name: publish
 
 on:
@@ -31,12 +33,30 @@ on:
 permissions:
   contents: read
 
+# A release merge runs this workflow twice for one commit: its own push trigger (edge)
+# and the release-please call (release). Both push to the same image repository and
+# both write the :main tags, so they take turns, never cancelling. Only push-event
+# runs share a group, keyed on the pushed commit, and a group can hold at most those
+# two: one push of a commit to main means one edge run and at most one release-please
+# run, and a re-run attempt starts only after its earlier attempt has finished.
+# GitHub keeps one pending run per group and cancels an older pending one when a
+# third arrives, so any path that could add a third member must not join: the
+# auto-rc call (workflow_run) and a manual dispatch get a group of their own run.
+# They can still overlap an edge or release publish. That is safe: each run pushes
+# its own digests and a complete, signed index, every build of a commit passes the
+# same Trivy gate, and a tag both write (:main, main-<sha>) ends on one of those
+# complete indexes for the same commit. auto-rc never cuts an RC on a stable release
+# commit, so an RC and a release of one commit do not meet.
+concurrency:
+  group: publish-${{ github.event_name == 'push' && format('commit-{0}', github.sha) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: false
+
 jobs:
-  # Gate the edge (:main) publish path on CI actually being green for this exact commit.
-  # Only runs on the `push` trigger (github.sha there is guaranteed to be the pushed commit,
-  # unlike workflow_run's head_sha, which can race ahead on rapid pushes); the workflow_call
-  # (release) and workflow_dispatch (manual) paths skip it, so this job's result is `skipped`
-  # there and `image` proceeds immediately — release publishing latency is unaffected.
+  # Gate the publish on CI actually being green for this exact commit. Runs whenever
+  # github.event_name is `push`: the edge path and the release-please call, whose event
+  # is the caller's push (github.sha there is the pushed commit). The auto-rc call
+  # (workflow_run, which only fires once CI has concluded green) and a manual dispatch
+  # skip it, so this job's result is `skipped` there and `image` proceeds at once.
   wait-for-ci:
     name: wait-for-ci-success
     if: github.event_name == 'push'
@@ -54,10 +74,17 @@ jobs:
           set -euo pipefail
           echo "Waiting for the ci-success check on ${SHA}..."
           for i in $(seq 1 90); do
-            conclusion=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" \
-              --jq '[.check_runs[] | select(.name=="ci-success")] | last | .conclusion // empty')
-            status=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" \
-              --jq '[.check_runs[] | select(.name=="ci-success")] | last | .status // empty')
+            # One request, filtered server-side by name: an unfiltered list is paged at
+            # 30 and this commit can carry more check runs than that, and reading status
+            # and conclusion from two requests can see a check complete in between.
+            if ! state=$(gh api \
+              "repos/${REPO}/commits/${SHA}/check-runs?check_name=ci-success&per_page=100" \
+              --jq '[.check_runs[]] | last | "\(.status // "") \(.conclusion // "")"'); then
+              echo "check-runs request failed; sleeping 30s (${i}/90)"
+              sleep 30
+              continue
+            fi
+            read -r status conclusion <<< "${state}"
             if [ "${status}" = "completed" ]; then
               echo "ci-success conclusion: ${conclusion}"
               if [ "${conclusion}" = "success" ]; then

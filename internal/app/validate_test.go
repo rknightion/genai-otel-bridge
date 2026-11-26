@@ -88,3 +88,32 @@ func TestValidateConfigFile_UnknownSourceType(t *testing.T) {
 		t.Fatal("expected unknown source type to fail")
 	}
 }
+
+// -validate-config must fail wherever startup (app.Build) would: checks living in source constructors
+// and Build were previously skipped, so a config could pass the flag and then crash-loop the pod.
+func TestValidateConfigRejectsWhatBuildRejects(t *testing.T) {
+	cases := map[string]string{
+		"typo'd enabled loop name": strings.Replace(validCfg, "      analytics:\n",
+			"      analytics:\n        enabled: true\n        cadence: 60s\n        window: 50m\n        bucket_settle: 10m\n        bootstrap_lookback: 50m\n        max_backfill: 90m\n        metric_prefix: portkey_api\n        graphs: [requests]\n      log_export:\n", 1),
+		"unknown graph":              strings.Replace(validCfg, "graphs: [requests, cost, tokens, latency, errors]", "graphs: [requests, nonsense]", 1),
+		"content-floor label key":    validCfg + "governance:\n  allow_label_keys: [gen_ai.prompt]\n",
+		"missing bootstrap_lookback": strings.Replace(validCfg, "        bootstrap_lookback: 50m\n", "", 1),
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if body == validCfg {
+				t.Fatal("test case did not alter the config")
+			}
+			if err := ValidateConfigFile(writeCfg(t, body)); err == nil {
+				t.Fatal("-validate-config reports OK for a config Build refuses")
+			}
+		})
+	}
+}
+
+// The shipped valid fixture still passes with no secrets set (Build runs with inert dependencies).
+func TestValidateConfigFile_ValidFixture(t *testing.T) {
+	if err := ValidateConfigFile("../config/testdata/valid.yaml"); err != nil {
+		t.Fatalf("valid.yaml should pass: %v", err)
+	}
+}

@@ -91,7 +91,7 @@ live.
 | `genai_otel_bridge_guard_dropped_total` | counter | 1 | loop | — | data points or log records dropped by the governance guard |
 | `genai_otel_bridge_last_success_timestamp_seconds` | gauge | s | loop | — | unix time of last successful emit |
 | `genai_otel_bridge_leader` | gauge | 1 | — | — | 1 while this replica holds leadership, 0 while it is a standby; recorded by every replica from startup |
-| `genai_otel_bridge_loop_degraded` | gauge | 1 | loop, reason | — | 1 while a loop is degraded (reason attribute), 0 after the clearing commit |
+| `genai_otel_bridge_loop_degraded` | gauge | 1 | loop, reason | — | 1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends |
 | `genai_otel_bridge_new_label_values_total` | counter | 1 | series | — | new label-value combinations seen per series |
 | `genai_otel_bridge_queue_depth` | gauge | 1 | loop | — | per-loop queue depth |
 | `genai_otel_bridge_samples_capped_total` | counter | 1 | loop, reason | — | samples suppressed by the DPM cap (coalesced last-write-wins per series-minute) |

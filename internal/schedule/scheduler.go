@@ -287,12 +287,21 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	// mismatched end the tick with no lag and no unreadable time counted; a failed call is handled as a
 	// failed collect below, after the lag accounting.
 	var scopeErr error
+	gateAuth := false // the gate's call got a 401/403 inside the grace and the tick still collects
 	if sp.Gate != nil {
 		decision, err := sp.Gate.Before(ctx)
 		switch {
 		case err != nil && ctx.Err() != nil:
 			span.SetAttributes(attribute.String("outcome", "cancelled"))
 			return tickOutcome{}
+		case err != nil && decision == source.ScopeProceed:
+			// [PR #548 review] Inside a matched pipeline's grace: collect anyway, but keep the auth signal
+			// for the gate's 401/403 (the asserter never calls the hook). One count per 401 response: the
+			// collect's own 401, if any, is the source's hook to count. It also feeds the backoff below.
+			if errors.Is(err, source.ErrAuth) {
+				gateAuth = true
+				m.AuthError(sp.Loop.Key().Loop, id.Source)
+			}
 		case err != nil:
 			scopeErr = err
 		case decision == source.ScopeProceed:
@@ -383,7 +392,7 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	case err != nil:
 		// An auth failure (401/403, source.ErrAuth) is still a counted collect error, but the tick loop
 		// stretches the wait like a quota streak so a bad key does not spend the request budget [#537].
-		auth := errors.Is(err, source.ErrAuth)
+		auth := errors.Is(err, source.ErrAuth) || gateAuth
 		m.EmitError(id, "collect")
 		if s.lim.Allow(sp.Pipeline.limitKey("collect", name)) {
 			slog.Warn("collect failed", append([]any{"loop", name, "err", err}, pattrs...)...)

@@ -28,7 +28,11 @@ and a tick exactly as without one). The tick asks it after the `Busy` check and 
   with the pipeline id when set) and, for an error that is `source.ErrAuth` (a `*source.AuthError` is),
   `AuthError(Key().Loop, source)`, all on the spec's `Metrics`. That auth failure also feeds the
   auth backoff streak (`tickOutcome.auth`, #537), so a bad key's loop stretches its wait as it would for
-  a collect's 401/403. Nothing is collected. A failure after the
+  a collect's 401/403. Nothing is collected.
+- `ScopeProceed` with an error is a 401/403 inside a matched pipeline's grace: the tick collects, and
+  the scheduler raises `AuthError` once for the gate's call (the collect's own 401 is the source hook's
+  to count, so each 401 response counts once). If the collect then fails for any reason other than quota,
+  the tick feeds the auth backoff streak; a successful collect does not. A failure after the
   leader context is cancelled is the cancellation and is not counted.
 
 `Scheduler.Run` calls `Elected(leaderCtx)` once per distinct gate before starting any loop, and

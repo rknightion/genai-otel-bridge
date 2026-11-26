@@ -646,3 +646,29 @@ func TestAuthErrorIsErrAuth(t *testing.T) {
 		t.Fatal("a non-auth failure is not ErrAuth")
 	}
 }
+
+// TestGateAuthFailureInsideGraceIsReturned [PR #548 review]: a 401/403 from a matched pipeline's
+// assertion inside the grace still lets the tick collect, but Before returns the AuthError with
+// ScopeProceed so the scheduler can raise the auth signal (the asserter never calls the hook). Past the
+// grace it is an ordinary failed call. A non-auth failure inside the grace stays (ScopeProceed, nil).
+func TestGateAuthFailureInsideGraceIsReturned(t *testing.T) {
+	r := newRig(t, nil, "")
+	ctx := context.Background()
+	r.asserter.next(ScopeMatched, nil)
+	r.asserter.next(0, &AuthError{Status: 401})
+	r.before(t, ctx, ScopeProceed, false, 1)
+	r.clock.Advance(10 * time.Minute)
+	err := r.before(t, ctx, ScopeProceed, true, 2)
+	if !errors.Is(err, ErrAuth) {
+		t.Fatalf("error %v, want an ErrAuth", err)
+	}
+	r.clock.Advance(30 * time.Second)
+	r.before(t, ctx, ScopeProceed, false, 2) // between calls: no call, nothing to report
+	r.clock.Advance(11 * time.Minute)
+	if err := r.before(t, ctx, ScopeWait, true, 3); !errors.Is(err, ErrAuth) {
+		t.Fatalf("past the grace: error %v, want an ErrAuth", err)
+	}
+	if !slices.Equal(r.results, []string{"matched", "error", "error"}) {
+		t.Fatalf("results %q", r.results)
+	}
+}

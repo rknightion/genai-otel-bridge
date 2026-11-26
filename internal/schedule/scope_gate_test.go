@@ -273,3 +273,80 @@ func TestRunElectsGatesBeforeFirstTickAndResetsAfterJoin(t *testing.T) {
 		t.Fatalf("asserter calls = %d, want 0: the restored match needs no call on the first ticks", a.Calls())
 	}
 }
+
+// TestScopeGateAuthInsideGraceKeepsSignal [PR #548 review]: a matched pipeline whose assertion gets a
+// 401/403 inside the grace still collects, and the scheduler raises auth_errors_total once for the gate's
+// call. The collect's own 401 is the source's to count through its hook (one count per 401 response), so
+// the scheduler records exactly one AuthError per tick here. The auth backoff follows the tick: it
+// stretches when the collect fails too, and not when the collect succeeds.
+func TestScopeGateAuthInsideGraceKeepsSignal(t *testing.T) {
+	cases := []struct {
+		name          string
+		gateErr       error
+		collectErr    error
+		wantAuth      int
+		wantCollected bool
+		wantStreak    bool
+		wantCollErrs  int
+	}{
+		{name: "auth, collect fails with auth", gateErr: &source.AuthError{Status: 401}, collectErr: source.WrapAuth(401, errors.New("analytics 401")),
+			wantAuth: 1, wantStreak: true, wantCollErrs: 1},
+		{name: "auth, collect fails otherwise", gateErr: &source.AuthError{Status: 403}, collectErr: errors.New("upstream 503"),
+			wantAuth: 1, wantStreak: true, wantCollErrs: 1},
+		{name: "auth, collect succeeds", gateErr: &source.AuthError{Status: 401}, wantAuth: 1, wantCollected: true},
+		{name: "other failure, collect succeeds", gateErr: errors.New("upstream 503"), wantCollected: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := model.CheckpointKey{SourceInstance: "mt.t1.a", Loop: "analytics", OutputFingerprint: "fp"}
+			cp := newMemCP()
+			now := time.Unix(100000, 0).UTC()
+			cp.Save(context.Background(), key, model.Watermark{Time: now.Add(-2 * time.Minute), Epoch: 1})
+			loop := &errorOnceLoop{key: key, err: tc.collectErr}
+			m := newGateMetrics()
+			r := NewLoopRunner(loop, &fakeEmitter{byTS: map[int64]error{}}, cp, source.NewGuard(source.GuardConfig{}), 4, 1, m)
+			a := &scriptedAsserter{res: source.ScopeMatched}
+			clock := now
+			gate := source.NewScopeGate(source.ScopeGateConfig{Asserter: a, Store: newMemCP(), SourceInstance: "mt.t1.a",
+				Digest: source.ScopeMatchDigest("fp", "ws", "id"), Now: func() time.Time { return clock }})
+			if d, err := gate.Before(leaderCtx()); d != source.ScopeProceed || err != nil {
+				t.Fatalf("first assertion = (%v, %v), want a match", d, err)
+			}
+			clock = clock.Add(10 * time.Minute) // re-assertion due, well inside the 20-minute grace
+			a.res, a.err = 0, tc.gateErr
+			sp := LoopSpec{Runner: r, Loop: loop, Cadence: time.Minute, Window: time.Hour, MaxBackfill: time.Hour,
+				MaxCatchupPerTick: 1, Metrics: m, Gate: gate}
+			out := NewScheduler(nil, NoopMetrics{}).tick(leaderCtx(), sp, clock)
+
+			if a.Calls() != 2 || loop.calls != 1 {
+				t.Fatalf("asserter calls %d, collects %d, want 2 and 1 (the tick still collects inside the grace)", a.Calls(), loop.calls)
+			}
+			if len(m.auth) != tc.wantAuth {
+				t.Fatalf("auth errors %v, want %d", m.auth, tc.wantAuth)
+			}
+			if out.collected != tc.wantCollected || out.auth != tc.wantStreak {
+				t.Fatalf("outcome %+v, want collected=%v auth=%v", out, tc.wantCollected, tc.wantStreak)
+			}
+			if m.emitErrs["collect"] != tc.wantCollErrs {
+				t.Fatalf("collect errors %v, want %d: the gate's call inside the grace is not a failed collect", m.emitErrs, tc.wantCollErrs)
+			}
+		})
+	}
+}
+
+// errorOnceLoop returns err from Collect when set, else one bucket after the watermark.
+type errorOnceLoop struct {
+	key   model.CheckpointKey
+	err   error
+	calls int
+}
+
+func (l *errorOnceLoop) Key() model.CheckpointKey { return l.key }
+func (l *errorOnceLoop) Cadence() time.Duration   { return time.Minute }
+func (l *errorOnceLoop) Collect(_ context.Context, since model.Watermark) (model.Batch, error) {
+	l.calls++
+	if l.err != nil {
+		return model.Batch{}, l.err
+	}
+	return batchAt(l.key, since.Time.Unix()+60), nil
+}

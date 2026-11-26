@@ -54,7 +54,9 @@ concurrent ticks wait for the first call's result rather than calling again.
 - Re-assertion is due one interval (10 minutes) after a fresh match; while unverified or mismatched,
   or after a failed call, at most one call a minute. `ScopeUnverifiable` keeps a match. A failed call
   keeps a match for two intervals after the last successful assertion or restored match, then is a
-  failure (the ticks between its calls wait). Only `ScopeMatched` ends a mismatch. None of these is a
+  failure (the ticks between its calls wait). A 401/403 inside the grace comes back as `ScopeProceed`
+  with the error, so the scheduler keeps the auth signal while the tick collects; any other failure
+  inside the grace is `ScopeProceed` with no error. Only `ScopeMatched` ends a mismatch. None of these is a
   config key. A call cut short by the leader context's cancellation changes and counts nothing.
 - `Elected(ctx)` resets the gate and reads the remembered match at `ScopeMatchKey(sourceInstance)`
   (`<source instance>/scope-match/v1`; the loop name `scope-match` is reserved). A stored digest equal

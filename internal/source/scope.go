@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -250,10 +251,11 @@ func (g *ScopeGate) result(r string) {
 	}
 }
 
-// Before decides one tick, calling the assertion when the policy says it is due. A non-nil error is a
-// failed call that ends the tick: the scheduler records lag and counts it as a failed collect. The
-// decision returned with an error is ScopeWait. An error while ctx is cancelled is the cancellation:
-// it changes nothing and is not counted.
+// Before decides one tick, calling the assertion when the policy says it is due. A non-nil error with
+// ScopeWait is a failed call that ends the tick: the scheduler records lag and counts it as a failed
+// collect. A non-nil error with ScopeProceed is an auth failure (ErrAuth) inside a matched pipeline's
+// grace: the tick still collects, and the scheduler raises the auth signal. An error while ctx is
+// cancelled is the cancellation: it changes nothing and is not counted.
 func (g *ScopeGate) Before(ctx context.Context) (ScopeDecision, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -303,6 +305,12 @@ func (g *ScopeGate) assertLocked(ctx context.Context, now time.Time) (ScopeDecis
 		if g.state == scopeStateMatched {
 			g.nextDue = now.Add(scopeRetryInterval)
 			if g.inGraceLocked(now) {
+				// The tick still collects. A 401/403 is returned with ScopeProceed so the scheduler can
+				// raise the auth signal, which the asserter never does itself; any other failure inside
+				// the grace is counted only in scope_assertion_total.
+				if errors.Is(err, ErrAuth) {
+					return ScopeProceed, err
+				}
 				return ScopeProceed, nil
 			}
 		}

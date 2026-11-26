@@ -323,6 +323,7 @@ func newLogsExportLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps so
 		apiKeyIDs:        uc.apiKeyIDsCSV,
 		onDataIncomplete: deps.OnDataIncomplete,
 		onAuthError:      deps.OnAuthError,
+		onCapability:     deps.OnCapability,
 		now:              func() time.Time { return time.Now().UTC() },
 	}, nil
 }

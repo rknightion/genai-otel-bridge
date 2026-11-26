@@ -40,10 +40,11 @@ type fakeExport struct {
 	total              int
 	pollsUntilSuccess  int
 	failStatus         string
-	startFailStatus    int // when non-zero, POST /start returns this HTTP status + an AB01 body (lost-ack/non-draft test)
-	httpStatusOverride int // when non-zero, every control-plane call returns this HTTP status (auth-fail test)
-	pollStatusCode     int // when non-zero, GET /logs/exports/<id> (job poll) returns this HTTP status
-	downloadStatusCode int // when non-zero, GET /logs/exports/<id>/download returns this HTTP status
+	startFailStatus    int    // when non-zero, POST /start returns this HTTP status + an AB01 body (lost-ack/non-draft test)
+	httpStatusOverride int    // when non-zero, every control-plane call returns this HTTP status (auth-fail test)
+	createRaw          string // when non-empty, POST /logs/exports returns this raw JSON body (schema-drift tests)
+	pollStatusCode     int    // when non-zero, GET /logs/exports/<id> (job poll) returns this HTTP status
+	downloadStatusCode int    // when non-zero, GET /logs/exports/<id>/download returns this HTTP status
 	signedURLHost      string
 	pageBody           func(page int) string // JSONL body for a page
 	createBodies       []map[string]json.RawMessage
@@ -81,6 +82,10 @@ func (f *fakeExport) handle(w http.ResponseWriter, r *http.Request) {
 		f.seq++
 		id := fmt.Sprintf("job-%d", f.seq)
 		f.jobs[id] = &fakeJob{page: page, status: statusDraft}
+		if f.createRaw != "" {
+			_, _ = w.Write([]byte(f.createRaw))
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "total": f.total, "object": "export"})
 	case r.Method == http.MethodPost && strings.HasSuffix(p, "/start"):
 		if f.startFailStatus != 0 {
@@ -963,4 +968,69 @@ func TestLogsExportPollErrorBeforeDeadlineKeepsCursor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLogsExportCreateResponseSchema: a create response that loses total or id is a loud error plus the
+// schema-changed capability state, never an empty window or an orphan draft per tick. Fixtures are raw JSON
+// strings, not encoded from createExportResp, so a field rename on the vendor side is what is under test.
+func TestLogsExportCreateResponseSchema(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	mk := func(t *testing.T, raw string) (*logsExportLoop, *fakeExport, *[]string) {
+		f := newFakeExport(t, 10, func(int) string { return nLines(1, "m") })
+		f.createRaw = raw
+		var caps []string
+		l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}),
+			source.Deps{OnCapability: func(loop, graph string, st source.CapabilityState) {
+				caps = append(caps, loop+"/"+graph+"/"+string(st))
+			}}, now)
+		return l, f, &caps
+	}
+	wantCap := "logs_export/logs/exports/" + string(source.CapabilitySchemaChanged)
+	start := model.Watermark{Time: now.Add(-time.Hour)}
+
+	t.Run("missing total", func(t *testing.T) {
+		l, _, caps := mk(t, `{"id":"job-1","object":"export","total_records":1234}`)
+		b, err := l.Collect(context.Background(), start)
+		if err == nil {
+			t.Fatalf("a create response with no total must error, got watermark %+v", b.Watermark)
+		}
+		if b.Watermark != (model.Watermark{}) || len(b.Logs) != 0 {
+			t.Fatalf("an error tick must not advance: %+v", b)
+		}
+		if len(*caps) != 1 || (*caps)[0] != wantCap {
+			t.Fatalf("OnCapability = %v, want exactly [%s]", *caps, wantCap)
+		}
+	})
+	t.Run("missing id", func(t *testing.T) {
+		l, f, caps := mk(t, `{"export_id":"job-1","total":10}`)
+		for i := 0; i < 2; i++ {
+			if _, err := l.Collect(context.Background(), start); err == nil {
+				t.Fatalf("tick %d: a create response with no id must error", i)
+			}
+		}
+		if f.seq > 2 {
+			t.Fatalf("%d create calls over 2 ticks; want at most one per tick and no cursor written", f.seq)
+		}
+		if len(*caps) != 2 {
+			t.Fatalf("each failing tick fires the capability, got %v", *caps)
+		}
+		for _, c := range *caps {
+			if c != wantCap {
+				t.Fatalf("OnCapability = %v, want only %s", *caps, wantCap)
+			}
+		}
+	})
+	t.Run("genuine total 0", func(t *testing.T) {
+		l, _, caps := mk(t, `{"id":"job-1","object":"export","total":0}`)
+		b, err := l.Collect(context.Background(), start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !b.Watermark.Time.Equal(now.Add(-10 * time.Minute)) {
+			t.Fatalf("empty settled window must advance to the window end, got %s", b.Watermark.Time)
+		}
+		if len(*caps) != 0 {
+			t.Fatalf("no capability for a well-formed response, got %v", *caps)
+		}
+	})
 }

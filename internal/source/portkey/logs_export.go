@@ -111,7 +111,9 @@ type logsExportLoop struct {
 	// nil ⇒ log only.
 	onDataIncomplete func(loop string, reason source.IncompleteReason)
 	onAuthError      func(loop, source string) // followup §9: 401/403 on a lifecycle call → own alertable signal
-	now              func() time.Time
+	// onCapability, if set, receives the schema-changed state when the create response loses id/total.
+	onCapability func(loop, graph string, state source.CapabilityState)
+	now          func() time.Time
 }
 
 // jobFailed records an export-job failure/abandonment as a loud, counted, alertable event.

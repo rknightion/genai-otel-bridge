@@ -39,8 +39,10 @@ const (
 
 // Export lifecycle wire shapes (PoC §1/§2 — measured). Only the fields we use are decoded.
 type createExportResp struct {
-	ID    string `json:"id"`
-	Total int    `json:"total"` // matched count at create, fixed for the (settled) window
+	ID string `json:"id"`
+	// Total is a pointer so an ABSENT total (vendor rename/omission) is distinguishable from a genuine 0
+	// (an empty settled window). Absent is a loud schema-changed error, never an empty window.
+	Total *int `json:"total"` // matched count at create, fixed for the (settled) window
 }
 type exportDetailResp struct {
 	Status string `json:"status"`
@@ -77,7 +79,13 @@ func (l *logsExportLoop) createExport(ctx context.Context, winMin, winMax time.T
 	if err := l.lifecycle(ctx, http.MethodPost, "/logs/exports", body, &out); err != nil {
 		return "", 0, err
 	}
-	return out.ID, out.Total, nil
+	if out.ID == "" || out.Total == nil {
+		if l.onCapability != nil {
+			l.onCapability("logs_export", "logs/exports", source.CapabilitySchemaChanged)
+		}
+		return "", 0, fmt.Errorf("portkey logs_export: create response missing id/total (schema changed?)")
+	}
+	return out.ID, *out.Total, nil
 }
 
 func (l *logsExportLoop) startExport(ctx context.Context, jobID string) error {

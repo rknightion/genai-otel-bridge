@@ -187,6 +187,31 @@ func TestLogsSettingsExtraIndexedFields(t *testing.T) {
 	}
 }
 
+// TestOptInRejectsFlattenedFloorKey: a flattened content key (a PREFIX match on the floor, not an exact
+// member) must be rejected at construction on every opt-in knob, and by the hard-denied reason.
+func TestOptInRejectsFlattenedFloorKey(t *testing.T) {
+	for _, knob := range []string{"extra_record_fields", "extra_indexed_fields", "metadata_record_fields", "metadata_trace_id_field", "trace_id_field"} {
+		for _, key := range []string{"gen_ai.prompt.0.content", "gen_ai.completion.1.content"} {
+			s := baseLogsSettings()
+			s[knob] = key
+			ls := defaultLogsSettings()
+			err := applyLogsSettings(&ls, s)
+			if err == nil || !strings.Contains(err.Error(), "hard-denied") {
+				t.Errorf("%s=%q: want a hard-denied rejection, got %v", knob, key, err)
+			}
+		}
+	}
+	// AC3: a non-floor opt-in is still accepted.
+	s := baseLogsSettings()
+	s["extra_record_fields"] = "cache_status"
+	s["extra_indexed_fields"] = "mode"
+	s["metadata_record_fields"] = "correlation_id"
+	ls := defaultLogsSettings()
+	if err := applyLogsSettings(&ls, s); err != nil {
+		t.Fatalf("non-floor opt-ins must still load: %v", err)
+	}
+}
+
 // TestHardDeniedLogFieldsCoversFloor: the opt-in rejection set must include the entire shared content
 // floor so it can't drift from the app guard backstop (mirror of the langsmith drift guard).
 func TestHardDeniedLogFieldsCoversFloor(t *testing.T) {

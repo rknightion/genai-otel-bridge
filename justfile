@@ -4,7 +4,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 golangci_lint_version := env('GOLANGCI_LINT_VERSION', 'v2.15.0')
 # renovate: datasource=github-tags depName=kubernetes-sigs/controller-runtime versioning=loose
 setup_envtest_version := env('SETUP_ENVTEST_VERSION', 'release-0.23')
-# renovate: datasource=github-releases depName=kubernetes/kubernetes versioning=semver
+# renovate: datasource=github-releases depName=kubernetes-sigs/controller-tools versioning=semver extractVersion=^envtest-v(?<version>.+)$
 envtest_k8s_version := env('ENVTEST_K8S_VERSION', '1.37.0')
 # renovate: datasource=github-releases depName=helm/helm versioning=semver
 helm_version := env('HELM_VERSION', 'v4.3.2')

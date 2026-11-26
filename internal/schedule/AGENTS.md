@@ -25,8 +25,10 @@ and a tick exactly as without one). The tick asks it after the `Busy` check and 
   the loop is next ticked at `DegradedBackoff`; its next successful save clears the degrade.
 - A failed call is handled as a failed collect: `Since`, `window_lag` and `backfill_unstorable` as
   today, then `emit_errors_total{kind="collect"}`, a warning (limiter key `scope_assertion:<loop>`,
-  with the pipeline id when set) and, for a `*source.AuthError` anywhere in the chain,
-  `AuthError(Key().Loop, source)`, all on the spec's `Metrics`. Nothing is collected. A failure after the
+  with the pipeline id when set) and, for an error that is `source.ErrAuth` (a `*source.AuthError` is),
+  `AuthError(Key().Loop, source)`, all on the spec's `Metrics`. That auth failure also feeds the
+  auth backoff streak (`tickOutcome.auth`, #537), so a bad key's loop stretches its wait as it would for
+  a collect's 401/403. Nothing is collected. A failure after the
   leader context is cancelled is the cancellation and is not counted.
 
 `Scheduler.Run` calls `Elected(leaderCtx)` once per distinct gate before starting any loop, and

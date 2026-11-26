@@ -177,7 +177,7 @@ type tickOutcome struct {
 	more      bool // the loop is still draining: a windowed backlog, or a cursor mid-window [#374] (catch-up)
 	collected bool // Collect returned without error (the source answered)
 	quota     bool // Collect returned source.ErrQuotaExceeded
-	auth      bool // Collect failed with an error wrapping source.ErrAuth (401/403) [#537]
+	auth      bool // Collect, or the scope gate's call, failed with an error wrapping source.ErrAuth (401/403) [#537]
 }
 
 // maxQuotaStreak bounds the consecutive-quota counter. Any streak this long already pins the wait at
@@ -344,10 +344,12 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	}
 	if scopeErr != nil {
 		// The scope assertion failed: like a failed collect, counted and logged against this loop, which
-		// retries at its cadence with nothing advanced. A 401 or 403 also raises the auth-error signal.
+		// retries with nothing advanced. A 401 or 403 (*source.AuthError, an ErrAuth) also raises the
+		// auth-error signal, since the asserter never calls the hook, and feeds the auth backoff streak as a
+		// collect's would [#537], so a bad key does not spend the request budget at cadence.
 		m.EmitError(id, "collect")
-		var ae *source.AuthError
-		if errors.As(scopeErr, &ae) {
+		auth := errors.Is(scopeErr, source.ErrAuth)
+		if auth {
 			m.AuthError(sp.Loop.Key().Loop, id.Source)
 		}
 		if s.lim.Allow(sp.Pipeline.limitKey("scope_assertion", name)) {
@@ -355,7 +357,7 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 		}
 		span.RecordError(scopeErr)
 		span.SetStatus(codes.Error, "scope_assertion")
-		return tickOutcome{}
+		return tickOutcome{auth: auth}
 	}
 	batch, err := sp.Loop.Collect(ctx, wm)
 	switch {

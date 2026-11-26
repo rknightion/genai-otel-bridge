@@ -119,13 +119,14 @@ func TestScopeGateDecisionEffects(t *testing.T) {
 		wantCollectErr       int
 		wantAuth             []string
 		wantDegraded         []string
+		wantAuthStreak       bool // the tick feeds the #537 auth backoff streak
 	}{
 		{name: "proceed", res: source.ScopeMatched, wantCollect: true, wantLag: true, wantSkipped: true},
 		{name: "wait", res: source.ScopeUnverifiable},
 		{name: "mismatched", res: source.ScopeMismatch, wantDegraded: []string{"scope_mismatch"}},
 		{name: "failed call", err: errors.New("upstream 503"), wantLag: true, wantSkipped: true, wantCollectErr: 1},
 		{name: "auth failure", err: fmt.Errorf("assert: %w", &source.AuthError{Status: 403}), wantLag: true, wantSkipped: true, wantCollectErr: 1,
-			wantAuth: []string{"analytics/mt.t1.a"}},
+			wantAuth: []string{"analytics/mt.t1.a"}, wantAuthStreak: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,6 +174,14 @@ func TestScopeGateDecisionEffects(t *testing.T) {
 			}
 			if tc.wantDegraded == nil && wait == DegradedBackoff {
 				t.Fatalf("%s: next wait is DegradedBackoff, want the cadence", tc.name)
+			}
+			// [#537] A 401/403 from the gate call stretches the wait like a collect's, so a bad key does
+			// not spend the request budget at cadence; any other failure keeps the cadence.
+			if out.auth != tc.wantAuthStreak {
+				t.Fatalf("tickOutcome.auth = %v, want %v", out.auth, tc.wantAuthStreak)
+			}
+			if wantWait := map[bool]time.Duration{true: 2 * sp.Cadence, false: sp.Cadence}[tc.wantAuthStreak]; tc.wantDegraded == nil && wait != wantWait {
+				t.Fatalf("next wait %v, want %v", wait, wantWait)
 			}
 		})
 	}

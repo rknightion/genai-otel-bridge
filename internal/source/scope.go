@@ -35,8 +35,9 @@ type ScopeAsserter interface {
 	AssertScope(ctx context.Context) (ScopeResult, error)
 }
 
-// AuthError is what an asserter returns when the upstream answers its assertion with 401 or 403. The
-// scheduler raises the auth-error signal for it; the asserter does not call Deps.OnAuthError itself.
+// AuthError is what an asserter returns when the upstream answers its assertion with 401 or 403. It is an
+// ErrAuth (errors.Is). The scheduler raises the auth-error signal for it and stretches the loop's wait as
+// for a collect's auth failure; the asserter does not call Deps.OnAuthError itself.
 type AuthError struct {
 	Status int
 }
@@ -44,6 +45,10 @@ type AuthError struct {
 func (e *AuthError) Error() string {
 	return fmt.Sprintf("source: scope assertion: upstream responded %d", e.Status)
 }
+
+// Is makes an AuthError an ErrAuth, so the scheduler's one errors.Is(err, ErrAuth) check covers a gate
+// call as it covers a collect [#537].
+func (e *AuthError) Is(target error) bool { return target == ErrAuth }
 
 // ScopeMatchStore is where a gate remembers its pipeline's match (design §7). checkpoint.Checkpointer
 // satisfies it, so a remembered match is an ordinary, epoch-fenced checkpoint record.

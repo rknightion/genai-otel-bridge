@@ -41,8 +41,9 @@ and the scheduler stretches the wait as for quota [#537].
 
 `ScopeAsserter` is an optional capability a source implements when it can report what its API key
 reads: `ScopeMatched`, `ScopeMismatch` or `ScopeUnverifiable`, or an error for a failed call. A 401 or
-403 is returned as `*AuthError{Status}`; the asserter never calls `Deps.OnAuthError`, because the
-scheduler raises the auth signal for it. No source implements it yet (unit 4b, #526).
+403 is returned as `*AuthError{Status}`, which is an `ErrAuth` (`errors.Is`); the asserter never calls
+`Deps.OnAuthError`, because the scheduler raises the auth signal for it and stretches the wait as for a
+collect's auth failure. No source implements it yet (unit 4b, #526).
 
 `ScopeGate` is the vendor-neutral policy, one per pipeline, shared by every loop of the pipeline and
 asked by the scheduler before each collect (`Before` returns `ScopeProceed`, `ScopeWait` or

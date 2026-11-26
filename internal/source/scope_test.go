@@ -5,6 +5,7 @@ package source
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -623,5 +624,25 @@ func TestScopeMatchNames(t *testing.T) {
 	}
 	if got := (&AuthError{Status: 403}).Error(); got != "source: scope assertion: upstream responded 403" {
 		t.Fatalf("AuthError = %q", got)
+	}
+}
+
+// TestAuthErrorIsErrAuth [#537]: a scope assertion's *AuthError is a source.ErrAuth, bare or wrapped, so
+// the scheduler's one auth check covers a gate call as it covers a collect; other errors are not.
+func TestAuthErrorIsErrAuth(t *testing.T) {
+	for _, err := range []error{&AuthError{Status: 401}, fmt.Errorf("assert: %w", &AuthError{Status: 403})} {
+		if !errors.Is(err, ErrAuth) {
+			t.Fatalf("errors.Is(%v, ErrAuth) = false, want true", err)
+		}
+		if errors.Is(err, ErrQuotaExceeded) {
+			t.Fatalf("errors.Is(%v, ErrQuotaExceeded) = true, want false", err)
+		}
+		var ae *AuthError
+		if !errors.As(err, &ae) {
+			t.Fatalf("errors.As(%v, *AuthError) = false", err)
+		}
+	}
+	if errors.Is(errUpstream, ErrAuth) {
+		t.Fatal("a non-auth failure is not ErrAuth")
 	}
 }

@@ -3,6 +3,7 @@
 package configmap
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -45,5 +46,36 @@ func TestDataKeyNoCollision(t *testing.T) {
 	// Same logical key is stable.
 	if dataKey(a) != dataKey(model.CheckpointKey{SourceInstance: "a-b", Loop: "c", OutputFingerprint: "d"}) {
 		t.Fatal("dataKey not stable for the same logical key")
+	}
+}
+
+// Literal goldens for the derived ConfigMap data key. [unit 1, G6] The rule is: replace every byte
+// outside [-._a-zA-Z0-9] with '_', cut at 200 characters, append "." and the first 12 hex characters of
+// the SHA-256 of the FULL unsanitised String(). The expected values below were computed once, by hand,
+// from that rule with an independent tool, and pasted. They are never derived by calling dataKey: a
+// change to the cut or the hash length silently resets every watermark of every installed bridge.
+func TestDataKeyGolden(t *testing.T) {
+	cases := []struct {
+		name string
+		key  model.CheckpointKey
+		want string
+	}{
+		{
+			name: "short key, one separator sanitised",
+			key:  model.CheckpointKey{SourceInstance: "portkey-prod", Loop: "analytics", OutputFingerprint: "a1b2c3d4e5f60718"},
+			want: "portkey-prod_analytics_a1b2c3d4e5f60718.b44aa579ebe2",
+		},
+		{
+			// 229 characters of String(): the sanitised form is cut at 200 (12 + 188 'a'), the hash still
+			// covers all 229.
+			name: "sanitised form past the 200 character cut",
+			key:  model.CheckpointKey{SourceInstance: "mt.tenant-a." + strings.Repeat("a", 190), Loop: "analytics", OutputFingerprint: "0123456789abcdef"},
+			want: "mt.tenant-a.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.108e88837062",
+		},
+	}
+	for _, c := range cases {
+		if got := dataKey(c.key); got != c.want {
+			t.Errorf("%s: dataKey(%q) = %q, want %q", c.name, c.key.String(), got, c.want)
+		}
 	}
 }

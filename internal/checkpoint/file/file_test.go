@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
 )
@@ -171,5 +173,30 @@ func TestFileNullDocumentIsEmptyStore(t *testing.T) {
 		if got, err := s.Load(context.Background(), key); err != nil || !got.Time.Equal(want.Time) {
 			t.Fatalf("%q: Load after Save: got=%+v err=%v", body, got, err)
 		}
+	}
+}
+
+// TestFileKeyGolden pins the on-disk map key of the file store as a literal: CheckpointKey.String().
+// [unit 1, G6] A change here orphans every watermark of a dev install.
+func TestFileKeyGolden(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "wm.yaml")
+	s, err := New(p, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := model.CheckpointKey{SourceInstance: "portkey-prod", Loop: "analytics", OutputFingerprint: "a1b2c3d4e5f60718"}
+	if err := s.Save(context.Background(), key, model.Watermark{Time: time.Unix(100, 0).UTC(), Epoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onDisk map[string]any
+	if err := yaml.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := onDisk["portkey-prod/analytics/a1b2c3d4e5f60718"]; !ok || len(onDisk) != 1 {
+		t.Fatalf("file keys = %v, want exactly [portkey-prod/analytics/a1b2c3d4e5f60718]", onDisk)
 	}
 }

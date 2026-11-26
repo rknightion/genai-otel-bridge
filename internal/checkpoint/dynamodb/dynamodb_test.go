@@ -118,3 +118,13 @@ func TestDecodeMissingVersionOK(t *testing.T) {
 		t.Fatalf("missing version must decode to (epoch=3, ver=0, nil); got (epoch=%d, ver=%d, %v)", wm.Epoch, ver, err)
 	}
 }
+
+// TestPartitionKeyGolden pins the DynamoDB partition key as a literal: prefix + CheckpointKey.String().
+// [unit 1, G6] A change here orphans every stored watermark of an ECS deployment.
+func TestPartitionKeyGolden(t *testing.T) {
+	s := New(&fakeAPI{}, "table", "ckpt#")
+	key := model.CheckpointKey{SourceInstance: "portkey-prod", Loop: "analytics", OutputFingerprint: "a1b2c3d4e5f60718"}
+	if got, want := s.pk(key), "ckpt#portkey-prod/analytics/a1b2c3d4e5f60718"; got != want {
+		t.Fatalf("pk = %q, want %q", got, want)
+	}
+}

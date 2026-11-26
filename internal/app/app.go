@@ -172,9 +172,15 @@ func BuildFromPlan(ctx context.Context, cfg *config.Config, plan tenancy.Plan, c
 				return nil, fmt.Errorf("source %q (type %q): configured loop %q is enabled but not recognised by the source (built loops: %s) — check for a typo", sc.SourceInstance, sc.Type, lcName, strings.Join(builtNames, ", "))
 			}
 		}
+		// The row's scope gate (design §5.1): nil with no scope; refuses a scoped source that cannot assert
+		// its scope, and a loop named scope-match in any row.
+		gate, err := rowScopeGate(row, src, t, cp, opts.Now)
+		if err != nil {
+			return nil, err
+		}
 		// The identity the row's emitter stamps (pass 3), so the budget counts the same keys.
 		identityReserve := len(pipelineIdentity(row))
-		p := &pipeline{row: row, t: t, src: src}
+		p := &pipeline{row: row, t: t, src: src, gate: gate}
 		for _, lp := range src.Loops() {
 			lcName := lp.Key().Loop
 			lc := sc.Loops[lcName]

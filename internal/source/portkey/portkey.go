@@ -45,7 +45,82 @@ func Register(reg *source.Registry) { reg.Register("portkey", New) }
 // enabled (`analytics`, `groups`), sharing ONE httpx client across them so both stay within Portkey's
 // tenant-wide request budget (one rate limiter). Analytics is appended first so callers indexing
 // Loops()[0] for the analytics loop keep working.
+//
+// With a scope (cfg.Scope, set only by the plan package for a tenant-shape target) New returns a
+// *scopedSource, which also implements source.ScopeAsserter, and every analytics and groups request
+// carries the scope name as workspace_slug. It then refuses settings.expected_workspace on any loop (the
+// scope replaces it; this is the only place that rule is enforced, since core config never names a vendor
+// setting), an analytics max_backfill or a groups window_span longer than scopeMaxLookback, and a scope
+// with no name. With no scope it returns a *portkeySource and every request is the one it always sent.
 func New(cfg config.SourceConfig, deps source.Deps) (source.Source, error) {
+	scoped := cfg.Scope != (config.ScopeConfig{})
+	if scoped {
+		if err := refuseScopeConfig(cfg); err != nil {
+			return nil, err
+		}
+	}
+	src, hc, err := newLoops(cfg, deps)
+	if err != nil {
+		return nil, err
+	}
+	if !scoped {
+		return src, nil
+	}
+	if err := refuseScopedLookback(src); err != nil {
+		return nil, err
+	}
+	if hc == nil { // no loop is enabled; the assertion still needs the client
+		hc = newClient(cfg, deps)
+	}
+	return &scopedSource{
+		portkeySource: src, hc: hc,
+		baseURL: cfg.BaseURL, authHdr: cfg.Auth.Header, authVal: cfg.Auth.Value,
+		name: cfg.Scope.Name, instance: cfg.SourceInstance,
+		now: func() time.Time { return time.Now().UTC() },
+	}, nil
+}
+
+// refuseScopeConfig is New's check of a scoped config before any loop is built: a scope needs a name (it
+// is the slug sent and compared), and no loop may set the legacy settings.expected_workspace, enabled or
+// not and whatever its value, because the scope replaces it (design §2, §5.1).
+func refuseScopeConfig(cfg config.SourceConfig) error {
+	if cfg.Scope.Name == "" {
+		return fmt.Errorf("portkey: source %q has a scope with no name; the scope name is the workspace slug it reads", cfg.SourceInstance)
+	}
+	names := make([]string, 0, len(cfg.Loops))
+	for name := range cfg.Loops {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := cfg.Loops[name].Settings["expected_workspace"]; ok {
+			return fmt.Errorf("portkey: source %q has a scope, so loop %q may not set settings.expected_workspace (the scope replaces it)", cfg.SourceInstance, name)
+		}
+	}
+	return nil
+}
+
+// refuseScopedLookback is New's check of a scoped source's built loops: none may read further back than
+// scopeMaxLookback, a day inside the window the scope assertion reads, so a loop never collects traffic
+// older than the traffic the assertion has seen.
+func refuseScopedLookback(src *portkeySource) error {
+	for _, lp := range src.loops {
+		switch l := lp.(type) {
+		case *analyticsLoop:
+			if l.maxBackfill > scopeMaxLookback {
+				return fmt.Errorf("portkey analytics: max_backfill (%s) is longer than %s, the longest lookback allowed with a scope (the scope assertion reads %s)", l.maxBackfill, scopeMaxLookback, scopeProbeWindow)
+			}
+		case *groupsLoop:
+			if l.windowSpan > scopeMaxLookback {
+				return fmt.Errorf("portkey groups: window_span (%s) is longer than %s, the longest lookback allowed with a scope (the scope assertion reads %s)", l.windowSpan, scopeMaxLookback, scopeProbeWindow)
+			}
+		}
+	}
+	return nil
+}
+
+// newLoops builds the enabled loops. The client is nil when no loop is enabled.
+func newLoops(cfg config.SourceConfig, deps source.Deps) (*portkeySource, *httpx.Client, error) {
 	analyticsCfg, hasA := cfg.Loops["analytics"]
 	groupsConf, hasG := cfg.Loops["groups"]
 	logsConf, hasL := cfg.Loops["logs_export"]
@@ -53,26 +128,26 @@ func New(cfg config.SourceConfig, deps source.Deps) (source.Source, error) {
 	enG := hasG && groupsConf.Enabled
 	enL := hasL && logsConf.Enabled
 	if !enA && !enG && !enL {
-		return &portkeySource{}, nil // nothing enabled
+		return &portkeySource{}, nil, nil // nothing enabled
 	}
 	// Resolve use-cases once; all loops share the same resolved set.
 	ucs, err := resolveUseCases(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	hc := newClient(cfg, deps)
 	var loops []source.Loop
 	if enA {
 		lp, err := newAnalyticsLoop(cfg, analyticsCfg, deps, hc, ucs)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		loops = append(loops, lp)
 	}
 	if enG {
 		lp, err := newGroupsLoop(cfg, groupsConf, deps, hc, ucs)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		loops = append(loops, lp)
 	}
@@ -87,12 +162,12 @@ func New(cfg config.SourceConfig, deps source.Deps) (source.Source, error) {
 		for _, uc := range logsPasses {
 			lp, err := newLogsExportLoop(cfg, logsConf, deps, hc, uc)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			loops = append(loops, lp)
 		}
 	}
-	return &portkeySource{loops: loops}, nil
+	return &portkeySource{loops: loops}, hc, nil
 }
 
 // newClient builds the hardened outbound client shared by all portkey loops (one rate limiter).
@@ -191,6 +266,7 @@ func newAnalyticsLoop(cfg config.SourceConfig, lpCfg config.LoopConfig, deps sou
 		// Optional key-scope guardrail (analytics/groups are bound to the key's workspace, not request-
 		// targetable — followup §4). Empty ⇒ no check (backward compatible).
 		expectedWorkspace: strings.TrimSpace(lpCfg.Settings["expected_workspace"]),
+		workspaceSlug:     cfg.Scope.Name,
 		// passes / histories / band replace the old single apiKeyIDs+history fields: one pass per
 		// use-case (or the single legacy pass when api_key_use_cases is empty). Key() is unchanged so
 		// the checkpoint watermark is never reset on migration.
@@ -233,6 +309,9 @@ type analyticsLoop struct {
 	// caches a passing check (Collect is single-flight, no lock). See scope.go.
 	expectedWorkspace string
 	scopeVerified     bool
+	// workspaceSlug is the source's scope name, sent as workspace_slug on every graph request; empty (no
+	// scope, the legacy shape) sends none.
+	workspaceSlug string
 	// passes is the set of filtered passes to run each Collect. Empty use-cases ⇒ a single pass with
 	// slug "" and the legacy settings.api_key_ids filter (backward compatible). Each pass stamps its slug.
 	passes []resolvedUseCase
@@ -392,6 +471,11 @@ func (l *analyticsLoop) fetch(ctx context.Context, graph string, start, until ti
 		l.baseURL, graph, start.UTC().Format(time.RFC3339), until.UTC().Format(time.RFC3339))
 	if apiKeyIDs != "" {
 		url += "&api_key_ids=" + neturl.QueryEscape(apiKeyIDs)
+	}
+	// Appended by hand, after api_key_ids: url.Values.Encode would sort the keys and escape the timestamps'
+	// colons, changing every legacy URL. With no scope the URL is exactly the one sent before scopes.
+	if l.workspaceSlug != "" {
+		url += "&workspace_slug=" + neturl.QueryEscape(l.workspaceSlug)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

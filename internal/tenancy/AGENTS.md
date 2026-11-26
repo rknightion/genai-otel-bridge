@@ -24,7 +24,8 @@ imports `internal/config` only.
 ## Table and hash
 
 - `Table()` is the plan as text: a header and one line per row with the columns of design section
-  3. A legacy row shows its `source_instance` in the `pipeline` column. Only enabled loops are
+  3. A legacy row shows its `source_instance` in the `pipeline` column. `scope_name` and `scope_id`
+  are `Row.Source.Scope`; a row with no scope (every legacy row) shows `-` in both. Only enabled loops are
   listed, sorted; identity is `key=value` pairs, sorted by key.
 - **It never prints a secret.** No `Auth.Value`, no `Token`, and every URL is printed without its
   userinfo, query and fragment (a URL that does not parse prints as `(unparseable)`).

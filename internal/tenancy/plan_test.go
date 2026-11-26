@@ -286,3 +286,35 @@ func TestPipelineNames(t *testing.T) {
 		t.Errorf("PipelineAttribute = %q", tenancy.PipelineAttribute)
 	}
 }
+
+// The two scope columns (unit 4b, #526): a row with a scope shows its name and id; a row without one
+// (every legacy row) shows "-" in both, so a legacy plan's table and hash do not change.
+func TestTableShowsScope(t *testing.T) {
+	plan, err := tenancy.Resolve(legacyConfig())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	plan.Rows[0].Source.Scope = config.ScopeConfig{Name: "ws-example-001", ID: "ws-id-example"}
+	lines := strings.Split(strings.TrimSuffix(plan.Table(), "\n"), "\n")
+	header := strings.Fields(lines[0])
+	cellOf := func(line, name string) string {
+		t.Helper()
+		cells := strings.Fields(line)
+		for i, h := range header {
+			if h == name && i < len(cells) {
+				return cells[i]
+			}
+		}
+		t.Fatalf("no column %s in %q", name, line)
+		return ""
+	}
+	if got := cellOf(lines[1], "scope_name"); got != "ws-example-001" {
+		t.Errorf("scope_name = %q, want the row's scope name", got)
+	}
+	if got := cellOf(lines[1], "scope_id"); got != "ws-id-example" {
+		t.Errorf("scope_id = %q, want the row's scope id", got)
+	}
+	if got, gotID := cellOf(lines[2], "scope_name"), cellOf(lines[2], "scope_id"); got != "-" || gotID != "-" {
+		t.Errorf("a row with no scope shows (%q, %q), want (-, -)", got, gotID)
+	}
+}

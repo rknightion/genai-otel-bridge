@@ -320,6 +320,18 @@ type SourceConfig struct {
 	// on an enabled loop is a fail-fast error. Only the listed keys are collected (unlisted-key traffic is
 	// intentionally out of scope). helm:"omit" — surfaced as a commented example via the example block.
 	APIKeyUseCases []APIKeyUseCase `yaml:"api_key_use_cases" helm:"omit"`
+	// Scope is the vendor scope (a workspace) this source's API key must read, and nothing else. No config
+	// file can set it (yaml:"-"): only the plan package fills it, for a tenant-shape target. A source with a
+	// scope sends it on its requests and is asserted against it before it collects (multi-tenancy design
+	// §5.1). The zero value is no scope: a legacy source.
+	Scope ScopeConfig `yaml:"-"`
+}
+
+// ScopeConfig names a source's scope: the vendor's name for it (sent on requests and compared with what
+// the key reads) and its id (part of the remembered-match digest only).
+type ScopeConfig struct {
+	Name string `yaml:"name"`
+	ID   string `yaml:"id"`
 }
 
 // APIKeyUseCase binds a use-case label to the Portkey api-key UUIDs whose traffic carries it.

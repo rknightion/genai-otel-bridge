@@ -111,8 +111,8 @@ is not a re-parameterised graphs loop.
 
 ## Workspace-scope guardrail (`scope.go`)
 
-analytics and groups data is bound to the API key's workspace and is **not request-targetable**:
-Portkey ignores the workspace parameter on the analytics endpoints. With
+analytics and groups data is bound to a workspace key's workspace and is **not request-targetable**:
+Portkey ignores the workspace parameter on the analytics endpoints for such a key. With
 `settings.expected_workspace` set, the loop asserts once, lazily, on first `Collect` that
 `GET /analytics/groups/workspace` returns EXACTLY that slug. A too-broad or global key means **refuse
 to emit** - loud `Collect` error, no advance,
@@ -125,6 +125,36 @@ Set the SAME value on BOTH analytics and groups. `logs_export` is already hard-s
 
 **analytics reads `expected_workspace` out of its own `settings:` map**, and it is the only knob it
 takes that way - everything else on that loop comes from structured `LoopConfig` fields.
+
+## Scope (tenant shape, `scope.go`, design §5.1)
+
+`config.SourceConfig.Scope` (`yaml:"-"`, filled only by the plan package) is a source's scope. With
+none (every legacy source) `New` returns `*portkeySource` and every request is byte-identical to the
+one sent before scopes existed (`TestLegacyRequestURLsUnchanged` pins the URLs as literals).
+
+- **The slug.** With a scope, every analytics and groups request sends `workspace_slug=<scope name>`.
+  The analytics URL stays a hand-built `fmt.Sprintf` and appends it after `api_key_ids`
+  (`url.Values.Encode` would sort the keys and escape the timestamps' colons, changing every legacy
+  URL); the groups pages and the workspace grouping `q.Set` it.
+- **The capability.** With a scope `New` returns `*scopedSource`, which embeds `*portkeySource` and
+  implements `source.ScopeAsserter`; with none the source is not an asserter, so assembly gives it no
+  gate. `AssertScope` reads `GET /analytics/groups/workspace` over the 7-day `scopeProbeWindow` with the
+  slug, through the loops' client and auth. `fetchWorkspaceGroups` is that one request, shared with the
+  legacy `expected_workspace` check, which keeps its own lenient reading (it fires `onAuthError`, skips
+  empty or unreadable rows, ignores the quota flag).
+- **The assertion's reading is strict and fails closed.** Exactly one workspace equal to the scope name
+  is `ScopeMatched`; another workspace, several, or any row with no workspace (empty, null or absent,
+  even beside the right one) is `ScopeMismatch`; no row is `ScopeUnverifiable`. Any non-200, the
+  `is_quota_exceeded` flag, a body that does not decode, or a workspace value that is not a string is an
+  error, never a result; 401 and 403 are `*source.AuthError`. It never calls `Deps.OnAuthError` (the
+  scheduler raises the signal for a gate's call). A mismatch logs counts only, never another
+  workspace's name.
+- **Refusals at `New`, with a scope.** `settings.expected_workspace` on any loop (the scope replaces it;
+  this is the only place that rule of design §2 is enforced, because core config never names a vendor
+  setting), an analytics `max_backfill` or a groups `window_span` over `scopeMaxLookback` (6 days, a day
+  inside the assertion's window), and a scope with no name. `logs_export` is not checked: it reads no
+  analytics or groups endpoint and is scoped by `workspace_id`.
+- `SetSourceClockForTest(src, now)` sets the assertion's clock and every loop's (test-only).
 
 ## logs_export
 

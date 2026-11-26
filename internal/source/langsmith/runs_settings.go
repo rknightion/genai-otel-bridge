@@ -65,6 +65,11 @@ func defaultRunsSettings() runsSettings {
 	}
 }
 
+// maxRunsResponseBytesLimit bounds the operator-raisable per-page decode cap. A page is held in memory at
+// roughly 2-3x its wire size and up to three loops of one source can decode at once, against a default
+// 512Mi container limit.
+const maxRunsResponseBytesLimit = 256 << 20
+
 func applyRunsSettings(rs *runsSettings, s map[string]string) error {
 	for k, v := range s {
 		var err error
@@ -118,6 +123,9 @@ func validateRunsSettings(rs *runsSettings) error {
 	}
 	if rs.window <= 0 {
 		return fmt.Errorf("langsmith runs: window must be positive")
+	}
+	if rs.maxResponseBytes > maxRunsResponseBytesLimit {
+		return fmt.Errorf("langsmith runs: max_response_bytes %d exceeds the %d byte (256 MiB) limit; each page is decoded into memory, roughly 2-3x its wire size, so a larger cap risks an OOM kill", rs.maxResponseBytes, maxRunsResponseBytesLimit)
 	}
 	if rs.pageSize > runsPageSizeMax {
 		return fmt.Errorf("langsmith runs: page_size %d exceeds server max %d", rs.pageSize, runsPageSizeMax)

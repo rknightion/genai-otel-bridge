@@ -4,13 +4,20 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/schedule"
+	"github.com/rknightion/genai-otel-bridge/internal/selfobs"
 )
 
 // TestGracefulShutdownOrderAndBounding pins the [#129] fixes: signal reset runs FIRST, the self-metrics
@@ -48,6 +55,74 @@ func TestGracefulShutdownOrderAndBounding(t *testing.T) {
 // ENABLED sources/loops contribute [#88]: a disabled/parked slow loop must NOT inflate the threshold
 // (else a wedged leader would pass liveness for hours). threshold == max(DegradedBackoff, slowest
 // ENABLED cadence) + emitRetryBudget(2m) + livenessMargin(4m).
+// TestSelfProviderRejectsCleartextCredentialsBeforeAnyExport pins that the cleartext-credential gate runs
+// before the self-metrics PeriodicReader exists: NewMetrics records values at once, so a provider built
+// from an http:// endpoint with credentials would send the Basic Authorization header on its first
+// export (or at shutdown flush) even though startup is about to fail.
+func TestSelfProviderRejectsCleartextCredentialsBeforeAnyExport(t *testing.T) {
+	var hits atomic.Int32
+	// Loopback endpoints are exempt from the gate by design, so the fake must be reached on a
+	// non-loopback address of this host.
+	var host string
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+			host = ipn.IP.String()
+			break
+		}
+	}
+	if host == "" {
+		t.Skip("no non-loopback IPv4 address on this host")
+	}
+	ln, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.Listener = ln
+	srv.Start()
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	srvURL := "http://" + net.JoinHostPort(host, port)
+	cfg, err := config.LoadBytes([]byte(fmt.Sprintf(`
+emit:
+  telemetry:
+    otlp: {endpoint: "%[1]s", instance_id: "123", token: "secret"}
+  self:
+    otlp: {endpoint: "%[1]s", instance_id: "123", token: "secret"}
+    metric_interval: 60s
+identity: {service_namespace: genai-otel-bridge, deployment_environment: dev}
+ha: {coordinator: none, checkpoint: file}
+queue: {max_batches: 256, max_batch_bytes: 1048576, emit_workers: 1}
+sources: []
+`, srvURL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	mp, shutdown, err := newSelfProvider(ctx, cfg, "pod-a")
+	if shutdown != nil {
+		if mp != nil {
+			if _, merr := selfobs.NewMetrics(mp); merr != nil {
+				t.Fatal(merr)
+			}
+		}
+		_ = shutdown(ctx) // flushes whatever the provider holds
+	}
+	if err != nil && !strings.Contains(err.Error(), "https://") {
+		t.Fatalf("rejected for the wrong reason: %v", err)
+	}
+	if err == nil {
+		t.Fatal("a cleartext endpoint with credentials must be rejected before a provider is built")
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("endpoint received %d requests before the config was rejected", n)
+	}
+}
+
 func TestLivenessThreshold(t *testing.T) {
 	const budget = 6 * time.Minute // emitRetryBudget(2m) + livenessMargin(4m)
 	dur := func(d time.Duration) config.Duration { return config.Duration(d) }

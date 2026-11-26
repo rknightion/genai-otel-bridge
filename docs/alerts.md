@@ -5,7 +5,7 @@ description: Bundled self-observability alert rules for genai-otel-bridge, with 
 
 # Alerts & Runbooks
 
-genai-otel-bridge ships fifteen self-observability alert rules under
+genai-otel-bridge ships sixteen self-observability alert rules under
 `deploy/grafana/self-obs/alertrule-*.yaml`. All rules query `genai_otel_bridge_*` metrics
 directly (no recording-rule dependency) and use `noDataState: Ok` so the healthy case (no
 series at all) never fires spuriously.
@@ -37,6 +37,7 @@ gcx resources push -p deploy/grafana/self-obs --context self-obs-stack
 | [GenaiOtelBridgeLoopDegraded](#genaiotelbridgeloopdegraded) | warning | A loop has been held in the degraded state for 15m |
 | [GenaiOtelBridgePartialSuccessRejected](#genaiotelbridgepartialsuccessrejected) | warning | The gateway rejected records inside a 200 `partial_success` response |
 | [GenaiOtelBridgeNoStandby](#genaiotelbridgenostandby) | warning | Fewer than 2 replicas self-reporting |
+| [GenaiOtelBridgeMemoryNearLimit](#genaiotelbridgememorynearlimit) | warning | Heap in use above 85% of the Go memory limit for 15m |
 
 `GenaiOtelBridgeLeaderAbsent` and `GenaiOtelBridgePollerStale` are complementary:
 *absent* means no series at all (leader gone); *stale* means the series is present but
@@ -346,7 +347,8 @@ for the rejection message the gateway returned. Rejected records are not stored 
 
 **Severity:** warning
 
-**Fires when:** fewer than 2 replicas are self-reporting (i.e. only 1 replica visible, or none).
+**Fires when:** fewer than 2 replicas are self-reporting `genai_otel_bridge_leader_ratio` (i.e. only 1 replica visible, or none).
+Every replica records that gauge from startup (0 standby, 1 leader), so a standby that has never led is still counted.
 
 This alert is expected to fire on intentionally single-replica dev stacks. In production,
 fewer than 2 replicas means there is no failover headroom.
@@ -358,6 +360,22 @@ fewer than 2 replicas means there is no failover headroom.
 3. On multi-AZ deployments, check that the pod topology spread constraints are satisfiable
    (the chart uses `ScheduleAnyway`, so this should not block scheduling, but it is worth
    verifying).
+
+---
+
+### GenaiOtelBridgeMemoryNearLimit
+
+**Severity:** warning
+
+**Fires when:** `genai_otel_bridge_go_heap_inuse_bytes` is above 85% of `genai_otel_bridge_go_memory_limit_bytes`
+(GOMEMLIMIT, set to 0.9 x the container limit) for 15m on any replica. A limit of 0 means none is set and is ignored.
+
+GOMEMLIMIT is a soft target: the container is still OOM-killed at its hard limit.
+
+**What to check:**
+
+1. The LangSmith decode buffers: a page decodes at roughly 2-3x its wire size, one per loop. Lower `page_size` or `max_response_bytes`.
+2. The container memory limit (Helm `resources.limits.memory`, ECS task memory) against the number of loops.
 
 ---
 

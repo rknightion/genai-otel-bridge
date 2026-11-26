@@ -27,6 +27,17 @@ func knownSourceTypes() map[string]struct{} {
 	return reg.Known()
 }
 
+// ValidateConfig runs the same semantic validation as Build (cfg.Validate against the registered source
+// types, including the cleartext-credential gate for every OTLP endpoint). cmd calls it before it builds
+// any exporter, so a rejected config never sends a request; Build still validates on its own. It lives
+// here, not in app.go, to keep the composition root untouched.
+func ValidateConfig(cfg *config.Config) error {
+	if err := cfg.Validate(knownSourceTypes()); err != nil {
+		return fmt.Errorf("config invalid: %w", err)
+	}
+	return nil
+}
+
 var validateEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // ValidateConfigFile loads and validates a config file the same way the binary does (schema/known-fields

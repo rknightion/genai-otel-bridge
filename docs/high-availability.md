@@ -193,8 +193,10 @@ for fully local operation.
 The self-obs dashboard and the `GenaiOtelBridgeNoStandby` and `GenaiOtelBridgeLeaderAbsent`
 alerts provide HA visibility:
 
-- `genai_otel_bridge_last_success_timestamp_seconds` — absent for 15m → `GenaiOtelBridgeLeaderAbsent` fires
-- Replica count below 2 → `GenaiOtelBridgeNoStandby` fires (warning)
+- `genai_otel_bridge_leader_ratio` — recorded by every replica from startup, 1 on the leader and 0 on a standby
+  (the per-loop gauges exist only on a replica that has led)
+- `genai_otel_bridge_last_success_timestamp_seconds` absent for 15m, or no replica reporting leadership → `GenaiOtelBridgeLeaderAbsent` fires
+- Replicas reporting the leader gauge below 2 → `GenaiOtelBridgeNoStandby` fires (warning)
 
 See [Alerts & Runbooks](./alerts.md) for runbooks and [Dashboards](./dashboards.md) for the
 self-obs dashboard.

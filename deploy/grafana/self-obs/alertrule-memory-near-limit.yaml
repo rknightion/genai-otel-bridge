@@ -1,0 +1,57 @@
+apiVersion: rules.alerting.grafana.app/v0alpha1
+kind: AlertRule
+metadata:
+  name: genai-otel-bridge-memory-near-limit
+  annotations:
+    grafana.app/folder: genai-otel-bridge
+  labels:
+    grafana.app/folder: genai-otel-bridge
+spec:
+  title: GenaiOtelBridgeMemoryNearLimit
+  # Heap in use is above 85% of the Go runtime soft memory limit (GOMEMLIMIT, set to 0.9 x the container
+  # limit) for 15m, on any replica. GOMEMLIMIT is soft: live heap above it is not prevented and the
+  # container is OOM-killed at its hard limit. The limit gauge is 0 when no limit is set; that case is
+  # excluded so the alert never divides by zero.
+  execErrState: Ok
+  noDataState: Ok
+  for: 15m
+  trigger:
+    interval: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "genai-otel-bridge replica {{ $labels.service_instance_id }} heap is near the memory limit"
+    description: "genai_otel_bridge_go_heap_inuse_bytes is above 85% of genai_otel_bridge_go_memory_limit_bytes for 15m on {{ $labels.service_instance_id }}. Large per-response decode buffers (a LangSmith page decodes at roughly 2-3x its wire size, one per loop) and OTLP encode buffers are the usual cause. Lower page_size or max_response_bytes, or raise the container memory limit. An OOM kill mid-window repeats the same page on restart. See deploy/grafana/README.md."
+  expressions:
+    query:
+      datasourceUID: grafanacloud-prom
+      queryType: prometheus
+      relativeTimeRange: {from: 16m0s, to: 0s}
+      model:
+        datasource: {type: prometheus, uid: grafanacloud-prom}
+        expr: 'max by (service_instance_id) (genai_otel_bridge_go_heap_inuse_bytes) / (max by (service_instance_id) (genai_otel_bridge_go_memory_limit_bytes) > 0) > 0.85'
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+        refId: query
+    prometheus_math:
+      queryType: math
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: 'is_number($query) || is_nan($query) || is_inf($query)'
+        type: math
+        refId: prometheus_math
+        intervalMs: 1000
+        maxDataPoints: 43200
+    threshold:
+      queryType: threshold
+      source: true
+      model:
+        datasource: {type: __expr__, uid: __expr__, name: __expr__}
+        expression: prometheus_math
+        type: threshold
+        refId: threshold
+        conditions: [{evaluator: {type: gt, params: [0]}}]
+        intervalMs: 1000
+        maxDataPoints: 43200

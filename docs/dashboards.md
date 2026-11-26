@@ -165,6 +165,6 @@ Before deploying to production:
 
 ## See also
 
-- [Alerts & Runbooks](./alerts.md) — the fifteen bundled alert rules with runbooks
+- [Alerts & Runbooks](./alerts.md) — the sixteen bundled alert rules with runbooks
 - [Telemetry reference](./telemetry.md) — full signal catalogue
 - [Troubleshooting](./troubleshooting.md) — common failure modes

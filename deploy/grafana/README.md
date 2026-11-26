@@ -76,11 +76,11 @@ generator, then `just gen-dashboard` and commit the emitted YAML. gcx 0.3.x requ
 
 ## Self-obs alerts
 
-The `self-obs/` dir ships **fifteen** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
+The `self-obs/` dir ships **sixteen** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
 
 | Alert | Severity | Fires when |
 |-------|----------|------------|
-| `GenaiOtelBridgeLeaderAbsent` | critical | `absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m])` — no replica has emitted in 15m (poller down / never reached a first commit). |
+| `GenaiOtelBridgeLeaderAbsent` | critical | `absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m])` or no replica reporting `genai_otel_bridge_leader_ratio == 1` — no replica has emitted in 15m, or none can lead (poller down / never reached a first commit / lease unavailable). |
 | `GenaiOtelBridgePollerStale` | warning | a loop's last-success age exceeds **2× its own trailing-6h p90 baseline AND 300s** — staler than normal *for that loop* — **OR exceeds the 3h absolute ceiling**. The relative arm is self-relative, so it does not false-positive on the slow log-export loops; the ceiling keeps a permanent stall firing (see below). |
 | `GenaiOtelBridgeEmitFailing` | critical | fatal emit errors (`retryable_exhausted`/`checkpoint_*`/`granularity_unexpected`/`bad_encoding`/`unknown_4xx`; the benign `collect` upstream-fetch retries are excluded) in 10m. `unknown_4xx` = an unrecognised non-retryable 4xx from the OTLP gateway (e.g. a rotated/invalid emit token). |
 | `GenaiOtelBridgeAuthErrors` | critical | `increase(genai_otel_bridge_auth_errors_total[10m]) > 0` — upstream returned 401/403 (credential failure). |
@@ -94,7 +94,8 @@ The `self-obs/` dir ships **fifteen** alerts (push the whole dir with `gcx resou
 | `GenaiOtelBridgeCardinalitySpike` | warning | sustained creation of new label-value combos on a series — a cardinality early-warning. |
 | `GenaiOtelBridgeLoopDegraded` | warning | `max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio) == 1` for 15m — a loop is held in the degraded state. The gauge has OTLP unit `1`, so the gateway exposes it with the `_ratio` suffix (as for `queue_depth`). |
 | `GenaiOtelBridgePartialSuccessRejected` | warning | `increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]) > 0` — the gateway rejected records inside a 200 `partial_success` response (the emit looked successful; this counter is the only signal). |
-| `GenaiOtelBridgeNoStandby` | warning | fewer than 2 replicas self-reporting — no failover headroom (expected on intentionally single-replica dev stacks). |
+| `GenaiOtelBridgeNoStandby` | warning | fewer than 2 replicas self-reporting `genai_otel_bridge_leader_ratio` — no failover headroom (expected on intentionally single-replica dev stacks). |
+| `GenaiOtelBridgeMemoryNearLimit` | warning | `genai_otel_bridge_go_heap_inuse_bytes` above 85% of `genai_otel_bridge_go_memory_limit_bytes` for 15m. |
 
 `GenaiOtelBridgeLeaderAbsent` and `GenaiOtelBridgePollerStale` are complementary: *absent* = no series at all (gone), *stale* = series present but ageing past its own baseline (wedged).
 

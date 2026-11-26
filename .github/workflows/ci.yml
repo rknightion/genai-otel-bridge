@@ -61,17 +61,17 @@ jobs:
         if: matrix.name == 'hygiene'
         with:
           # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.+)$
-          tofu_version: '1.10.6'
+          tofu_version: 'v1.13.10'
           tofu_wrapper: false
       - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
         if: matrix.name == 'hygiene'
         with:
           # renovate: datasource=github-releases depName=terraform-linters/tflint extractVersion=^v(?<version>.+)$
-          tflint_version: v0.59.1
+          tflint_version: v0.66.0
       - name: install checkov
         if: matrix.name == 'hygiene'
         # renovate: datasource=pypi depName=checkov versioning=pep440
-        run: pipx install checkov==3.2.495
+        run: pipx install checkov==3.4.11
       - run: ${{ matrix.run }}
         env:
           # term list for the forbidden-words hygiene guard (kept out of the repo; see scripts/forbidden-words.sh)

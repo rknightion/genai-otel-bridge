@@ -125,7 +125,8 @@ See [High Availability](./high-availability.md) for the leader election model.
 
 **Symptom:** `GenaiOtelBridgeNoStandby` fires.
 
-This alert warns when fewer than 2 replicas are self-reporting — there is no failover
+This alert warns when fewer than 2 replicas are self-reporting `genai_otel_bridge_leader_ratio`
+(every replica records it from startup, 0 standby and 1 leader) — there is no failover
 headroom. Expected on single-replica dev deployments.
 
 In production, check for crash-looping pods or a Deployment with `replicas: 1`. Raise to 2

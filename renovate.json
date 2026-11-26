@@ -16,6 +16,7 @@
   "platformAutomerge": true,
   "automergeStrategy": "squash",
   "internalChecksAsSuccess": true,
+  "ignorePaths": ["**/node_modules/**", "**/vendor/**"],
   "postUpdateOptions": [
     "gomodTidy",
     "gomodUpdateImportPaths",

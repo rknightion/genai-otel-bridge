@@ -133,6 +133,9 @@ func (m *Metrics) SetLeader(leader bool) {
 var (
 	alertedIncompleteReasons = []string{"export_failed", "export_stuck", "window_oversize", "window_truncated"}
 	alertedSkipReasons       = []string{"duplicate_timestamp", "payload_too_large", "too_old"}
+	// alertedEmitKinds are the emit_errors_total kinds the emit-failing rule reads (#517).
+	alertedEmitKinds = []string{"bad_encoding", "checkpoint_fenced", "checkpoint_load", "checkpoint_save",
+		"granularity_unexpected", "retryable_exhausted", "unknown_4xx"}
 )
 
 // SeedLoop creates, at 0, every series a bundled alert reads with increase() for one configured loop.
@@ -140,6 +143,9 @@ var (
 // so the series count stays bounded by the alert rules. Each counter is seeded under the attribute set
 // its producer records [#387]: samples_skipped under the runner's {source, loop, reason} (id), and
 // source_data_incomplete under the {loop, reason} a source hook records (hookLoop, the bare Key().Loop).
+// emit_errors_total is seeded under the runner's {source, loop, kind} for the kinds the emit-failing rule
+// reads, and auth_errors_total under the hook's {loop, source} (#517; the auth rule has no label matcher,
+// so every loop's series is read, and source is the runner identity's Source, as the hooks pass it).
 func (m *Metrics) SeedLoop(id loopid.ID, hookLoop string) {
 	ctx := context.Background()
 	for _, reason := range alertedIncompleteReasons {
@@ -149,6 +155,11 @@ func (m *Metrics) SeedLoop(id loopid.ID, hookLoop string) {
 	for _, reason := range alertedSkipReasons {
 		m.skipped.Add(ctx, 0, idAttrs(id, attribute.String("reason", reason)))
 	}
+	for _, kind := range alertedEmitKinds {
+		m.emitErr.Add(ctx, 0, idAttrs(id, attribute.String("kind", kind)))
+	}
+	m.authErr.Add(ctx, 0, metric.WithAttributes(
+		attribute.String("loop", hookLoop), attribute.String("source", id.Source)))
 }
 
 func loopAttr(loop string) metric.MeasurementOption {

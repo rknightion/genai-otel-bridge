@@ -24,6 +24,12 @@ import (
 // the counter with no literal reason matcher cannot be seeded, so it is reported as "*".
 func reasonsReadByRules(t *testing.T, names ...string) map[string][]string {
 	t.Helper()
+	return labelReadByRules(t, "reason", names...)
+}
+
+// labelReadByRules is reasonsReadByRules for any label key (reason, kind, source).
+func labelReadByRules(t *testing.T, label string, names ...string) map[string][]string {
+	t.Helper()
 	files, err := filepath.Glob("../../deploy/grafana/self-obs/*rule-*.yaml")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no rule files found: %v", err)
@@ -31,7 +37,7 @@ func reasonsReadByRules(t *testing.T, names ...string) map[string][]string {
 	out := map[string][]string{}
 	for _, name := range names {
 		re := regexp.MustCompile(regexp.QuoteMeta("genai_otel_bridge_"+name+"_total") + `(\{[^}]*\})?`)
-		reason := regexp.MustCompile(`reason(=~|=)"([^"]*)"`)
+		reason := regexp.MustCompile(`\b` + regexp.QuoteMeta(label) + `(=~|=)"([^"]*)"`)
 		for _, f := range files {
 			b, err := os.ReadFile(f)
 			if err != nil {
@@ -72,6 +78,73 @@ func TestSeededReasonsMatchBundledAlertRules(t *testing.T) {
 		if !slices.Equal(read[name], got) {
 			t.Errorf("%s: rule files read reasons %v but SeedLoop seeds %v (update the seed list)", name, read[name], got)
 		}
+	}
+}
+
+// TestSeededEmitKindsAndAuthMatchBundledAlertRules [#517]: a rule reading an emit kind that is not
+// seeded fails, as does a seeded kind no rule reads. The auth rule reads every series (no source
+// matcher), so any source matcher appearing in a rule must be reflected in the seed first.
+func TestSeededEmitKindsAndAuthMatchBundledAlertRules(t *testing.T) {
+	kinds := labelReadByRules(t, "kind", "emit_errors")["emit_errors"]
+	if want := slices.Sorted(slices.Values(alertedEmitKinds)); !slices.Equal(kinds, want) {
+		t.Errorf("emit_errors: rule files read kinds %v but SeedLoop seeds %v (update the seed list)", kinds, want)
+	}
+	if src := labelReadByRules(t, "source", "auth_errors")["auth_errors"]; len(src) != 1 || src[0] != "*" {
+		t.Errorf("auth_errors: rule files read sources %v; SeedLoop seeds every loop's own source only (want just *)", src)
+	}
+}
+
+// TestSeedLoopSeedsEmitAndAuthSeries [#517]: each series exists at 0 under the exact attribute set its
+// producer records, and the first failure steps that same series 0 -> 1 (no second series is born).
+func TestSeedLoopSeedsEmitAndAuthSeries(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	m, err := NewMetrics(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := loopid.ID{Source: "portkey-a", Loop: "analytics"}
+	m.SeedLoop(id, "analytics")
+	collect := func(name string) map[string]int64 {
+		var rm metricdata.ResourceMetrics
+		if err := reader.Collect(context.Background(), &rm); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]int64{}
+		for _, sm := range rm.ScopeMetrics {
+			for _, mt := range sm.Metrics {
+				if mt.Name != name {
+					continue
+				}
+				for _, dp := range mt.Data.(metricdata.Sum[int64]).DataPoints {
+					out[dp.Attributes.Encoded(attribute.DefaultEncoder())] = dp.Value
+				}
+			}
+		}
+		return out
+	}
+	emit := collect("genai_otel_bridge_emit_errors_total")
+	if len(emit) != len(alertedEmitKinds) {
+		t.Fatalf("emit_errors series seeded: %v, want exactly %d kinds", emit, len(alertedEmitKinds))
+	}
+	for _, k := range alertedEmitKinds {
+		if v, ok := emit["kind="+k+",loop=analytics,source=portkey-a"]; !ok || v != 0 {
+			t.Errorf("emit kind %s: present=%v value=%d, want present at 0", k, ok, v)
+		}
+	}
+	if auth := collect("genai_otel_bridge_auth_errors_total"); len(auth) != 1 || auth["loop=analytics,source=portkey-a"] != 0 {
+		t.Fatalf("auth_errors seeded: %v, want one series {loop=analytics,source=portkey-a} at 0", auth)
+	}
+	// AC3: the first failures move the seeded series, creating none.
+	m.EmitError(id, "retryable_exhausted")
+	m.AuthError("analytics", "portkey-a")
+	emit = collect("genai_otel_bridge_emit_errors_total")
+	if len(emit) != len(alertedEmitKinds) || emit["kind=retryable_exhausted,loop=analytics,source=portkey-a"] != 1 {
+		t.Errorf("after first emit error: %v, want the seeded series at 1 and no new series", emit)
+	}
+	if auth := collect("genai_otel_bridge_auth_errors_total"); len(auth) != 1 || auth["loop=analytics,source=portkey-a"] != 1 {
+		t.Errorf("after first auth error: %v, want the seeded series at 1", auth)
 	}
 }
 

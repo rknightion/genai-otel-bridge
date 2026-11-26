@@ -93,6 +93,11 @@ under the hook's `{loop, reason}` (#387: a seed under any other attribute set is
 at 1 and the alert misses it. `TestSeededReasonsMatchBundledAlertRules` reads the rule files: a rule
 reading an unseeded reason, or a seeded reason no rule reads, fails. Edit the seed lists when you edit a rule.
 
+`SeedLoop` also seeds (#517) `emit_errors_total` under the runner's `{source, loop, kind}` for the kinds the
+emit-failing rule reads (`alertedEmitKinds`), and `auth_errors_total` under the hook's `{loop, source}` (source =
+the runner identity's Source). `TestSeededEmitKindsAndAuthMatchBundledAlertRules` fails on a rule reading an
+unseeded kind or adding a source matcher to the auth rule.
+
 ## Logs do not take the OTLP path
 
 App logs go to stdout and are scraped by the k8s-monitoring chart into Loki. Only metrics and traces

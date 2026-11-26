@@ -356,9 +356,12 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   `genai_otel_bridge_source_capability_total{loop,graph,state}`. `state` is the closed set
   `endpoint-absent`, `plan-unsupported`, `permission-denied`, `no-data`, `transient-404`,
   `schema-changed`; producers pass typed constants. Current 404 producers use `transient-404`, because
-  one response cannot distinguish permanent absence from a plan gate or transient route failure.
-  `endpoint-absent`, `plan-unsupported`, `no-data` and `schema-changed` are therefore enumerated but producerless; steady versus
-  intermittent increments are interpreted at query time.
+  one response cannot distinguish permanent absence from a plan gate or transient route failure, so
+  `endpoint-absent` and `plan-unsupported` have no producer. `no-data` has none because an empty window is a
+  normal quiet result that advances the watermark and cannot be told from an idle workspace. `schema-changed`
+  has none because no code detects structural drift: tolerant decoders skip an unparseable line and count it
+  in `source_data_incomplete_total`, not as a capability state. All four are enumerated but producerless; steady
+  versus intermittent increments are interpreted at query time.
 - **F6 Open/incomplete & revised buckets (C1, the big one)** → a recent bucket may be incomplete (if
   emitted now → undercount) *and* may still change value *after* it settles (eventual consistency).
   **Mitigation:** emit a bucket only once `bucket_end ≤ now − bucket_settle`, where `bucket_settle` is

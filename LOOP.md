@@ -40,8 +40,9 @@ The tracker working model is `~/repos/agent-docs/docs/github-tracker.md` (mainta
 - `ci-success` is the only required check on `main`; Renovate PRs self-automerge once it is green.
 - `model.*`, `source.Source` and `source.Loop` are FROZEN seams: a change needs an `ARCHITECTURE.md`
   update. Do not weaken emit-once-after-settle, deterministic encoding or epoch-fenced checkpoints.
-- Tests whose comment carries a review tag (`[ext-review-N]`, `CP-*`, `Cdx-*`, `[#N]`) are regression
-  guards for known attack and race scenarios: keep them. The tag, not the file name, marks them.
+- Every `*_review_test.go` and `*_content_gate_test.go` file, and every test whose comment carries a review
+  tag (`[ext-review-N]`, `[adversarial-review *]`, `review-*`, `round*-#N`, `R*-N`, `CP-*`, `Cdx-*`, `[#N]`), is
+  a regression guard for a known attack or race scenario: keep them.
 - Third-party notices and SBOMs are release artifacts outside `just check`; do not gate on them.
 - Stack-side Grafana prerequisites are in `deploy/grafana/README.md` (GS1-GS4); the repo cannot set them.
 - A config knob exists in four files that move as one lane's job: `internal/config/config.go`

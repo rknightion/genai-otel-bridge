@@ -4,7 +4,8 @@ package signal
 import "testing"
 
 // TestSignalSortKeyOrdering pins the catalogue ordering (plane, then type, then name) by comparing
-// signals that differ in exactly one field, without depending on the key's encoding.
+// signals whose fields are chosen so the higher-ranked field decides the order (the lower-ranked fields
+// point the other way), without depending on the key's encoding.
 func TestSignalSortKeyOrdering(t *testing.T) {
 	base := Signal{Plane: PlaneProduct, Type: KindMetric, Name: "b"}
 	cases := []struct {

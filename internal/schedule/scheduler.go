@@ -96,11 +96,10 @@ func (s *Scheduler) Run(leaderCtx context.Context) {
 }
 
 func (s *Scheduler) tickLoop(ctx context.Context, sp LoopSpec) {
-	more := s.runOnce(ctx, sp, time.Now().UTC()) // [AR-M-tick] first collect immediately on election (cuts failover first-data latency)
-	burst := 0                                   // consecutive accelerated (catch-up) ticks in the current cadence period
+	out := s.tick(ctx, sp, time.Now().UTC()) // [AR-M-tick] first collect immediately on election (cuts failover first-data latency)
+	var st tickState
 	for {
-		wait, newBurst, jit := tickPlan(sp.Runner.Degraded(), more, burst, sp.MaxCatchupPerTick, sp.Cadence)
-		burst = newBurst
+		wait, jit := st.next(sp.Runner.Degraded(), out, sp.MaxCatchupPerTick, sp.Cadence)
 		if jit {
 			wait = jitter(wait, jitterFrac)
 		}
@@ -110,9 +109,41 @@ func (s *Scheduler) tickLoop(ctx context.Context, sp LoopSpec) {
 			timer.Stop()
 			return
 		case <-timer.C:
-			more = s.runOnce(ctx, sp, time.Now().UTC())
+			out = s.tick(ctx, sp, time.Now().UTC())
 		}
 	}
+}
+
+// tickOutcome is what one tick reports to the tick loop's wait planning.
+type tickOutcome struct {
+	more      bool // a windowed loop is still draining a backlog (catch-up)
+	collected bool // Collect returned without error (the source answered)
+	quota     bool // Collect returned source.ErrQuotaExceeded
+}
+
+// maxQuotaStreak bounds the consecutive-quota counter. Any streak this long already pins the wait at
+// DegradedBackoff, so the cap only keeps the counter from growing without bound.
+const maxQuotaStreak = 32
+
+// tickState is the per-loop state the tick loop carries between ticks: the catch-up burst counter and
+// the consecutive-quota streak [#370]. next folds one tick's outcome in and plans the following wait, so
+// the wiring in tickLoop is a single call that tests can drive with real tick outcomes.
+type tickState struct {
+	burst       int // consecutive accelerated (catch-up) ticks in the current cadence period
+	quotaStreak int // consecutive ticks whose Collect returned ErrQuotaExceeded; reset by a good Collect
+}
+
+func (st *tickState) next(degraded bool, out tickOutcome, maxCatchup int, cadence time.Duration) (wait time.Duration, jit bool) {
+	switch {
+	case out.quota:
+		if st.quotaStreak < maxQuotaStreak {
+			st.quotaStreak++
+		}
+	case out.collected:
+		st.quotaStreak = 0
+	}
+	wait, st.burst, jit = tickPlan(degraded, out.more, st.burst, maxCatchup, st.quotaStreak, cadence)
+	return wait, jit
 }
 
 // tickPlan decides the next tick WAIT and the updated catch-up burst counter from the loop state. Pure
@@ -121,16 +152,36 @@ func (s *Scheduler) tickLoop(ctx context.Context, sp LoopSpec) {
 //   - degraded ⇒ DegradedBackoff (no hammering), burst reset (CP-C8).
 //   - backlog (more) and under the per-period cap ⇒ catchupInterval, burst++ (drain up to maxCatchup
 //     windows per cadence period — Cdx-C13/F44; maxCatchup=1 ⇒ burst<0 ⇒ never accelerates = v1 behaviour).
+//   - quota streak > 0 ⇒ quotaBackoff (cadence doubled per consecutive quota tick, capped at
+//     DegradedBackoff, never below cadence; jittered), burst reset [#370]. A quota tick never reports a
+//     backlog, and the source is throttling us, so the stretched wait wins over catch-up.
 //   - else ⇒ cadence (jittered), burst reset (steady state or end-of-burst breather).
-func tickPlan(degraded, more bool, burst, maxCatchup int, cadence time.Duration) (wait time.Duration, newBurst int, jit bool) {
+func tickPlan(degraded, more bool, burst, maxCatchup, quotaStreak int, cadence time.Duration) (wait time.Duration, newBurst int, jit bool) {
 	switch {
 	case degraded:
 		return DegradedBackoff, 0, false
+	case quotaStreak > 0:
+		return quotaBackoff(cadence, quotaStreak), 0, true
 	case more && burst < maxCatchup-1:
 		return catchupInterval, burst + 1, false
 	default:
 		return cadence, 0, true
 	}
+}
+
+// quotaBackoff is the wait after a streak of consecutive ErrQuotaExceeded ticks: cadence << streak, capped
+// at DegradedBackoff. [#370] A loop whose cadence already exceeds DegradedBackoff keeps its cadence, so a
+// quota failure can never make a slow loop poll MORE often. With jitter the capped wait stays within
+// DegradedBackoff+10%, below the /healthz liveness threshold (DegradedBackoff plus slack).
+func quotaBackoff(cadence time.Duration, streak int) time.Duration {
+	if cadence >= DegradedBackoff {
+		return cadence
+	}
+	w := cadence
+	for i := 0; i < streak && w < DegradedBackoff; i++ {
+		w *= 2
+	}
+	return min(w, DegradedBackoff)
 }
 
 const jitterFrac = 0.10
@@ -143,6 +194,12 @@ const jitterFrac = 0.10
 // one window behind), so the tick loop should accelerate. It is always single-flight (Busy-gated), so
 // returning `more` only shortens the WAIT — never overlaps windows or changes watermark contiguity.
 func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (more bool) {
+	return s.tick(ctx, sp, now).more
+}
+
+// tick is runOnce reporting the full tickOutcome: the backlog signal plus whether Collect answered or hit
+// quota, which the tick loop's quota backoff needs [#370].
+func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOutcome {
 	if s.beat != nil {
 		s.beat() // [AR-H-beat] heartbeat each tick ATTEMPT (progress, not success) so /healthz tracks loop liveness
 	}
@@ -159,14 +216,14 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 		// 2s ticks just because a slow emit outlasted its cadence ([#92]) — that mirrors the end-of-tick
 		// backlog gate below (scheduler.go: `return sp.Window > 0 && ...`) and DESIGN §7's "snapshot loops
 		// never get catch-up acceleration". A busy snapshot loop simply retries at its jittered cadence.
-		return sp.Window > 0
+		return tickOutcome{more: sp.Window > 0}
 	}
 	wm, err := sp.Runner.Since(ctx) // [CP-C1] in-memory saved frontier, or persisted checkpoint
 	if err != nil {
 		if ctx.Err() != nil {
 			// [#368] leadership lost / shutdown mid-load: the cancellation, not a checkpoint failure
 			span.SetAttributes(attribute.String("outcome", "cancelled"))
-			return false
+			return tickOutcome{}
 		}
 		s.m.EmitError(name, "checkpoint_load")
 		if s.lim.Allow("checkpoint_load:" + name) {
@@ -174,7 +231,7 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "checkpoint_load")
-		return false
+		return tickOutcome{}
 	}
 	if !wm.Time.IsZero() {
 		// [AR-C6] window_lag floors at ~bucket_settle+cadence (we never emit unsettled buckets), so
@@ -200,9 +257,10 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 	batch, err := sp.Loop.Collect(ctx, wm)
 	switch {
 	case errors.Is(err, source.ErrQuotaExceeded):
-		s.m.SamplesSkipped(name, "quota_exceeded", 1) // discard, no advance, re-pull next tick (F34)
+		// Discard, no advance (F34); the tick loop stretches the wait while the streak lasts [#370].
+		s.m.SamplesSkipped(name, "quota_exceeded", 1)
 		span.SetAttributes(attribute.String("outcome", "quota_exceeded"))
-		return
+		return tickOutcome{quota: true}
 	case errors.Is(err, source.ErrGranularityUnexpected):
 		// [Cdx-M5] A granularity flip is alertable + no-advance (F27). Degrade the loop so the scheduler
 		// backs off to degradedBackoff (10m) instead of re-pulling every cadence and hammering the source
@@ -211,12 +269,12 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 		sp.Runner.Degrade("granularity_unexpected")
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "granularity_unexpected")
-		return
+		return tickOutcome{}
 	case err != nil && ctx.Err() != nil:
 		// [#368] Leadership lost or shutdown mid-collect: the error is the cancellation, not an upstream
 		// failure, so neither count nor warn. Nothing was enqueued, so nothing advances.
 		span.SetAttributes(attribute.String("outcome", "cancelled"))
-		return
+		return tickOutcome{}
 	case err != nil:
 		s.m.EmitError(name, "collect")
 		if s.lim.Allow("collect:" + name) {
@@ -224,13 +282,13 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "collect")
-		return
+		return tickOutcome{}
 	}
 	// [CP-C2] Enqueue even an EMPTY batch: Collect sets Watermark.Time = the polled settled cutoff
 	// (`until`), and ProcessBatch's full-completion path commits it, advancing the frontier over a
 	// confirmed-empty/quiet window so window_lag does not grow as if the poller were broken.
 	if err := sp.Runner.Enqueue(ctx, batch); err != nil {
-		return false // ctx cancelled (leadership loss / shutdown)
+		return tickOutcome{collected: true} // ctx cancelled (leadership loss / shutdown)
 	}
 	span.SetAttributes(
 		attribute.String("outcome", "enqueued"),
@@ -244,7 +302,7 @@ func (s *Scheduler) runOnce(ctx context.Context, sp LoopSpec, now time.Time) (mo
 	// is still more than one window behind `now` has further windows to drain → signal catch-up. A backlog
 	// only exists when max_backfill > window (e.g. raised per GS2); at steady state the lag is ~settle <
 	// window, so this is false. A snapshot loop (Window==0) is always current → never accelerates.
-	return sp.Window > 0 && !batch.Watermark.Time.IsZero() && now.Sub(batch.Watermark.Time) > sp.Window
+	return tickOutcome{collected: true, more: sp.Window > 0 && !batch.Watermark.Time.IsZero() && now.Sub(batch.Watermark.Time) > sp.Window}
 }
 
 // jitter returns d ± frac (uniform), used on every tick to de-align loops/replicas.

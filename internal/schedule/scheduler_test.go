@@ -253,26 +253,131 @@ func TestBackfillUnstorableNotRecountedWhileStuck(t *testing.T) {
 func TestTickPlan(t *testing.T) {
 	const cad = time.Minute
 	// Degraded wins over a backlog: slow backoff, burst reset, no jitter.
-	if w, b, jit := tickPlan(true, true, 2, 4, cad); w != DegradedBackoff || b != 0 || jit {
+	if w, b, jit := tickPlan(true, true, 2, 4, 0, cad); w != DegradedBackoff || b != 0 || jit {
 		t.Errorf("degraded: got (%v,%d,%v) want (%v,0,false)", w, b, jit, DegradedBackoff)
 	}
 	// No backlog: steady-state cadence (jittered), burst reset.
-	if w, b, jit := tickPlan(false, false, 3, 4, cad); w != cad || b != 0 || !jit {
+	if w, b, jit := tickPlan(false, false, 3, 4, 0, cad); w != cad || b != 0 || !jit {
 		t.Errorf("steady: got (%v,%d,%v) want (%v,0,true)", w, b, jit, cad)
 	}
 	// maxCatchup=1 (default) ⇒ burst<0 ⇒ NEVER accelerates even with a backlog (exact v1 behaviour).
-	if w, _, jit := tickPlan(false, true, 0, 1, cad); w != cad || !jit {
+	if w, _, jit := tickPlan(false, true, 0, 1, 0, cad); w != cad || !jit {
 		t.Errorf("N=1 backlog must not accelerate: got (%v, jit=%v)", w, jit)
 	}
 	// maxCatchup=4 + backlog: 3 accelerated ticks (burst 0→1→2→3) then a cadence breather at burst==3.
 	for in, wantAccel := range map[int]bool{0: true, 1: true, 2: true, 3: false} {
-		w, nb, jit := tickPlan(false, true, in, 4, cad)
+		w, nb, jit := tickPlan(false, true, in, 4, 0, cad)
 		if wantAccel && (w != catchupInterval || nb != in+1 || jit) {
 			t.Errorf("burst=%d N=4: expected accelerate, got (%v,%d,%v)", in, w, nb, jit)
 		}
 		if !wantAccel && (w != cad || nb != 0 || !jit) {
 			t.Errorf("burst=%d N=4: expected breather, got (%v,%d,%v)", in, w, nb, jit)
 		}
+	}
+	// [#370] Quota streak: cadence doubled per consecutive quota tick (jittered), capped at DegradedBackoff.
+	for _, tc := range []struct {
+		streak int
+		want   time.Duration
+	}{
+		{1, 2 * cad}, {2, 4 * cad}, {3, 8 * cad}, {4, DegradedBackoff}, {maxQuotaStreak, DegradedBackoff},
+	} {
+		if w, b, jit := tickPlan(false, false, 0, 4, tc.streak, cad); w != tc.want || b != 0 || !jit {
+			t.Errorf("quota streak=%d: got (%v,%d,%v) want (%v,0,true)", tc.streak, w, b, jit, tc.want)
+		}
+	}
+	// Degraded keeps precedence over any quota streak: slow backoff, no jitter.
+	for _, streak := range []int{1, 3, maxQuotaStreak} {
+		if w, _, jit := tickPlan(true, false, 0, 4, streak, cad); w != DegradedBackoff || jit {
+			t.Errorf("degraded with quota streak=%d: got (%v, jit=%v) want (%v, false)", streak, w, jit, DegradedBackoff)
+		}
+	}
+	// The stretched quota wait wins over catch-up acceleration and resets the burst.
+	if w, b, _ := tickPlan(false, true, 1, 4, 1, cad); w != 2*cad || b != 0 {
+		t.Errorf("quota streak with backlog: got (%v,%d) want (%v,0)", w, b, 2*cad)
+	}
+	// A loop slower than DegradedBackoff keeps its cadence: quota never makes it poll more often.
+	if w, _, jit := tickPlan(false, false, 0, 4, 3, time.Hour); w != time.Hour || !jit {
+		t.Errorf("slow loop with quota streak: got (%v, jit=%v) want (1h, true)", w, jit)
+	}
+}
+
+// quotaThenOKLoop returns ErrQuotaExceeded while quota is set, a generic error while fail is set, and a
+// one-bucket batch otherwise.
+type quotaThenOKLoop struct {
+	key         model.CheckpointKey
+	quota, fail bool
+}
+
+func (l *quotaThenOKLoop) Key() model.CheckpointKey { return l.key }
+func (l *quotaThenOKLoop) Cadence() time.Duration   { return time.Minute }
+func (l *quotaThenOKLoop) Collect(context.Context, model.Watermark) (model.Batch, error) {
+	switch {
+	case l.quota:
+		return model.Batch{}, source.ErrQuotaExceeded
+	case l.fail:
+		return model.Batch{}, errors.New("upstream 500")
+	}
+	return batchAt(l.key, 1060), nil
+}
+
+// TestQuotaStreakStretchesWait drives real ticks through the same tickState.next the tick loop uses
+// [#370]: consecutive quota ticks stretch the wait (doubling, capped at DegradedBackoff), a non-quota
+// Collect failure holds the streak, and one successful Collect returns the wait to the cadence. Each
+// quota tick still counts samples_skipped{reason="quota_exceeded"} and advances nothing.
+func TestQuotaStreakStretchesWait(t *testing.T) {
+	const cad = time.Minute
+	key := model.CheckpointKey{SourceInstance: "pk", Loop: "analytics", OutputFingerprint: "fp"}
+	cp := newMemCP()
+	durable := model.Watermark{Time: time.Unix(1000, 0).UTC(), Epoch: 1}
+	if err := cp.Save(context.Background(), key, durable); err != nil {
+		t.Fatal(err)
+	}
+	loop := &quotaThenOKLoop{key: key, quota: true}
+	m := &capMetrics{}
+	r := NewLoopRunner(loop, &fakeEmitter{byTS: map[int64]error{}}, cp, source.NewGuard(source.GuardConfig{}), 4, 1, m)
+	sch := NewScheduler(nil, m)
+	sp := LoopSpec{Runner: r, Loop: loop, Cadence: cad, MaxBackfill: time.Hour}
+	now := time.Unix(1100, 0).UTC()
+	var st tickState
+	step := func() time.Duration {
+		w, _ := st.next(r.Degraded(), sch.tick(leaderCtx(), sp, now), sp.MaxCatchupPerTick, sp.Cadence)
+		return w
+	}
+
+	for i, want := range []time.Duration{2 * cad, 4 * cad, 8 * cad, DegradedBackoff, DegradedBackoff} {
+		if got := step(); got != want {
+			t.Fatalf("quota tick %d: wait=%v want %v", i+1, got, want)
+		}
+	}
+	if got := m.skipped["quota_exceeded"]; got != 5 {
+		t.Fatalf("samples_skipped{quota_exceeded}=%d want 5 (one per quota tick)", got)
+	}
+	if got, _ := cp.Load(context.Background(), key); got != durable {
+		t.Fatalf("a quota tick must not advance the watermark: durable=%+v want %+v", got, durable)
+	}
+	if r.Busy() || len(r.q) != 0 {
+		t.Fatalf("a quota tick must enqueue nothing: busy=%v queued=%d", r.Busy(), len(r.q))
+	}
+	// A degraded loop waits DegradedBackoff whatever the streak (no jitter).
+	if w, jit := (&tickState{quotaStreak: 2}).next(true, tickOutcome{quota: true}, 1, cad); w != DegradedBackoff || jit {
+		t.Fatalf("degraded with a quota streak: wait=(%v, jit=%v) want (%v, false)", w, jit, DegradedBackoff)
+	}
+
+	// One successful Collect returns the wait to the cadence.
+	loop.quota = false
+	if got := step(); got != cad {
+		t.Fatalf("after a successful Collect: wait=%v want cadence %v", got, cad)
+	}
+	r.Reset() // drop the enqueued batch so the next ticks are not skipped as busy
+
+	// A fresh streak starts again from 2× cadence; a non-quota Collect failure holds the streak.
+	loop.quota = true
+	if got := step(); got != 2*cad {
+		t.Fatalf("new quota streak: wait=%v want %v", got, 2*cad)
+	}
+	loop.quota, loop.fail = false, true
+	if got := step(); got != 2*cad {
+		t.Fatalf("a non-quota Collect failure must hold the streak: wait=%v want %v", got, 2*cad)
 	}
 }
 

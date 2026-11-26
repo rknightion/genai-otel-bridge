@@ -33,6 +33,11 @@ implements.
 
 ## Behaviour
 
+- Consecutive `source.ErrQuotaExceeded` ticks stretch the wait: cadence doubled per quota tick,
+  jittered, capped at `DegradedBackoff` and never below cadence. One successful `Collect` resets it;
+  a non-quota `Collect` error holds the streak. Auth (401/403) failures have no sentinel and still
+  retry at cadence. Degraded keeps precedence, and the quota tick still counts
+  `samples_skipped_total{reason="quota_exceeded"}` and advances nothing.
 - Tick interval is cadence with 10% jitter, to de-align loops and replicas. On a terminal or degraded
   halt the scheduler backs off to 10 minutes, cleared on the next successful save. Five consecutive
   checkpoint-save failures mark the loop degraded, and so does one epoch-fenced write. When leadership

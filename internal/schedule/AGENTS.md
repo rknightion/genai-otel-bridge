@@ -46,7 +46,9 @@ implements.
   ends, `Scheduler.Run` zeroes the `loop_degraded` gauge of each degraded loop after its goroutines
   join; `Reset` at the next election still clears the state.
 - Snapshot loops (`LoopSpec.Window == 0`, for example langsmith sessions and portkey groups) gate out
-  both catch-up acceleration and the `backfill_unstorable` count. A snapshot loop's watermark is a
+  both catch-up acceleration and the `backfill_unstorable` count. A cursor-driven `Window == 0` loop
+  (langsmith runs, portkey logs_export) gets catch-up only while its batch carries a non-empty cursor and
+  emitted records, bounded by `max_catchup_per_tick`; a busy `Window == 0` loop never accelerates (#374). A snapshot loop's watermark is a
   liveness heartbeat at `now`, not a replay frontier. Without the backfill gate, `MaxBackfill == 0`
   makes the floor `now` and produces a spurious skip count every tick.
 - The queue is bounded (cap at least 1) and `Enqueue` blocks when full: backpressure, not drop. Because

@@ -3,6 +3,12 @@
 Read before adding a key to `settings.extra_record_fields` or `settings.extra_indexed_fields`, or
 before widening the default `select` projection.
 
+Throughput is not a field question but is sized here too: the loop fetches one page (at most
+`page_size`, 100) per tick, and a page with more to come signals catch-up (#374), so the ceiling is
+about `page_size × governance.max_catchup_per_tick / cadence` runs. `cadence` and
+`max_catchup_per_tick` are the levers; `window` and `max_pages_per_window` are not. `docs/langsmith.md`
+has the arithmetic.
+
 Every candidate must also appear in `validLangsmithSelectEnum` (`runs_strip.go`), or the whole
 `runs/query` 422s. `validateRunsSettings` rejects an out-of-enum key at config load.
 

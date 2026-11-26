@@ -67,8 +67,9 @@ The LangSmith analogue of portkey `logs_export`, but with no export-job lifecycl
 synchronous paginated POST.
 
 - **State lives in `Watermark.Cursor`** (JSON: win_min/win_max/next/page). One cursor page per
-  `Collect`; `LoopConfig.Window == 0` so the scheduler snapshot-gates it and the real span is
-  `settings.window`. `Watermark.Time` is the last fully-drained window's win_max and advances ONLY
+  `Collect`; `LoopConfig.Window == 0` so the scheduler snapshot-gates its backfill count and the
+  real span is `settings.window`. A page that carries a cursor and records signals catch-up (#374), so
+  with `governance.max_catchup_per_tick` above 1 the loop drains up to that many pages per cadence. `Watermark.Time` is the last fully-drained window's win_max and advances ONLY
   when the API's `cursors.next` is exhausted. The runner's `Cursor != ""` commit arm persists
   in-flight progress; without it the first window (at `Time == zero`) loops forever.
 - **Delivery is AT-LEAST-ONCE**, not the metric plane's exactly-once. A mid-window leader change

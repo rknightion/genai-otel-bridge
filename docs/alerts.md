@@ -89,6 +89,10 @@ a genuinely stuck snapshot loop (`sessions`).
    collect time, which can cause the window lag to grow.
 4. Check `genai_otel_bridge_queue_depth_ratio` — 1 means a batch is in flight; held at 1 the emit is
    slow or failing, and the loop collects nothing new until it finishes.
+5. For `runs` or `logs_export` with no errors but a steadily rising lag, the loop may be at its
+   throughput ceiling: raise `governance.max_catchup_per_tick` or shorten `cadence` (shrinking
+   `window` does not help). See [LangSmith](./langsmith.md#throughput-ceiling) and
+   [Portkey](./portkey.md#throughput-ceiling).
 
 See also: [Troubleshooting — stale watermark](./troubleshooting.md#stale-watermark-and-window-lag).
 

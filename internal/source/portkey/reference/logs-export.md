@@ -65,6 +65,13 @@ fail-fast mirror cannot drift from the guard backstop.
 of tens of minutes to generate server-side. Tune `chunk_max_records` and `window` together for
 high-traffic windows: an over-size window parks in phase `blocked` rather than retrying.
 
+Throughput is one lifecycle step per tick. A download step that emits records mid-page signals
+catch-up (#374), so the loop downloads up to `governance.max_catchup_per_tick` chunks per `cadence`
+(still bounded by the source rate limiter); create, start and poll run once per cadence. The ceiling is
+about `chunk_max_records × max_catchup_per_tick / cadence` records while downloading, less the
+lifecycle ticks. `cadence`, `chunk_max_records` and `max_catchup_per_tick` are the levers;
+`window` and `max_pages_per_window` are not. `docs/portkey.md` has the arithmetic.
+
 ## Producer identity
 
 `strip` stamps `RecordAttributes["source"] = "portkey"` at RECORD tier, so portkey and langsmith log

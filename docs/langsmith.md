@@ -135,6 +135,21 @@ loops:
       root_only: false
 ```
 
+### Throughput ceiling
+
+The runs loop fetches one page (at most `page_size` runs, 100 at most) per tick. A tick that returns
+a page with more pages still to come in the same window asks for the 2-second catch-up interval, so
+the loop can fetch up to `governance.max_catchup_per_tick` pages per `cadence`. The ceiling is
+therefore about `page_size × max_catchup_per_tick / cadence` runs: with the defaults (100 runs,
+`max_catchup_per_tick: 1`, `cadence: 60s`) that is 6,000 runs an hour. A project above that falls
+further behind every window: `window_lag_seconds` rises without bound, and once the lag passes
+`max_backfill` the oldest span is skipped with a counted gap.
+
+The levers that raise the ceiling are `governance.max_catchup_per_tick` (pages per cadence; the
+source's `rate_limit` still bounds the request rate) and a shorter `cadence`. Shrinking `window` or
+raising `max_pages_per_window` does not raise it: they change how a window is cut, not how many pages
+a tick fetches.
+
 ---
 
 ## Usage loop

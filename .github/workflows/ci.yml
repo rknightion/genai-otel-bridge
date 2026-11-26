@@ -67,7 +67,7 @@ jobs:
         if: matrix.name == 'hygiene'
         with:
           # renovate: datasource=github-releases depName=terraform-linters/tflint extractVersion=^v(?<version>.+)$
-          tflint_version: v0.59.1
+          tflint_version: v0.66.0
       - name: install checkov
         if: matrix.name == 'hygiene'
         # renovate: datasource=pypi depName=checkov versioning=pep440

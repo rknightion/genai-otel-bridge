@@ -112,7 +112,9 @@ is not a re-parameterised graphs loop.
 ## Workspace-scope guardrail (`scope.go`)
 
 analytics and groups data is bound to a workspace key's workspace and is **not request-targetable**:
-Portkey ignores the workspace parameter on the analytics endpoints for such a key. With
+Portkey ignores the workspace parameter on the analytics endpoints for such a key (probed live on
+2026-11-26 as well). That is known for a workspace key only: for an organisation key it is open (Q6 of
+`docs/designs/multi-tenancy.md`), and the tenant shape supports workspace keys only. With
 `settings.expected_workspace` set, the loop asserts once, lazily, on first `Collect` that
 `GET /analytics/groups/workspace` returns EXACTLY that slug. A too-broad or global key means **refuse
 to emit** - loud `Collect` error, no advance,

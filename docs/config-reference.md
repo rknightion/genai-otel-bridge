@@ -165,6 +165,41 @@ The validator, `Config.Validate` in `internal/config/config.go`, is the authorit
 
 ---
 
+## Tenant shape
+
+A config whose `tenants` map has at least one entry has the tenant shape, from the version that
+enables it. `sources` must then be empty and `emit.telemetry` must have no endpoint, instance id or
+token; with no tenants the legacy shape applies and `defaults` must be absent. `governance`, `queue`, `ha`,
+`log` and `selfobs` apply to the whole install. The guide is [Multi-tenancy](./multi-tenancy.md).
+
+| Key | Meaning |
+| --- | --- |
+| `emit.self.otlp` | Required. Where self-telemetry goes; it never falls back to a tenant's destination. |
+| `defaults.<type>.loops.<loop>` | The loop blocks every target of that source type uses. Each must be complete. A target has no `loops` block. |
+| `tenants.<id>.identity` | Required, with `service_namespace` and `deployment_environment`. It does not fall back to the top-level `identity`. |
+| `tenants.<id>.destinations.<name>.otlp` | `endpoint`, `instance_id` and `token_file`, all required. `token_file` is a bare file name in the tenant's secrets directory. |
+| `tenants.<id>.targets.<name>.source` | `type`, `base_url`, `auth` (`header` and `value_file`), `rate_limit` and the optional HTTP settings. No `enabled`, `source_instance` or `loops`. |
+| `tenants.<id>.targets.<name>.scope` | Required, with `name` and `id`: the one workspace the key reads. |
+| `tenants.<id>.targets.<name>.destination` | The name of a destination of the same tenant. |
+| `tenants.<id>.targets.<name>.identity` | Optional. Replaces the tenant's identity whole. |
+
+Rules the loader and the config check enforce:
+
+- Tenant, destination and target names match `[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?`.
+- Nothing under `tenants` or `defaults` is an `${ENV}` or `file:` reference. Secrets are files named by
+  `token_file` and `value_file`.
+- Every URL and endpoint is `https://` (a destination has no plain-text setting).
+- No two tenants share a stack, and no scope name or id appears in two tenants.
+- Two targets of one tenant that share a stack must differ in identity.
+- A target must not set `settings.expected_workspace`: the scope replaces it.
+- `ha.coordinator` must be `lease` and `ha.checkpoint` must be `configmap`. A loop that emits log records is refused.
+
+Two rules need the tenants' secrets and so are checked when the pod starts, not by the config
+check: an unreadable secret file and a source API key shared by two targets. Each blocks the tenant
+concerned only.
+
+---
+
 ## What to read next
 
 - [Portkey guide](./portkey.md) — Portkey `settings` keys.

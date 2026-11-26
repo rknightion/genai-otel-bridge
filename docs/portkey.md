@@ -239,6 +239,19 @@ at config load time.
 
 ---
 
+## Tenant shape
+
+In the tenant shape a target's `scope` (`name` and `id`) replaces `settings.expected_workspace`,
+which is refused. With a scope the source sends `workspace_slug=<scope name>` on every analytics and
+groups request and asserts the scope before its first collect and every ten minutes, by reading the
+workspace grouping over the last seven days. Use a workspace-level API key limited to reading
+analytics: Portkey ignores the slug for it, so the assertion is the control. Organisation-level keys
+are not supported. A loop's lookback may not exceed six days, which keeps the assertion's window
+inside the data. The slug is compared, and Portkey returns no workspace id there; the residual risk is
+in [The slug residual risk](./multi-tenancy.md#the-slug-residual-risk).
+
+---
+
 ## Grafana-staff prerequisites
 
 The indexed attributes on `logs_export` records (`ai_org`, `ai_model`, `response_status_code`)

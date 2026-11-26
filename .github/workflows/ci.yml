@@ -71,7 +71,7 @@ jobs:
       - name: install checkov
         if: matrix.name == 'hygiene'
         # renovate: datasource=pypi depName=checkov versioning=pep440
-        run: pipx install checkov==3.2.495
+        run: pipx install checkov==3.4.11
       - run: ${{ matrix.run }}
         env:
           # term list for the forbidden-words hygiene guard (kept out of the repo; see scripts/forbidden-words.sh)

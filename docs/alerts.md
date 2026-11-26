@@ -5,7 +5,7 @@ description: Bundled self-observability alert rules for genai-otel-bridge, with 
 
 # Alerts & Runbooks
 
-genai-otel-bridge ships thirteen self-observability alert rules under
+genai-otel-bridge ships fifteen self-observability alert rules under
 `deploy/grafana/self-obs/alertrule-*.yaml`. All rules query `genai_otel_bridge_*` metrics
 directly (no recording-rule dependency) and use `noDataState: Ok` so the healthy case (no
 series at all) never fires spuriously.
@@ -34,6 +34,8 @@ gcx resources push -p deploy/grafana/self-obs --context self-obs-stack
 | [GenaiOtelBridgeBucketRevisedAfterSettle](#genaiotelbridgebucketrevisedaftersettle) | warning | > 30 settled buckets/h still changing after `bucket_settle` |
 | [GenaiOtelBridgeQueueBackpressure](#genaiotelbridgequeuebackpressure) | warning | Emit cannot keep up with collect (queue depth > 0 for 15m) |
 | [GenaiOtelBridgeCardinalitySpike](#genaiotelbridgecardinalityspike) | warning | Sustained creation of new label-value combinations on a series |
+| [GenaiOtelBridgeLoopDegraded](#genaiotelbridgeloopdegraded) | warning | A loop has been held in the degraded state for 15m |
+| [GenaiOtelBridgePartialSuccessRejected](#genaiotelbridgepartialsuccessrejected) | warning | The gateway rejected records inside a 200 `partial_success` response |
 | [GenaiOtelBridgeNoStandby](#genaiotelbridgenostandby) | warning | Fewer than 2 replicas self-reporting |
 
 `GenaiOtelBridgeLeaderAbsent` and `GenaiOtelBridgePollerStale` are complementary:
@@ -295,6 +297,39 @@ series — a cardinality early warning.
    (counted via `genai_otel_bridge_guard_dropped_total`).
 
 See also: [Content Governance](./governance.md#cardinality-governance).
+
+---
+
+### GenaiOtelBridgeLoopDegraded
+
+**Severity:** warning
+
+**Fires when:** `max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio) == 1` holds for 15 minutes — a
+loop has been in the degraded state, with the degrade `reason` label saying why. The gauge has OTLP
+unit `1`, so the gateway exposes it as `genai_otel_bridge_loop_degraded_ratio` (the same `_ratio` suffix as
+`queue_depth`). It returns to 0 after the clearing commit.
+
+**What to check:**
+
+1. The `reason` label names the degrade cause; match it to the pod logs for that loop.
+2. Check `genai_otel_bridge_emit_errors_total` for that loop: an `unknown_4xx` or repeated
+   non-retryable emit failure halts and degrades the loop.
+3. A degraded loop backs off (10 minutes between attempts), so the error counter ticks rarely;
+   this gauge is the non-flapping signal.
+
+---
+
+### GenaiOtelBridgePartialSuccessRejected
+
+**Severity:** warning
+
+**Fires when:** `sum by (plane) (increase(genai_otel_bridge_emit_partial_success_rejected_total[10m])) > 0`.
+The OTLP gateway answered 200 but rejected some data points or log records through a `partial_success`
+response. The emit call returned success, so the loop advanced and the 4xx reject handling never saw it;
+this counter is the only signal. The `plane` label says whether metrics or logs were rejected.
+
+**What to check:** the gateway's limits (series cardinality, label length, sample age) and the pod logs
+for the rejection message the gateway returned. Rejected records are not stored and are not re-sent.
 
 ---
 

@@ -18,7 +18,7 @@ deploy/grafana/
 ├── self-obs/     # genai_otel_bridge_* signals — push to your self-obs stack
 │   ├── folder.yaml
 │   ├── dashboard-self-obs.yaml
-│   ├── alertrule-*.yaml          (13 alert rules)
+│   ├── alertrule-*.yaml          (15 alert rules)
 │   └── recordingrule-*.yaml      (7 recording rules)
 └── product/      # portkey_api_* and langsmith_* signals — push to your product stack
     ├── folder.yaml
@@ -162,6 +162,6 @@ Before deploying to production:
 
 ## See also
 
-- [Alerts & Runbooks](./alerts.md) — the thirteen bundled alert rules with runbooks
+- [Alerts & Runbooks](./alerts.md) — the fifteen bundled alert rules with runbooks
 - [Telemetry reference](./telemetry.md) — full signal catalogue
 - [Troubleshooting](./troubleshooting.md) — common failure modes

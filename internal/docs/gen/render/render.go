@@ -25,6 +25,39 @@ func cell(s string) string {
 	return strings.ReplaceAll(s, "|", "\\|")
 }
 
+// PrometheusName is the series name a Prometheus-compatible OTLP gateway exposes for s, which is not
+// always the instrument name: the gateway appends a unit suffix (a unit-"1" gauge gains "_ratio", a
+// seconds instrument gains "_seconds") and "_total" on a monotonic counter, each only when the name does
+// not already end with it. Only the self plane sets a wire unit; product samples carry an empty unit
+// (see internal/source/portkey/derive.go), so their name is exposed unchanged. Non-metrics have none.
+func PrometheusName(s signal.Signal) string {
+	if s.Type != signal.KindMetric {
+		return ""
+	}
+	name := s.Name
+	if s.Plane == signal.PlaneSelf {
+		switch s.Unit {
+		case "1":
+			if s.Instrument == "gauge" {
+				name = withSuffix(name, "_ratio")
+			}
+		case "s":
+			name = withSuffix(name, "_seconds")
+		}
+	}
+	if s.Instrument == "counter" {
+		name = withSuffix(name, "_total")
+	}
+	return name
+}
+
+func withSuffix(name, suffix string) string {
+	if strings.HasSuffix(name, suffix) {
+		return name
+	}
+	return name + suffix
+}
+
 // Catalogue renders the full marker-wrapped region: BEGIN, grouped tables, END (trailing newline).
 func Catalogue(sigs []signal.Signal) []byte {
 	ordered := append([]signal.Signal(nil), sigs...)
@@ -67,11 +100,15 @@ func Catalogue(sigs []signal.Signal) []byte {
 				continue
 			}
 			fmt.Fprintf(&b, "#### %s\n\n", ty.title)
-			b.WriteString("| Name | Kind | Unit | Labels / attributes | Depends on | Description |\n")
-			b.WriteString("|------|------|------|---------------------|-----------|-------------|\n")
+			b.WriteString("| Name | Prometheus name | Kind | Unit | Labels / attributes | Depends on | Description |\n")
+			b.WriteString("|------|-----------------|------|------|---------------------|-----------|-------------|\n")
 			for _, s := range rows {
-				fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s |\n",
-					cell(s.Name), cell(s.Instrument), cell(s.Unit),
+				prom := "—"
+				if p := PrometheusName(s); p != "" {
+					prom = "`" + cell(p) + "`"
+				}
+				fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s |\n",
+					cell(s.Name), prom, cell(s.Instrument), cell(s.Unit),
 					cell(strings.Join(s.Attributes, ", ")), cell(s.DependsOn), cell(s.Description))
 			}
 			b.WriteString("\n")

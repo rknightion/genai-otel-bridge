@@ -1480,6 +1480,144 @@ spec:
                   spanNulls: false
                   axisPlacement: auto
               overrides: []
+    panel-139:
+      kind: Panel
+      spec:
+        id: 139
+        title: Loops degraded (state gauge)
+        description: genai_otel_bridge_loop_degraded_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). 1 while a loop is held in the degraded state, labelled by the degrade reason; 0 after the clearing commit. Sustained 1 for 15m => GenaiOtelBridgeLoopDegraded.
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio{loop=~"$loop"})
+                    legendFormat: '{{loop}} / {{reason}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: short
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+                  thresholdsStyle:
+                    mode: line
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: green
+                    value: null
+                  - color: red
+                    value: 1
+                color:
+                  mode: thresholds
+              overrides: []
+    panel-146:
+      kind: Panel
+      spec:
+        id: 146
+        title: Partial-success rejects (10m increase) by plane
+        description: 'increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]) by plane. Data points / log records the gateway rejected inside a 200 partial_success response: the emit looked successful, so this is the only signal. Any non-zero => GenaiOtelBridgePartialSuccessRejected.'
+        links: []
+        data:
+          kind: QueryGroup
+          spec:
+            queries:
+            - kind: PanelQuery
+              spec:
+                hidden: false
+                refId: A
+                query:
+                  kind: DataQuery
+                  group: prometheus
+                  version: v0
+                  datasource:
+                    name: ${datasource}
+                  spec:
+                    editorMode: code
+                    expr: sum by (plane) (increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]))
+                    legendFormat: '{{plane}}'
+                    range: true
+                    instant: false
+                    exemplar: false
+                    format: time_series
+            queryOptions: {}
+            transformations: []
+        vizConfig:
+          kind: VizConfig
+          group: timeseries
+          spec:
+            options:
+              legend:
+                displayMode: table
+                placement: bottom
+                showLegend: true
+                calcs:
+                - lastNotNull
+                - max
+              tooltip:
+                mode: multi
+                sort: desc
+            fieldConfig:
+              defaults:
+                unit: short
+                custom:
+                  drawStyle: line
+                  lineInterpolation: linear
+                  lineWidth: 1
+                  fillOpacity: 10
+                  showPoints: never
+                  spanNulls: false
+                  axisPlacement: auto
+                  thresholdsStyle:
+                    mode: line
+                thresholds:
+                  mode: absolute
+                  steps:
+                  - color: green
+                    value: null
+                  - color: red
+                    value: 1
+                color:
+                  mode: thresholds
+              overrides: []
     panel-140:
       kind: Panel
       spec:
@@ -2541,6 +2679,16 @@ spec:
                   element:
                     kind: ElementReference
                     name: panel-138
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-139
+              - kind: AutoGridLayoutItem
+                spec:
+                  element:
+                    kind: ElementReference
+                    name: panel-146
       - kind: TabsLayoutTab
         spec:
           title: Upstream source health

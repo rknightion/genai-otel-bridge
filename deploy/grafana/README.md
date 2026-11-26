@@ -76,7 +76,7 @@ generator, then `just gen-dashboard` and commit the emitted YAML. gcx 0.3.x requ
 
 ## Self-obs alerts
 
-The `self-obs/` dir ships **thirteen** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
+The `self-obs/` dir ships **fifteen** alerts (push the whole dir with `gcx resources push -p deploy/grafana/self-obs --context <self-obs-stack>`). Each queries `genai_otel_bridge_*` metrics directly (self-contained — no dependency on the recording rules being deployed), and uses `noDataState: Ok` so the healthy case (query returns nothing) never fires:
 
 | Alert | Severity | Fires when |
 |-------|----------|------------|
@@ -92,6 +92,8 @@ The `self-obs/` dir ships **thirteen** alerts (push the whole dir with `gcx reso
 | `GenaiOtelBridgeBucketRevisedAfterSettle` | warning | >30 settled buckets/h still changing after `bucket_settle` — late arrivals; widen the loop's `bucket_settle`. |
 | `GenaiOtelBridgeQueueBackpressure` | warning | `genai_otel_bridge_queue_depth_ratio > 0` sustained 15m — emit can't keep up with collect. |
 | `GenaiOtelBridgeCardinalitySpike` | warning | sustained creation of new label-value combos on a series — a cardinality early-warning. |
+| `GenaiOtelBridgeLoopDegraded` | warning | `max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio) == 1` for 15m — a loop is held in the degraded state. The gauge has OTLP unit `1`, so the gateway exposes it with the `_ratio` suffix (as for `queue_depth`). |
+| `GenaiOtelBridgePartialSuccessRejected` | warning | `increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]) > 0` — the gateway rejected records inside a 200 `partial_success` response (the emit looked successful; this counter is the only signal). |
 | `GenaiOtelBridgeNoStandby` | warning | fewer than 2 replicas self-reporting — no failover headroom (expected on intentionally single-replica dev stacks). |
 
 `GenaiOtelBridgeLeaderAbsent` and `GenaiOtelBridgePollerStale` are complementary: *absent* = no series at all (gone), *stale* = series present but ageing past its own baseline (wedged).

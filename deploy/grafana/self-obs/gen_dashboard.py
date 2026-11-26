@@ -189,6 +189,11 @@ add(ts(138, "Bucket revision lateness (age p50/p95)", "histogram_quantile over g
        "s", [(f'histogram_quantile(0.50, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{LOOP}[{RI}])))', "p50 {{loop}}"),
              (f'histogram_quantile(0.95, sum by (loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{LOOP}[{RI}])))', "p95 {{loop}}")], fillop=0))
 
+add(ts(139, "Loops degraded (state gauge)", "genai_otel_bridge_loop_degraded_ratio (OTLP unit-1 gauge; '_ratio' is the OTLP->Prom suffix). 1 while a loop is held in the degraded state, labelled by the degrade reason; 0 after the clearing commit. Sustained 1 for 15m => GenaiOtelBridgeLoopDegraded.",
+       "short", [(f'max by (loop, reason) (genai_otel_bridge_loop_degraded_ratio{LOOP})', "{{loop}} / {{reason}}")], thresholds=steps((None, "green"), (1, "red"))))
+add(ts(146, "Partial-success rejects (10m increase) by plane", "increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]) by plane. Data points / log records the gateway rejected inside a 200 partial_success response: the emit looked successful, so this is the only signal. Any non-zero => GenaiOtelBridgePartialSuccessRejected.",
+       "short", [('sum by (plane) (increase(genai_otel_bridge_emit_partial_success_rejected_total[10m]))', "{{plane}}")], thresholds=steps((None, "green"), (1, "red"))))
+
 # === Tab: Upstream source health =============================================
 add(ts(140, "Upstream request rate by target & status", "histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds)) by target (source API host) & status_class. The poller's own pull traffic to vendor APIs.",
        "reqps", [(f'sum by (target, status_class) (histogram_count(rate(genai_otel_bridge_upstream_request_duration_seconds[{RI}])))', "{{target}} {{status_class}}")], calcs=["lastNotNull"]))
@@ -259,8 +264,8 @@ tabs = [
         gi("panel-120"), gi("panel-121"), gi("panel-122"), gi_repeat("panel-123"),
     ], cols=2)),
     tab("Emit pipeline", auto_grid([
-        gi(f"panel-{i}") for i in range(130, 139)
-    ], cols=3)),
+        gi(f"panel-{i}") for i in range(130, 140)
+    ] + [gi("panel-146")], cols=3)),
     tab("Upstream source health", auto_grid([
         gi(f"panel-{i}") for i in range(140, 146)
     ], cols=2)),

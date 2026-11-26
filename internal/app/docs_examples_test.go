@@ -21,11 +21,16 @@ import (
 // gets docsBaseConfig prepended. Every listed document MUST yield a block: a miss fails the test, so
 // nothing is skipped by a silent pattern miss. Add a document here to guard it; a deliberately partial
 // block is simply not selected by these rules.
+//
+// A validateOnly example is checked by ValidateConfigFile alone, which assembles a tenant-shape config
+// with placeholder secrets. The direct config.Load and Build below have no secret reader, so they cannot
+// build a tenant-shape example.
 type docExample struct {
-	path        string
-	startsWith  string
-	contains    string
-	prependBase bool
+	path         string
+	startsWith   string
+	contains     string
+	prependBase  bool
+	validateOnly bool
 }
 
 var docExamples = []docExample{
@@ -33,6 +38,7 @@ var docExamples = []docExample{
 	{path: "docs/installation.md", startsWith: "emit:"},
 	{path: "docs/portkey.md", startsWith: "sources:", contains: "analytics:", prependBase: true},
 	{path: "docs/configuration.md", startsWith: "sources:", contains: "analytics:", prependBase: true},
+	{path: "docs/multi-tenancy.md", startsWith: "identity:", contains: "tenants:", validateOnly: true},
 }
 
 const docsBaseConfig = `emit:
@@ -92,6 +98,9 @@ func TestDocsExampleConfigsBuild(t *testing.T) {
 			}
 			if _, _, err := ValidateConfigFile(p); err != nil {
 				t.Fatalf("%s: ValidateConfigFile: %v", ex.path, err)
+			}
+			if ex.validateOnly {
+				return
 			}
 			cfg, err := config.Load(p)
 			if err != nil {

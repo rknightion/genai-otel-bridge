@@ -53,11 +53,6 @@ type SecretReader interface {
 	Read(tenant, file string) (string, error)
 }
 
-// ErrTenantShapeNotEnabled is returned for a tenant-shape config: this version parses and validates the
-// shape but does not run it. main returns it right after app.Prepare, and app.ValidateConfigFile before it
-// would build.
-var ErrTenantShapeNotEnabled = errors.New("the tenant shape is not enabled in this version")
-
 // Plan is the resolved config. TenantShape is false for a legacy config.
 type Plan struct {
 	Rows        []Row
@@ -72,8 +67,7 @@ type Plan struct {
 // source_instance starts with "mt.", the prefix of the tenant shape's checkpoint keys (design §7).
 //
 // A config with at least one tenant gives a plan with TenantShape set and one row per target, sorted by
-// tenant id then target name (resolveTenants), after the resolve-phase rules of design §3. In this
-// version main and the config check still refuse that plan with ErrTenantShapeNotEnabled.
+// tenant id then target name (resolveTenants), after the resolve-phase rules of design §3.
 func Resolve(cfg *config.Config) (Plan, error) {
 	if cfg == nil {
 		return Plan{}, errors.New("tenancy: nil config")

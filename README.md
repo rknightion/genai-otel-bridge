@@ -87,6 +87,17 @@ through independent adversarial reviews before code.
 
 See [`followup.md`](./followup.md) for deferred/future work.
 
+## Multi-tenancy
+
+One install can serve several teams (tenants), each sent to its own Grafana Cloud stack with its own
+credentials and identity. A config with a `tenants` map has the tenant shape: each tenant names its
+destinations and its targets (one source API key and one workspace scope per target), its secrets are
+files in a per-tenant Secret, and self-telemetry goes to `emit.self` only. It needs the Helm chart's
+lease and ConfigMap backends. Run `genai-otel-bridge -validate-config -config <file>` to print the
+plan, one row per target with the stack it is sent to. The guide, with a worked config and the
+conversion of an existing install, is [docs/multi-tenancy.md](./docs/multi-tenancy.md); the chart
+example is [`deploy/helm/examples/tenants-values.yaml`](./deploy/helm/examples/tenants-values.yaml).
+
 ## Build & test
 
 ```bash
@@ -108,7 +119,7 @@ Requires Go 1.27+. Acceptance gates: `just test-acceptance`.
   contracts/schemas, failure handling (F1–F47), test plan, and review dispositions.
 - **[docs/designs/multi-tenancy.md](./docs/designs/multi-tenancy.md)** - the design for serving many
   teams from one install: the tenant config shape, pipeline isolation, the scope assertion and the
-  order of work. Not built yet.
+  order of work.
 - **[followup.md](./followup.md)** — deferred/future topics + the **out-of-scope-until-shape-known**
   register (data-sensitivity governance, emit backends, vendor SDKs, deployment modes, future sources).
 

@@ -1,0 +1,103 @@
+# Helm overrides for the tenant phase of the k3d e2e (scripts/k3d-e2e.sh run_tenant_tests), layered on
+# values-e2e.yaml: helm upgrade -f values-e2e.yaml -f values-e2e-tenants.yaml. The upgrade of the legacy
+# release onto this config is also the second step of the legacy-to-tenant conversion (design §10).
+# The sidecars, image and resources come from values-e2e.yaml unchanged.
+replicas: 2                   # G7: the launch install is a leader and one hot standby
+rollingUpdate:
+  maxUnavailable: 0           # the chart refuses tenants with any other value
+
+# Four tenants. team-a, team-b and team-c have Secrets (manifests/tenant-secrets.yaml); team-d has none,
+# so its optional Secret mounts empty and it is blocked with tenant_blocked{reason="secret_unreadable"}.
+# Every destination is the loopback OTLP sink sidecar under its own instance id and token (the sink
+# records each export's credential); emit.self is the same sink under a self credential. Every source is
+# the loopback mock Portkey, which serves each API key its own marker and workspace.
+configOverride: |
+  identity:
+    service_namespace: genai-otel-bridge
+    deployment_environment: e2e
+  emit:
+    self:
+      otlp:
+        endpoint: http://localhost:4318
+        instance_id: "900"
+        token: "e2e-self"
+  ha:
+    coordinator: lease
+    checkpoint: configmap
+  queue:
+    max_batches: 256
+    max_batch_bytes: 1048576
+    emit_workers: 1
+  defaults:
+    portkey:
+      loops:
+        analytics:
+          enabled: true
+          cadence: 10s
+          window: 5m
+          bucket_settle: 30s
+          bootstrap_lookback: 2m
+          max_backfill: 5m
+          metric_prefix: portkey_api
+          graphs: [requests, cost, tokens, latency, errors]
+  tenants:
+    team-a:
+      identity: { service_namespace: team-a-llm, deployment_environment: e2e }
+      destinations:
+        main:
+          otlp: { endpoint: http://localhost:4318, instance_id: "901", token_file: otlp-token }
+      targets:
+        prod:
+          source:
+            type: portkey
+            base_url: http://127.0.0.1:8081/v1
+            auth: { header: x-portkey-api-key, value_file: source-key }
+            rate_limit: { rps: 5, burst: 5 }
+            http: { allow_private: true }
+          scope: { name: e2e-ws-team-a, id: e2e-ws-id-team-a }
+          destination: main
+    team-b:
+      identity: { service_namespace: team-b-llm, deployment_environment: e2e }
+      destinations:
+        main:
+          otlp: { endpoint: http://localhost:4318, instance_id: "902", token_file: otlp-token }
+      targets:
+        prod:
+          source:
+            type: portkey
+            base_url: http://127.0.0.1:8081/v1
+            auth: { header: x-portkey-api-key, value_file: source-key }
+            rate_limit: { rps: 5, burst: 5 }
+            http: { allow_private: true }
+          scope: { name: e2e-ws-team-b, id: e2e-ws-id-team-b }
+          destination: main
+    team-c:
+      identity: { service_namespace: team-c-llm, deployment_environment: e2e }
+      destinations:
+        main:
+          otlp: { endpoint: http://localhost:4318, instance_id: "903", token_file: otlp-token }
+      targets:
+        prod:
+          source:
+            type: portkey
+            base_url: http://127.0.0.1:8081/v1
+            auth: { header: x-portkey-api-key, value_file: source-key }
+            rate_limit: { rps: 5, burst: 5 }
+            http: { allow_private: true }
+          scope: { name: e2e-ws-team-c, id: e2e-ws-id-team-c }
+          destination: main
+    team-d:
+      identity: { service_namespace: team-d-llm, deployment_environment: e2e }
+      destinations:
+        main:
+          otlp: { endpoint: http://localhost:4318, instance_id: "904", token_file: otlp-token }
+      targets:
+        prod:
+          source:
+            type: portkey
+            base_url: http://127.0.0.1:8081/v1
+            auth: { header: x-portkey-api-key, value_file: source-key }
+            rate_limit: { rps: 5, burst: 5 }
+            http: { allow_private: true }
+          scope: { name: e2e-ws-team-d, id: e2e-ws-id-team-d }
+          destination: main

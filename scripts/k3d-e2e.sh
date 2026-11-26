@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # k3d 3-node failover e2e: create cluster, import images, helm-install the chart with the e2e overlay,
-# then run the Go failover suite (tag e2e). `all` brings it up, tests, and tears down.
+# then run the Go failover suite (tag e2e). A second phase upgrades the same release to the tenant shape
+# and runs the tenant tests. `all` brings it up, runs both phases, checks uninstall, and tears down.
 set -euo pipefail
 CLUSTER="${E2E_CLUSTER:-genai-otel-bridge-e2e}"
 NS="${E2E_NAMESPACE:-genai-otel-bridge-e2e}"
@@ -48,7 +49,8 @@ EOF
   export KUBECONFIG; KUBECONFIG="$(k3d kubeconfig write "$CLUSTER")"
   kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
   # The manifests carry no namespace: -n puts them in $NS, so E2E_NAMESPACE moves them with the release.
-  kubectl apply -n "$NS" -f test/e2e/manifests/
+  # Only the legacy phase's Secret here: the tenant Secrets are applied by run_tenant_tests.
+  kubectl apply -n "$NS" -f test/e2e/manifests/secrets.yaml
   # Install the images this run built and imported, so IMAGE and E2E_HELPER_IMAGE override the
   # defaults in values-e2e.yaml (extraContainers[0] is the OTLP sink, [1] the mock Portkey).
   helm install genai-otel-bridge deploy/helm -n "$NS" -f test/e2e/values-e2e.yaml \
@@ -65,7 +67,26 @@ run_tests() {
   export KUBECONFIG; KUBECONFIG="$(k3d kubeconfig write "$CLUSTER")"
   export E2E_NAMESPACE="$NS"
   export KUBECTL="$TOOLS_DIR/kubectl"
-  go test -tags e2e -count=1 -timeout 15m -v ./test/e2e/...
+  # The tenant tests need the tenant-shape release: run_tenant_tests runs them after the upgrade.
+  go test -tags e2e -count=1 -timeout 15m -v -skip '^TestTenant' ./test/e2e/...
+}
+
+# The tenant phase: upgrade the same release (the chart is one fixed-name release, so it keeps the Lease
+# and the checkpoint ConfigMap) to the tenant shape of values-e2e-tenants.yaml, layered on the legacy
+# overlay, then run only the tenant tests. Run after run_tests: the legacy release with this image and
+# then the tenant-shape config is the two-step conversion of the multi-tenancy design (section 10).
+run_tenant_tests() {
+  export KUBECONFIG; KUBECONFIG="$(k3d kubeconfig write "$CLUSTER")"
+  export E2E_NAMESPACE="$NS"
+  export KUBECTL="$TOOLS_DIR/kubectl"
+  kubectl apply -n "$NS" -f test/e2e/manifests/tenant-secrets.yaml
+  helm upgrade genai-otel-bridge deploy/helm -n "$NS" -f test/e2e/values-e2e.yaml -f test/e2e/values-e2e-tenants.yaml \
+    --set image="$IMAGE" \
+    --set "extraContainers[0].image=$E2E_HELPER_IMAGE" \
+    --set "extraContainers[1].image=$E2E_HELPER_IMAGE" \
+    --wait --timeout 180s
+  kubectl -n "$NS" rollout status deploy/genai-otel-bridge --timeout 120s
+  go test -tags e2e -count=1 -timeout 15m -v -run '^TestTenant' ./test/e2e/...
 }
 
 # Exercise the post-delete cleanup hook: a real `helm uninstall` (NOT the cluster-delete teardown,
@@ -97,6 +118,7 @@ case "${1:-all}" in
   up) up ;;
   down) down ;;
   verify-cleanup) uninstall_verify ;;
-  all) trap down EXIT; up; run_tests; uninstall_verify ;;
-  *) echo "usage: $0 up|down|verify-cleanup|all"; exit 2 ;;
+  tenant-tests) run_tenant_tests ;;
+  all) trap down EXIT; up; run_tests; run_tenant_tests; uninstall_verify ;;
+  *) echo "usage: $0 up|down|verify-cleanup|tenant-tests|all"; exit 2 ;;
 esac

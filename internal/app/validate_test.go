@@ -3,14 +3,11 @@
 package app
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/rknightion/genai-otel-bridge/internal/tenancy"
 )
 
 const validCfg = `
@@ -141,21 +138,27 @@ func TestValidateConfigFile_PrintsPlan(t *testing.T) {
 	}
 }
 
-// AC5 (#530): the config check validates a tenant-shape config, then refuses it as not enabled in this
-// version, with the plan's table and hash. main's half is TestTenantShapeRefused in
-// cmd/genai-otel-bridge.
-func TestTenantShapeRefused(t *testing.T) {
+// AC5 (#530), flipped by unit 6e-2 (#536): the config check accepts a tenant-shape config that
+// validates and assembles, and returns the plan's table (one row per target, named by pipeline id) and
+// hash with no error. Until 6e-2 it returned them with tenancy.ErrTenantShapeNotEnabled, which 6e-2
+// deleted. main's half is TestTenantShapeAccepted in cmd/genai-otel-bridge.
+func TestTenantShapeAccepted(t *testing.T) {
 	t.Setenv("TENANT_FIXTURE_SELF_TOKEN", "") // ValidateConfigFile placeholders it; t.Setenv restores it
 	const fixture = "../config/testdata/tenants.yaml"
 	table, hash, err := ValidateConfigFile(fixture)
-	if !errors.Is(err, tenancy.ErrTenantShapeNotEnabled) {
-		t.Fatalf("ValidateConfigFile(%s) = %v, want ErrTenantShapeNotEnabled", fixture, err)
+	if err != nil {
+		t.Fatalf("ValidateConfigFile(%s) = %v, want the tenant shape accepted", fixture, err)
 	}
 	if !strings.HasPrefix(table, "tenant") || !regexp.MustCompile("^[0-9a-f]{64}$").MatchString(hash) {
-		t.Errorf("refusal carries table %q and hash %q, want the plan's", table, hash)
+		t.Errorf("accepted config carries table %q and hash %q, want the plan's", table, hash)
+	}
+	for _, p := range []string{"team-a.prod", "team-a.staging", "team-b.prod"} {
+		if !strings.Contains(table, p) {
+			t.Errorf("plan table does not name pipeline %s:\n%s", p, table)
+		}
 	}
 
-	// A tenant-shape config that breaks a load rule reports that rule, not the refusal.
+	// A tenant-shape config that breaks a load rule reports that rule.
 	raw, err := os.ReadFile(fixture)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +168,7 @@ func TestTenantShapeRefused(t *testing.T) {
 		t.Fatal("test case did not alter the fixture")
 	}
 	_, _, err = ValidateConfigFile(writeCfg(t, bad))
-	if err == nil || errors.Is(err, tenancy.ErrTenantShapeNotEnabled) || !strings.Contains(err.Error(), "ha.coordinator must be lease") {
+	if err == nil || !strings.Contains(err.Error(), "ha.coordinator must be lease") {
 		t.Fatalf("an invalid tenant config: got %v, want its load-rule error", err)
 	}
 }
@@ -229,10 +232,10 @@ func tenantFixtureVariant(t *testing.T, replacements ...[2]string) string {
 }
 
 // TestValidateConfigFileReportsCapabilityError (AC5, #532): the config check assembles a tenant-shape
-// config before it refuses it, so a target whose source type cannot assert its scope (langsmith
-// implements no source.ScopeAsserter) fails with the capability error, not with the not-enabled refusal,
-// although none of the tenant's secret files exists: the check reads none. On the base it returned
-// ErrTenantShapeNotEnabled before assembling. The same holds for a loop that emits log records.
+// config, so a target whose source type cannot assert its scope (langsmith implements no
+// source.ScopeAsserter) fails with the capability error, although none of the tenant's secret files
+// exists: the check reads none. Before unit 6b-2 it returned the not-enabled refusal before assembling;
+// unit 6e-2 (#536) deleted that refusal. The same holds for a loop that emits log records.
 func TestValidateConfigFileReportsCapabilityError(t *testing.T) {
 	t.Setenv("TENANT_FIXTURE_SELF_TOKEN", "")
 	langsmithDefaults := [2]string{"tenants:\n", "  langsmith:\n    loops:\n      sessions:\n        enabled: true\n        cadence: 60s\n        metric_prefix: langsmith\n\ntenants:\n"}
@@ -258,7 +261,7 @@ func TestValidateConfigFileReportsCapabilityError(t *testing.T) {
 				t.Fatal(err)
 			}
 			table, hash, err := ValidateConfigFile(p)
-			if err == nil || errors.Is(err, tenancy.ErrTenantShapeNotEnabled) {
+			if err == nil {
 				t.Fatalf("ValidateConfigFile = %v, want the assembly error", err)
 			}
 			for _, s := range c.want {

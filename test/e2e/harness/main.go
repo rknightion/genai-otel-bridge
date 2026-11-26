@@ -6,17 +6,22 @@
 //	                https-or-loopback rule; runs as a sidecar in the integrator pod) that always
 //	                returns 200 so emit succeeds and the watermark commits. It decodes every export and
 //	                records each gauge point it receives as (series, labels, time, value), tagged with
-//	                the export's sequence number. A query server on 0.0.0.0:8090 serves /count (exports
-//	                absorbed) and /points (every recorded reception, duplicates kept).
+//	                the export's sequence number, the Basic-auth credential it came under and the
+//	                resource's pipeline attribute. A query server on 0.0.0.0:8090 serves /count (exports
+//	                absorbed) and /points (every recorded reception, duplicates kept; ?cred= keeps one
+//	                credential's).
 //	-mode=portkey : a mock Portkey Analytics API on 0.0.0.0:8081 that answers every
 //	                /analytics/graphs/<graph> request with one data point per minute bucket the
-//	                requested window touches, valued by pointValue. The values depend only on the
-//	                bucket time, so every pod's mock agrees and the suite can check that what reached
-//	                the sink is what the source served, exactly once and without gaps.
+//	                requested window touches, valued by pointValue plus the API key's marker, and
+//	                /analytics/groups/workspace with the key's one workspace. The values depend only on
+//	                the bucket time and the key, so every pod's mock agrees and the suite can check that
+//	                what reached the sink is what the source served for that key, exactly once and
+//	                without gaps.
 package main
 
 import (
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -52,6 +57,34 @@ func pointValue(bucketStart time.Time) float64 {
 	return float64(bucketStart.Unix()/60%1000 + 1)
 }
 
+// markerStep separates the API keys' values: pointValue is at most 1000, so a requests value is
+// pointValue plus marker*markerStep and names the one key that read it. test/e2e/tenants_test.go
+// (tenantMarkerStep) repeats it.
+const markerStep = 10000
+
+// apiKey is what the mock serves for one API key: its marker, added to every value as
+// marker*markerStep, and the one workspace its workspace grouping lists ("" lists none).
+type apiKey struct {
+	marker    int
+	workspace string
+}
+
+// apiKeys are the keys the mock accepts; any other key gets 401. "e2e" is the legacy phase's key
+// (test/e2e/values-e2e.yaml), marker 0, so the legacy values are pointValue unchanged. The others are
+// the tenant phase's source-key Secrets (test/e2e/manifests/tenant-secrets.yaml), one per tenant;
+// team-d has no Secret in the cluster and is never read. test/e2e/tenants_test.go repeats the table.
+var apiKeys = map[string]apiKey{
+	"e2e":            {marker: 0},
+	"e2e-key-team-a": {marker: 1, workspace: "e2e-ws-team-a"},
+	"e2e-key-team-b": {marker: 2, workspace: "e2e-ws-team-b"},
+	"e2e-key-team-c": {marker: 3, workspace: "e2e-ws-team-c"},
+	"e2e-key-team-d": {marker: 4, workspace: "e2e-ws-team-d"},
+}
+
+// pipelineAttribute is the resource attribute the bridge stamps on tenant-shape product telemetry
+// (tenancy.PipelineAttribute); the sink records it so the suite can check a point's pipeline.
+const pipelineAttribute = "genai_otel_bridge.pipeline"
+
 // maxPoints bounds the sink's memory. A suite run records a few thousand points; past the cap the
 // sink stops recording and reports it, so a check never reads a silently truncated record.
 const maxPoints = 200000
@@ -63,6 +96,10 @@ type point struct {
 	Time   time.Time `json:"time"`
 	Value  float64   `json:"value"`
 	Seq    int64     `json:"seq"` // 1-based sequence number of the export that carried it
+	// Cred is the export's Basic-auth credential, "<instance id>:<token>" ("" when it had none).
+	Cred string `json:"cred"`
+	// Pipeline is the resource's pipelineAttribute ("" when absent: legacy and self-telemetry).
+	Pipeline string `json:"pipeline"`
 }
 
 type sink struct {
@@ -78,23 +115,51 @@ func runSink() {
 	ingest := http.NewServeMux()
 	ingest.HandleFunc("/v1/metrics", s.ingest)
 	go func() { log.Fatal(http.ListenAndServe("127.0.0.1:4318", ingest)) }()
+	log.Fatal(http.ListenAndServe("0.0.0.0:8090", s.queryMux()))
+}
 
+// queryMux serves what the sink recorded. /points?cred=<instance id>:<token> keeps the points that came
+// under that credential; exports still counts every export.
+func (s *sink) queryMux() *http.ServeMux {
 	q := http.NewServeMux()
 	q.HandleFunc("/count", func(w http.ResponseWriter, _ *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]int64{"exports": s.exports})
 	})
-	q.HandleFunc("/points", func(w http.ResponseWriter, _ *http.Request) {
+	q.HandleFunc("/points", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		pts := s.points
+		if r.URL.Query().Has("cred") {
+			cred := r.URL.Query().Get("cred")
+			pts = []point{}
+			for _, p := range s.points {
+				if p.Cred == cred {
+					pts = append(pts, p)
+				}
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"exports": s.exports, "truncated": s.truncated, "bad_bodies": s.badBodies, "points": s.points,
+			"exports": s.exports, "truncated": s.truncated, "bad_bodies": s.badBodies, "points": pts,
 		})
 	})
 	q.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	log.Fatal(http.ListenAndServe("0.0.0.0:8090", q))
+	return q
+}
+
+// basicCred is the decoded Basic-auth credential of r, "<user>:<password>", or "" when r has none.
+func basicCred(r *http.Request) string {
+	v, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Basic ")
+	if !ok {
+		return ""
+	}
+	b, err := base64.StdEncoding.DecodeString(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // ingest always answers 200, so the emitter never retries and a reception is one emit. A body it
@@ -121,6 +186,7 @@ func (s *sink) ingest(w http.ResponseWriter, r *http.Request) {
 		s.bad("decode", err)
 		return
 	}
+	cred := basicCred(r)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.exports++
@@ -130,6 +196,7 @@ func (s *sink) ingest(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		p.Seq = s.exports
+		p.Cred = cred
 		s.points = append(s.points, p)
 	}
 }
@@ -142,7 +209,8 @@ func (s *sink) bad(stage string, err error) {
 }
 
 // decodeExport reads an ExportMetricsServiceRequest (field 1: repeated ResourceMetrics) and returns
-// its gauge points. The service wrapper is walked by hand, as internal/emit/otlp writes it.
+// its gauge points, each with its resource's pipelineAttribute. The service wrapper is walked by hand,
+// as internal/emit/otlp writes it.
 func decodeExport(b []byte) ([]point, error) {
 	var out []point
 	for len(b) > 0 {
@@ -168,14 +236,21 @@ func decodeExport(b []byte) ([]point, error) {
 		if err := proto.Unmarshal(v, &rm); err != nil {
 			return nil, fmt.Errorf("ResourceMetrics: %w", err)
 		}
+		var pipeline string
+		for _, a := range rm.GetResource().GetAttributes() {
+			if a.GetKey() == pipelineAttribute {
+				pipeline = a.GetValue().GetStringValue()
+			}
+		}
 		for _, sm := range rm.GetScopeMetrics() {
 			for _, met := range sm.GetMetrics() {
 				for _, dp := range met.GetGauge().GetDataPoints() {
 					out = append(out, point{
-						Series: met.GetName(),
-						Labels: labelString(dp),
-						Time:   time.Unix(0, int64(dp.GetTimeUnixNano())).UTC(),
-						Value:  dp.GetAsDouble() + float64(dp.GetAsInt()),
+						Series:   met.GetName(),
+						Labels:   labelString(dp),
+						Time:     time.Unix(0, int64(dp.GetTimeUnixNano())).UTC(),
+						Value:    dp.GetAsDouble() + float64(dp.GetAsInt()),
+						Pipeline: pipeline,
 					})
 				}
 			}
@@ -194,10 +269,26 @@ func labelString(dp *metricspb.NumberDataPoint) string {
 }
 
 func runPortkey() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	// 8081, NOT 8080 — the integrator's own health server binds :8080 in the shared pod netns.
+	log.Fatal(http.ListenAndServe("0.0.0.0:8081", portkeyHandler()))
+}
+
+// portkeyHandler is the mock Portkey API. The x-portkey-api-key header picks the apiKeys entry (any other
+// key is 401). /analytics/groups/workspace lists the key's one workspace; every other path is a graph,
+// answered by graphPoints with the key's marker. A workspace_slug that is not the key's workspace is 400,
+// so a slug sent for the wrong target fails loudly instead of being served.
+func portkeyHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("mock-portkey %s %s", r.Method, r.URL.String()) // visibility for e2e debugging (low volume)
-		graph := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		key, ok := apiKeys[r.Header.Get("x-portkey-api-key")]
+		if !ok {
+			http.Error(w, "unknown API key", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Query().Has("workspace_slug") && r.URL.Query().Get("workspace_slug") != key.workspace {
+			http.Error(w, "workspace_slug is not this key's workspace", http.StatusBadRequest)
+			return
+		}
 		lo, errLo := time.Parse(time.RFC3339, r.URL.Query().Get("time_of_generation_min"))
 		hi, errHi := time.Parse(time.RFC3339, r.URL.Query().Get("time_of_generation_max"))
 		if errLo != nil || errHi != nil || hi.Before(lo) {
@@ -205,23 +296,31 @@ func runPortkey() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/analytics/groups/workspace") {
+			rows := []map[string]any{}
+			if key.workspace != "" {
+				rows = append(rows, map[string]any{"workspace": key.workspace, "requests": 1})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "total": len(rows), "data": rows})
+			return
+		}
+		graph := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data_points":       graphPoints(graph, lo, hi),
+			"data_points":       graphPoints(graph, lo, hi, key.marker),
 			"is_quota_exceeded": false,
 			"object":            "analytics-graph",
 		})
 	})
-	// 8081, NOT 8080 — the integrator's own health server binds :8080 in the shared pod netns.
-	log.Fatal(http.ListenAndServe("0.0.0.0:8081", mux))
 }
 
 // graphPoints returns one bucket-START-stamped point per minute bucket touching [lo, hi], in the
 // shape of the named graph: latency carries avg/p50/p90/p99 (milliseconds), tokens carries total with
-// its request/response split, every other graph carries total.
-func graphPoints(graph string, lo, hi time.Time) []map[string]any {
+// its request/response split, every other graph carries total. Each value starts from
+// pointValue + marker*markerStep.
+func graphPoints(graph string, lo, hi time.Time, marker int) []map[string]any {
 	var out []map[string]any
 	for b := lo.UTC().Truncate(time.Minute); !b.After(hi); b = b.Add(time.Minute) {
-		v := pointValue(b)
+		v := pointValue(b) + float64(marker*markerStep)
 		p := map[string]any{"timestamp": b.Format("2006-01-02T15:04:05.000Z")}
 		switch graph {
 		case "latency":

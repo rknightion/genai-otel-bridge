@@ -37,10 +37,9 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
   with an inert emitter factory and `noopTelemetry`. A tenant-shape plan is assembled with
   `placeholderSecrets` (no file is read; a value distinct per tenant and file), so every assemble
   rule that needs no secret (scope assertion support, the reserved `scope-match` loop, no loop that
-  emits log records, per-group series ownership) fails the check, its error returned as it is. Only
-  a tenant-shape plan that assembles gets the plan's table and hash with
-  `tenancy.ErrTenantShapeNotEnabled`. An unreadable secret and a duplicate API key are found only
-  when a pod reads the files.
+  emits log records, per-group series ownership) fails the check, its error returned as it is. A
+  tenant-shape plan that assembles returns its table and hash with no error, as a legacy plan does.
+  An unreadable secret and a duplicate API key are found only when a pod reads the files.
 - `Options.Secrets` (`tenancy.SecretReader`) reads the secret files a row names. A legacy row names
   none, so `nil` is fine for it. `Options.Now` is the clock of every scope gate (nil: `time.Now`).
   `Options.OnTenantBlocked(tenant, reason, blocked)` is called for every tenant of the plan and both

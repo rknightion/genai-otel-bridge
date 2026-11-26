@@ -52,6 +52,9 @@ func (c *Coordinator) Run(ctx context.Context, onElected func(leaderCtx context.
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		// [#377] Read before acquire's own clock read, so the first watchdog deadline (start +
+		// renew_deadline) can never fall after the expiry the acquire writes (its now + lease).
+		start := time.Now()
 		fence, acquired, err := c.acquire(ctx)
 		if err != nil {
 			slog.Warn("dynamodb coordinator: acquire error", "err", err)
@@ -64,7 +67,7 @@ func (c *Coordinator) Run(ctx context.Context, onElected func(leaderCtx context.
 				continue
 			}
 		}
-		c.lead(ctx, fence, onElected)
+		c.lead(ctx, fence, start, onElected)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -164,7 +167,9 @@ func (c *Coordinator) renew(ctx context.Context, fence int64) (bool, error) {
 }
 
 // lead runs the leadership term: spawn onElected, renew on a ticker, cancel + drain-barrier on loss.
-func (c *Coordinator) lead(ctx context.Context, fence int64, onElected func(context.Context)) {
+// acquiredAt is when the acquire request that won the lock started; the first renew deadline is
+// measured from it [#377].
+func (c *Coordinator) lead(ctx context.Context, fence int64, acquiredAt time.Time, onElected func(context.Context)) {
 	leaderCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	done := make(chan struct{})
@@ -180,9 +185,15 @@ func (c *Coordinator) lead(ctx context.Context, fence int64, onElected func(cont
 	// UpdateItem (net/http honours request-ctx cancellation), so a hung renew unblocks. client-go parity:
 	// leaderelection wraps every renew in context.WithTimeout(RenewDeadline). Fence/CAS semantics are
 	// untouched — this only adds an out-of-band deadline (see #30 acceptance).
-	renewOK := make(chan struct{}, 1)
+	//
+	// [#377] The deadline is measured from when the last successful request STARTED, not from when its
+	// response arrived. The lock expiry a request writes is its start + lease, so measuring from the
+	// response let a slow successful renew (one taking longer than lease - renew_deadline) push step-down
+	// past the expiry, leaving the old leader's leaderCtx alive after a standby had legitimately acquired.
+	// client-go likewise starts its RenewDeadline timeout before the request.
+	renewOK := make(chan time.Time, 1)
 	watchdogDone := make(chan struct{})
-	go c.renewWatchdog(leaderCtx, cancel, renewOK, watchdogDone)
+	go c.renewWatchdog(leaderCtx, cancel, acquiredAt, renewOK, watchdogDone)
 
 	ticker := time.NewTicker(c.retry)
 	defer ticker.Stop()
@@ -204,14 +215,17 @@ func (c *Coordinator) lead(ctx context.Context, fence int64, onElected func(cont
 			<-done
 			return
 		case <-ticker.C:
+			start := time.Now() // before renew's own clock read; see the acquire start in Run
 			ok, err := c.renew(leaderCtx, fence)
 			switch {
 			case err == nil && ok:
-				// Signal a successful renew to the watchdog (non-blocking; the buffer of 1 coalesces).
+				// Signal the successful renew's start to the watchdog. This loop is the only sender, so
+				// after dropping an unread older start the send cannot block; the newest start wins.
 				select {
-				case renewOK <- struct{}{}:
+				case <-renewOK:
 				default:
 				}
+				renewOK <- start
 			case err == nil && !ok:
 				slog.Info("dynamodb coordinator: leadership lost (lock taken)", "identity", c.identity)
 				cancel()
@@ -225,27 +239,29 @@ func (c *Coordinator) lead(ctx context.Context, fence int64, onElected func(cont
 	}
 }
 
-// renewWatchdog cancels leaderCtx if c.renewDeadline elapses with no successful renew signalled on
-// renewOK. It runs in its own goroutine (the fix for #30) so the deadline is enforced even while a
-// renew UpdateItem is blocked. It exits when leaderCtx is cancelled — by itself here, by the parent
-// ctx, or by the lead loop on a lost/relinquished lease. The timer uses real (wall) time like the
-// renew ticker; see setNow.
-func (c *Coordinator) renewWatchdog(leaderCtx context.Context, cancel context.CancelFunc, renewOK <-chan struct{}, done chan<- struct{}) {
+// renewWatchdog cancels leaderCtx once c.renewDeadline has passed since the start of the last
+// successful request: the acquire (acquiredAt) or a renew whose start arrives on renewOK. A deadline
+// already past (a request slower than renew_deadline) steps down at once. It runs in its own goroutine
+// (the fix for #30) so the deadline is enforced even while a renew UpdateItem is blocked. It exits when
+// leaderCtx is cancelled — by itself here, by the parent ctx, or by the lead loop on a lost/relinquished
+// lease. The timer and the start times use the real monotonic clock like the renew ticker, not the
+// injectable c.now (see setNow), which only feeds the expiresAtMs written to the table.
+func (c *Coordinator) renewWatchdog(leaderCtx context.Context, cancel context.CancelFunc, acquiredAt time.Time, renewOK <-chan time.Time, done chan<- struct{}) {
 	defer close(done)
-	timer := time.NewTimer(c.renewDeadline)
+	timer := time.NewTimer(time.Until(acquiredAt.Add(c.renewDeadline)))
 	defer timer.Stop()
 	for {
 		select {
 		case <-leaderCtx.Done():
 			return
-		case <-renewOK:
+		case start := <-renewOK:
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
 				default:
 				}
 			}
-			timer.Reset(c.renewDeadline)
+			timer.Reset(time.Until(start.Add(c.renewDeadline)))
 		case <-timer.C:
 			slog.Warn("dynamodb coordinator: renew deadline exceeded; stepping down (watchdog)",
 				"identity", c.identity, "renew_deadline", c.renewDeadline)

@@ -17,8 +17,10 @@ backend. Keep that ordering when adding to `main`.
   over 127.0.0.1, exits 0/1. `localHealthURL` rewrites a `0.0.0.0` / `[::]` bind, and accepts a bare
   port, into a dialable `127.0.0.1:<port>`. Task def: `["CMD","/genai-otel-bridge","-healthcheck"]`.
 - `-validate-config` - loads and schema/semantic-checks `-config` via `app.ValidateConfigFile`,
-  which placeholders unset `${ENV}` refs (endpoints get an https placeholder) so no secrets are
-  needed. Prints `validate-config: OK/FAIL`. For pre-deploy or external-overlay validation.
+  then runs `app.Build` with inert dependencies (construction checks: loop names, graphs, content
+  floor, label budget, series ownership; no network), so it fails wherever startup would. It
+  placeholders unset `${ENV}` refs (endpoints get an https placeholder) so no secrets are
+  needed. Does not cover the inline `GENAI_OTEL_BRIDGE_CONFIG` form. Prints `validate-config: OK/FAIL`. For pre-deploy or external-overlay validation.
 - `-cleanup` (with `-cleanup-retain-checkpoint`) - the chart's `post-delete` uninstall hook. Deletes
   the app-created Lease and the checkpoint ConfigMap via `internal/cleanup.Run`; with the retain flag
   it deletes neither, because the Lease carries the epoch fence the retained checkpoint was written

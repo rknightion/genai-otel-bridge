@@ -3,12 +3,16 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
 
 	"github.com/rknightion/genai-otel-bridge/internal/config"
+	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
+	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/schedule"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
 	"github.com/rknightion/genai-otel-bridge/internal/source/langsmith"
 	"github.com/rknightion/genai-otel-bridge/internal/source/portkey"
@@ -29,7 +33,11 @@ var validateEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // + secret substitution + semantic Validate against the registered source types) WITHOUT requiring real
 // secrets: any `${ENV}` ref that is unset gets a placeholder so an overlay full of injected refs can be
 // checked in CI. Endpoints/URLs get an https placeholder to satisfy the endpoint gate; everything else
-// gets a non-empty token. Returns nil if the config is valid.
+// gets a non-empty token. After Validate it also runs app.Build with inert dependencies (no-op
+// checkpoint, emitter and coordinator; no network), so every check the source constructors and Build
+// make at startup (unknown loop or graph, bootstrap_lookback, content-floor keys, stream-label budget,
+// series ownership, no enabled loops) fails here too. Only a file is checked, not the inline
+// GENAI_OTEL_BRIDGE_CONFIG form. Returns nil if the config is valid.
 func ValidateConfigFile(path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -69,5 +77,24 @@ func ValidateConfigFile(path string) error {
 	if err := cfg.Validate(knownSourceTypes()); err != nil {
 		return err
 	}
+	// Constructors only build clients; the first network call is the lazy first Collect, which never runs.
+	if _, err := Build(context.Background(), cfg, inertCheckpointer{}, coordinate.Noop{}, inertEmitter{}, schedule.NoopMetrics{}, source.Deps{}); err != nil {
+		return err
+	}
 	return nil
 }
+
+// inertCheckpointer and inertEmitter let ValidateConfigFile run Build without any store or backend.
+type inertCheckpointer struct{}
+
+func (inertCheckpointer) Load(context.Context, model.CheckpointKey) (model.Watermark, error) {
+	return model.Watermark{}, nil
+}
+
+func (inertCheckpointer) Save(context.Context, model.CheckpointKey, model.Watermark) error {
+	return nil
+}
+
+type inertEmitter struct{}
+
+func (inertEmitter) Emit(context.Context, model.Batch) error { return nil }

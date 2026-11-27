@@ -1,6 +1,23 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [5.0.0](https://github.com/rknightion/genai-otel-bridge/compare/v4.3.1...v5.0.0) (2026-11-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **chart:** keep config revisions across stopped rollouts ([#589](https://github.com/rknightion/genai-otel-bridge/issues/589))
+
+### Bug Fixes
+
+* **chart:** keep config revisions across stopped rollouts ([#589](https://github.com/rknightion/genai-otel-bridge/issues/589)) ([2c32a6a](https://github.com/rknightion/genai-otel-bridge/commit/2c32a6acd7ffc920ede0e04c7f2a488bff329993))
+* **grafana:** use valid recording rule names and alert UIDs ([#588](https://github.com/rknightion/genai-otel-bridge/issues/588)) ([978f432](https://github.com/rknightion/genai-otel-bridge/commit/978f43236caa12bcd57a61f66e22e692c329e0f8))
+
+
+### Documentation
+
+* **portkey:** ship logs_export off in every example ([#586](https://github.com/rknightion/genai-otel-bridge/issues/586)) ([ffb8b17](https://github.com/rknightion/genai-otel-bridge/commit/ffb8b1788d1445edceec0814785a10306f47b7fd))
+
 ## [4.3.1](https://github.com/rknightion/genai-otel-bridge/compare/v4.3.0...v4.3.1) (2026-11-27)
 
 

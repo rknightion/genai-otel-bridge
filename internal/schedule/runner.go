@@ -423,11 +423,12 @@ func (r *LoopRunner) commit(ctx context.Context, key model.CheckpointKey, t time
 			return false
 		}
 		// [round3-#3] ErrStaleWrite has two cases: benign already-advanced (the write makes no progress
-		// over durable — an intervening/concurrent leader is at or ahead of us) vs a write FENCED by epoch
-		// (it would have made progress yet was rejected → a stale-epoch under-read, e.g. lease GET failed
-		// → epoch 0, or a concurrent higher-epoch leader). The fenced case must NOT be silent: it freezes
-		// durable progress while the loop looks healthy. Surface it loudly + counted, and re-sync the
-		// in-memory frontier to the durable truth either way so Since() never runs ahead of a rejected write.
+		// over durable - an intervening or concurrent leader is at or ahead of us) vs a write FENCED by
+		// a higher durable epoch (it would have made progress, but the attempted epoch was stale). A fresh
+		// Lease starts at epoch 1; a failed Lease read is retried before polling, not used as epoch 0.
+		// The fenced case must NOT be silent: it freezes durable progress while the loop looks healthy.
+		// Count and log it, and re-sync the in-memory frontier to durable either way so Since() never
+		// runs ahead of a rejected write.
 		if stored, lerr := r.cp.Load(ctx, key); lerr == nil {
 			span.SetAttributes(attribute.String("outcome", "stale"))
 			// [#368] Under a cancelled ctx the fence is the expected hand-over to the next (higher-epoch)

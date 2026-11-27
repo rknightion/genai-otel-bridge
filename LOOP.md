@@ -34,10 +34,13 @@ The tracker working model is `~/repos/agent-docs/docs/github-tracker.md` (mainta
 
 - Every push to `main` runs `publish.yml` (edge image and chart); a release PR merge tags and
   publishes. Published artifacts carry no `v` prefix: use `X.Y.Z` in image references.
-- A clean local `just check` is weaker than CI on two legs: `tf-validate` self-skips without the IaC
+- A clean local `just check` does not replace hosted CI. `tf-validate` self-skips without the IaC
   tools, and `forbidden-words` scans only built-in credential shapes without
-  `$FORBIDDEN_WORDS_PATTERN` or `scripts/forbidden-words.local`.
-- `ci-success` is the only required check on `main`; Renovate PRs self-automerge once it is green.
+  `$FORBIDDEN_WORDS_PATTERN` or `scripts/forbidden-words.local`. `just ci` adds e2e and DynamoDB
+  tests, but neither recipe runs kubeconform (`helm-schema-validate`), zizmor, or the pull-request-only
+  checks (`ac-evidence`, `privacy-sweep`, `backlog-freeze`).
+- Pull requests to `main` need both `ci-success` and `pr-metadata-success`. The latter reports
+  acceptance evidence separately so that editing the pull request does not rerun the heavy CI gate.
 - `model.*`, `source.Source` and `source.Loop` are FROZEN seams: a change needs an `ARCHITECTURE.md`
   update. Do not weaken emit-once-after-settle, deterministic encoding or epoch-fenced checkpoints.
 - Every `*_review_test.go` and `*_content_gate_test.go` file, and every test whose comment carries a review

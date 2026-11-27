@@ -483,6 +483,57 @@ func TestRenderExampleBlockSettingsComments(t *testing.T) {
 	}
 }
 
+// TestRenderExampleBlockLoopComments verifies that LoopComments head-comment the key of a struct-valued
+// map entry (a loop block), and only that key: a settings key of the same name and the other loop get
+// nothing, and an Example without LoopComments renders exactly as before (#585: the example says how to
+// opt in to a loop it shows off).
+func TestRenderExampleBlockLoopComments(t *testing.T) {
+	type loop struct {
+		Enabled  bool              `yaml:"enabled"`
+		Cadence  string            `yaml:"cadence"`
+		Settings map[string]string `yaml:"settings"`
+	}
+	val := struct {
+		Type  string          `yaml:"type"`
+		Loops map[string]loop `yaml:"loops"`
+	}{Type: "demo", Loops: map[string]loop{
+		"on":  {Enabled: true, Cadence: "1m", Settings: map[string]string{"off": "x"}},
+		"off": {Cadence: "1m"},
+	}}
+	out, err := RenderExampleBlock([]Example{{Value: val, LoopComments: map[string]string{"off": "off unless enabled: true is set"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(out), "\n")
+	idx := func(want string) int {
+		for i, ln := range lines {
+			if ln == want {
+				return i
+			}
+		}
+		t.Fatalf("line %q not rendered:\n%s", want, out)
+		return -1
+	}
+	if i := idx("#       off:"); lines[i-1] != "#       # off unless enabled: true is set" {
+		t.Fatalf("loop comment not on the line above the off loop key:\n%s", out)
+	}
+	if n := strings.Count(string(out), "off unless enabled"); n != 1 {
+		t.Fatalf("loop comment rendered %d times, want once (never on a settings key of the same name):\n%s", n, out)
+	}
+	if i := idx("#       on:"); strings.Contains(lines[i-1], "#       #") {
+		t.Fatalf("a loop without a LoopComments entry got a comment:\n%s", out)
+	}
+
+	plain, err := RenderExampleBlock([]Example{{Value: val}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped := strings.Replace(string(out), "#       # off unless enabled: true is set\n", "", 1)
+	if string(plain) != stripped {
+		t.Fatalf("an Example without LoopComments must render byte-identically apart from the comment:\nplain:\n%s\nwith:\n%s", plain, out)
+	}
+}
+
 // TestRenderValue_Determinism asserts byte-for-byte identical output for the same input value.
 func TestRenderValue_Determinism(t *testing.T) {
 	v := rvMapHolder{

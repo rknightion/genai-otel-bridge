@@ -46,7 +46,7 @@ func main() {
 	// source package's ExampleSource(). Vendor-specific example shape stays in the vendor package.
 	// The SAME example set feeds both the values.yaml examples region and the ECS config file below.
 	examples := []helmgen.Example{
-		{Value: portkey.ExampleSource(), SettingsComments: portkey.ExampleSettingsComments()},
+		{Value: portkey.ExampleSource(), SettingsComments: portkey.ExampleSettingsComments(), LoopComments: portkey.ExampleLoopComments()},
 		{Value: langsmith.ExampleSource(), SettingsComments: langsmith.ExampleSettingsComments()},
 	}
 	exBlock, err := helmgen.RenderExampleBlock(examples)

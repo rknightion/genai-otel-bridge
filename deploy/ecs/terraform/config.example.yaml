@@ -128,6 +128,7 @@ sources:
       burst: 3
     loops:
       analytics:
+        # A loop runs only when enabled is true. Load applies no default: an omitted enabled means off.
         enabled: true
         # Poll cadence (± 10% jitter applied by the scheduler).
         cadence: 60s
@@ -190,8 +191,8 @@ sources:
 #           settle: 10m
 #           # groups: trailing query window [now-window_span, now-settle]
 #           window_span: 1h
+#       # logs_export is OFF (no enabled key means off). To opt in, add enabled: true and set workspace_id and signed_url_allow_hosts; the API key must be allowed to export logs.
 #       logs_export:
-#         enabled: true
 #         cadence: 1m
 #         settings:
 #           # logs_export: per-Collect emit chunk (bounds memory; the export file is never buffered whole)

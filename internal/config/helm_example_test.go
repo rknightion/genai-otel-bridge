@@ -21,7 +21,7 @@ import (
 func TestHelmGeneratedExamplesUpToDate(t *testing.T) {
 	const valuesPath = "../../deploy/helm/values.yaml"
 	want, err := helmgen.RenderExampleBlock([]helmgen.Example{
-		{Value: portkey.ExampleSource(), SettingsComments: portkey.ExampleSettingsComments()},
+		{Value: portkey.ExampleSource(), SettingsComments: portkey.ExampleSettingsComments(), LoopComments: portkey.ExampleLoopComments()},
 		{Value: langsmith.ExampleSource(), SettingsComments: langsmith.ExampleSettingsComments()},
 	})
 	if err != nil {

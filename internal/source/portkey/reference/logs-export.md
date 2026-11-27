@@ -9,6 +9,10 @@ defaults do not tell you.
 `workspace_id` and `signed_url_allow_hosts` are deliberately absent from the default set so an unset
 config fails validation loudly rather than exporting unscoped or fetching from an unvalidated host.
 
+The loop is opt-in (#585): it is built only when its block sets `enabled: true`, and an omitted
+`enabled` means off. Every shipped example shows it off. Beyond the two settings, the API key must be
+allowed to export logs.
+
 Minimal block:
 
 ```yaml

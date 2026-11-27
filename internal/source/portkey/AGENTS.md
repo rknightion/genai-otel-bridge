@@ -163,6 +163,12 @@ one sent before scopes existed (`TestLegacyRequestURLsUnchanged` pins the URLs a
 A job lifecycle (create, start, poll, download, page), not a GET. It emits `Batch.Logs` to the
 gateway `/v1/logs` on the same base and auth as metrics, landing in Loki.
 
+- **Opt-in (#585).** `newLoops` builds it only when its block sets `enabled: true`; `Load` applies
+  no default to a loop's `enabled`, so an omitted one means off (`TestLogsExportIsOptIn`). The
+  example ships it off, with `ExampleLoopComments` saying how to opt in
+  (`TestExampleLogsExportShippedOff`). Keep it off in `ExampleSource`, `test/eks/values-eks.yaml`
+  and `docs/portkey.md`.
+
 - **State lives in `Watermark.Cursor`** (phase, job id, window bounds, page and byte offsets, poll
   deadline, plus optional self-APM lifecycle trace/span ids). One non-blocking step per `Collect`;
   `LoopConfig.Window == 0` so the scheduler
@@ -192,7 +198,8 @@ gateway `/v1/logs` on the same base and auth as metrics, landing in Loki.
 
 Knobs are package-local `settings` maps - no `internal/config` change. A malformed known key fails
 fast; an unknown key warns. Defaults come from `defaultGroupsSettings()` / `defaultLogsSettings()` and
-are rendered into the Helm example by `ExampleSource()` and `ExampleSettingsComments()`, so the
+are rendered into the Helm example by `ExampleSource()`, `ExampleSettingsComments()` and
+`ExampleLoopComments()` (a head-comment per loop block), so the
 example cannot drift. `just gen` regenerates `deploy/helm/values.yaml`; a new knob without it fails
 `gen-check`.
 

@@ -40,7 +40,9 @@ func humanDur(d time.Duration) string {
 //
 // The analytics loop is intentionally absent: it is already the active default config: block and has
 // no settings keys to document. This example surfaces only the groups + logs_export loops, which are
-// opt-in and have decoupled settings knobs not visible elsewhere in the chart.
+// opt-in and have decoupled settings knobs not visible elsewhere in the chart. logs_export is shown
+// OFF (#585): its Enabled is left false, so the rendered block has no enabled key and runs nothing
+// until an operator adds enabled: true. ExampleLoopComments says so above the block.
 func ExampleSource() config.SourceConfig {
 	g := defaultGroupsSettings()
 	l := defaultLogsSettings()
@@ -81,9 +83,9 @@ func ExampleSource() config.SourceConfig {
 			},
 			// Stateful export-lifecycle loop: content-free per-request OTLP logs → Loki. Window==0
 			// (snapshot-scheduled; the real export window is settings.window). workspace_id and
-			// signed_url_allow_hosts are REQUIRED — construction fails without them.
+			// signed_url_allow_hosts are REQUIRED — construction fails without them. Opt-in (#585):
+			// Enabled is deliberately left false, so the example ships the loop off.
 			"logs_export": {
-				Enabled: true,
 				Cadence: config.Duration(time.Minute),
 				Settings: map[string]string{
 					"window":                  "1h",
@@ -105,6 +107,14 @@ func ExampleSource() config.SourceConfig {
 				},
 			},
 		},
+	}
+}
+
+// ExampleLoopComments returns the one-line head-comment the chart example puts above a loop block. The
+// logs_export block ships off (#585), so its comment says how to opt in and what the loop needs.
+func ExampleLoopComments() map[string]string {
+	return map[string]string{
+		"logs_export": "logs_export is OFF (no enabled key means off). To opt in, add enabled: true and set workspace_id and signed_url_allow_hosts; the API key must be allowed to export logs.",
 	}
 }
 

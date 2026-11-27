@@ -424,6 +424,7 @@ type HTTPConfig struct {
 	AllowPrivate bool     `yaml:"allow_private"`
 }
 type LoopConfig struct {
+	// A loop runs only when enabled is true. Load applies no default: an omitted enabled means off.
 	Enabled bool `yaml:"enabled" helm:"default=true"`
 	// Poll cadence (± 10% jitter applied by the scheduler).
 	Cadence Duration `yaml:"cadence" helm:"default=60s"`

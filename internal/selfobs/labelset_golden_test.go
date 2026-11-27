@@ -55,9 +55,8 @@ func attrKeys(set attribute.Set) string {
 	return strings.Join(keys, ",")
 }
 
-// TestSelfMetricLabelSetsGolden drives every recording method of a Metrics through a manual reader and
-// compares the attribute keys each instrument actually produced with the literal list above, so a
-// label added to or dropped from a recording changes a series identity visibly.
+// TestSelfMetricLabelSetsGolden checks the attribute keys of legacy recordings and loop seeds,
+// plus the scope seeds a tenant pipeline records, through a manual reader.
 func TestSelfMetricLabelSetsGolden(t *testing.T) {
 	reader := metric.NewManualReader()
 	mp := metric.NewMeterProvider(metric.WithReader(reader), metric.WithView(selfHistogramView()))
@@ -66,6 +65,7 @@ func TestSelfMetricLabelSetsGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := loopid.ID{Source: "src", Loop: "lp"}
+	m.SeedLoop(id, id.Loop)
 	m.EmittedSamples(id, 1)
 	m.EmittedLogs(id, 1)
 	m.SamplesSkipped(id, "r", 1)
@@ -87,6 +87,18 @@ func TestSelfMetricLabelSetsGolden(t *testing.T) {
 	m.ObserveEmitPartialReject("metrics", 1)
 	m.ObserveUpstreamRequest("host", "GET", 200, nil, time.Millisecond)
 
+	got := collectLabelSets(t, reader)
+	for name, want := range legacySelfMetricLabelKeys {
+		assertLabelSet(t, got, name, want)
+	}
+
+	// Check the legacy sets before With also seeds a pipeline-labelled partial reject series.
+	m.With("tenant", "pipeline").SeedScope()
+	assertLabelSet(t, collectLabelSets(t, reader), "genai_otel_bridge_scope_assertion_total", "pipeline,result,tenant")
+}
+
+func collectLabelSets(t *testing.T, reader *metric.ManualReader) map[string]map[string]bool {
+	t.Helper()
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
 		t.Fatal(err)
@@ -118,10 +130,13 @@ func TestSelfMetricLabelSetsGolden(t *testing.T) {
 			}
 		}
 	}
-	for name, want := range legacySelfMetricLabelKeys {
-		sets := got[name]
-		if len(sets) != 1 || !sets[want] {
-			t.Errorf("%s: recorded attribute key sets %v, want exactly {%q}", name, sets, want)
-		}
+	return got
+}
+
+func assertLabelSet(t *testing.T, got map[string]map[string]bool, name, want string) {
+	t.Helper()
+	sets := got[name]
+	if len(sets) != 1 || !sets[want] {
+		t.Errorf("%s: recorded attribute key sets %v, want exactly {%q}", name, sets, want)
 	}
 }

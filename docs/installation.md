@@ -13,7 +13,7 @@ description: Install genai-otel-bridge from source or deploy it to Kubernetes wi
 
 - Go 1.27 or later (for building from source).
 - A Grafana Cloud account (or any OTLP/HTTP endpoint).
-- For Kubernetes deployment: Helm 3.x and a cluster with `coordination.k8s.io/v1` available (standard since Kubernetes 1.18).
+- For Kubernetes deployment: Helm 3 or 4 and a cluster supported by the chart's `kubeVersion`.
 - For HA / ConfigMap checkpointing: the chart creates the required RBAC automatically.
 
 ---
@@ -207,6 +207,72 @@ runtimeEnv:
 ```
 
 The chart refuses to render without `grafanaSelfTokenSecret`. The default config also reads the product `GC_OTLP_*` values, which are provisioned only when `grafanaProductTokenSecret` is set, and `${ENV}`, which comes from `runtimeEnv.env` because the ExternalSecret does not carry it.
+
+### Config revisions
+
+The chart names each immutable ConfigMap by the SHA-256 of the mounted `config.yaml`. A config
+edit changes the Deployment's volume reference, so a replacement Pod from an old ReplicaSet
+still mounts the old file. Config changes always roll the Deployment. `rolloutOnConfigChange: false`
+now removes only the optional `checksum/config` annotation. Secret values are not pinned by
+config revisions. Do not put credentials in `config` or `configOverride`.
+
+On the first **live Helm upgrade** from the old fixed-name map, the chart looks up the
+release-owned `genai-otel-bridge-config`, preserves its data and marks it to keep. The Helm
+caller must be able to get that ConfigMap. Do not use an offline render for this migration if
+old workloads could lose their map. To restore a known good config, upgrade with the
+revision-aware chart and last good values (`--reset-values`), pinning the last good image if
+needed. Helm can reuse the kept map or recreate it from those values. Native Helm rollback
+replays stored manifests; it does not run the prune hook. Some Helm clients cannot roll back
+to a retained map absent from the current manifest. Do not delete a map to make rollback work.
+
+**Argo CD:** each new revision opts out of both sync pruning (`Prune=false`) and Application
+deletion (`Delete=false`). Helm's `keep` annotation alone does not stop Argo CD sync pruning.
+Before the first sync from the fixed-name map, disable sync pruning temporarily or ensure the
+old live map has both options and self-heal will not remove them. Preserve the old map until
+no workload references it. Argo CD uses offline rendering and does not run this chart's
+revision pruner. Keep the prune value off and arrange manual cleanup. Retained maps may appear
+out of sync until removed.
+
+#### Pruning old revisions
+
+`configRevisionPruning.enabled` defaults to `false`. No revision delete permissions are added
+by default, and unreferenced maps can accumulate. Opt in only for live `helm upgrade`:
+
+```yaml
+configRevisionPruning:
+  enabled: true
+  historyLimit: 3
+```
+
+On a successful post-upgrade run, the Job keeps the desired revision, those referenced by the
+bridge Deployment, any Pod or ReplicaSet in the namespace (including scaled-down ReplicaSets),
+and the newest `historyLimit` **unused** revisions. Set the limit to `0` for no unused history.
+Referenced history is not capped by this setting. If Helm waits for a rollout and times out,
+or hooks are disabled, no pruning occurs. No pruning runs at install, rollback or uninstall.
+Reserve revision names for the bridge; do not refer to them from other workload templates or
+change references outside Helm while pruning runs. The reference scan is not atomic with delete.
+
+The Helm caller needs namespace ConfigMap list access to discover candidates. The Job gets and
+deletes only the discovered, release-owned old names, not the desired map or checkpoint. It
+also reads workload specs to find references. It has its own ServiceAccount, no Secret access,
+and needs Kubernetes API reachability and a cluster compatible with the pinned utility image's
+kubectl version. It rechecks ownership and uses ConfigMap UID and resource-version preconditions.
+
+**Failed admission can leave an active grant.** Helm creates the ServiceAccount, Role and
+RoleBinding before the Job. A quota or admission denial, or a failed or interrupted hook, can
+leave the RoleBinding behind. Setting `enabled: false` does not revoke a leftover grant. After
+the Helm operation has stopped, remove the RoleBinding first, then the remaining hook resources:
+
+```bash
+kubectl -n <namespace> delete rolebinding genai-otel-bridge-config-revisions --ignore-not-found
+kubectl -n <namespace> delete job,role,serviceaccount genai-otel-bridge-config-revisions --ignore-not-found
+```
+
+For manual ConfigMap cleanup, check the owning release, the current Deployment mount and every
+ReplicaSet and Pod reference in the namespace. Keep referenced maps and any unused history you
+want. Delete only the exact names you have checked, including the old fixed-name map after
+migration or after uninstall once all consumers are gone. Do not delete by label alone or
+remove the checkpoint ConfigMap as part of revision cleanup.
 
 ### Uninstall cleanup
 

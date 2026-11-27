@@ -173,9 +173,9 @@ The Helm chart creates a **namespace-scoped Role** (not ClusterRole) with:
 - `coordination.k8s.io/leases`: `get`, `create`, `update` on `genai-otel-bridge-leader`
 - `configmaps`: `get`, `create`, `update` on `genai-otel-bridge-checkpoints`
 
-The pod cannot read or modify its own `genai-otel-bridge-config` ConfigMap. `delete` is not
-granted to the running pod; it is granted only to the post-delete cleanup hook's ephemeral
-ServiceAccount.
+The bridge pod cannot read or modify its mounted config revision via the API and has no
+`delete` grant. The uninstall and opt-in [config pruning](./installation.md#pruning-old-revisions)
+hooks have separate ServiceAccounts.
 
 ---
 

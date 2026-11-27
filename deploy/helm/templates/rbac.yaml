@@ -38,8 +38,8 @@ rules:
       - update
 
   # ConfigMap watermark checkpoint. Same pattern: create unscoped (resourceNames can't gate create),
-  # get/update scoped to the checkpoint ConfigMap only — so the pod can NOT read/modify its own
-  # genai-otel-bridge-config (or any other ConfigMap) in the namespace.
+  # get/update scoped to the checkpoint ConfigMap only. The bridge cannot read or modify its
+  # mounted config revision (or any other ConfigMap) via the API.
   - apiGroups:
       - ""
     resources:

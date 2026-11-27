@@ -53,6 +53,24 @@ An id becomes a Secret name and a mount path, so it must match the tenant id rul
 {{- keys $tenants | sortAlpha | toJson -}}
 {{- end -}}
 
+{{/* This is the exact mounted file, not the CLI plan or the ConfigMap manifest. */}}
+{{- define "genai-otel-bridge.configBytes" -}}
+{{- if .Values.configOverride -}}
+{{- .Values.configOverride -}}
+{{- else if .Values.config.tenants -}}
+{{- /* Tenant shape: sources and emit.telemetry belong to the legacy shape and must be absent. */ -}}
+{{- $config := omit .Values.config "sources" -}}
+{{- $_ := set $config "emit" (omit (get $config "emit" | default dict) "telemetry") -}}
+{{- printf "%s\n" (toYaml $config) -}}
+{{- else -}}
+{{- printf "%s\n" (toYaml .Values.config) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "genai-otel-bridge.configName" -}}
+{{- printf "genai-otel-bridge-config-%s" (include "genai-otel-bridge.configBytes" . | sha256sum) -}}
+{{- end -}}
+
 {{- define "genai-otel-bridge.selectorLabels" -}}
 app: genai-otel-bridge
 {{- end -}}

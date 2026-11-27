@@ -490,9 +490,9 @@ every assemble rule that needs no secret is found in CI. It never reads a tenant
 two rules are found only when a pod starts: a duplicate API key and an unreadable secret. Both block
 the tenants concerned, not the process (section 9). The chart requires a new pod to become ready
 before an old one is removed (section 11), so a pod that fails to assemble never becomes ready and
-the old pods keep running. That holds only while no old pod restarts: the config is one ConfigMap
-updated in place, so an old pod that restarts during a stopped rollout reads the new config and
-fails too (see Risks).
+the old pods keep running. A replacement pod from an old ReplicaSet mounts the same
+[immutable config revision](../installation.md#config-revisions). Secret values can change
+independently (see Risks).
 
 ### 4. Pipeline assembly
 
@@ -1015,7 +1015,7 @@ The checkpoint key contains no shard name, so a later shard design does not rewr
 | Every tenant's assertion reads one endpoint Portkey does not document (`/analytics/groups/workspace`). | Matched pipelines ride out up to 20 minutes of failures (section 5.1). The stale-poller alert fires for every matched pipeline past that. | A change or removal of that endpoint stops every tenant at once, and no other endpoint is known to replace it. |
 | Two tenants name the same workspace with an organisation key. | No scope may appear in two tenants, checked by the config check in CI (section 2). | An organisation key can still be pointed at a workspace that belongs to no tenant of the install; only review of the plan table catches that. |
 | Workspace slugs are unique only inside a Portkey organisation (Q9). | None in the binary: the workspace grouping returns no id. | A key from another organisation whose workspace has the configured slug returns `Matched`. Accepted if Q9 finds slugs are not globally unique. |
-| A rule that needs a tenant's secret is broken (a duplicate key or an unreadable secret), which the config check cannot find. | Only the tenants concerned are blocked, and the alert pages. A process-stopping assemble rule is found by the config check in CI. | The mistake is found at rollout, not in CI. The config is one ConfigMap updated in place, so an old pod that restarts during a stopped rollout reads the new config and fails too. A stopped rollout must be rolled back promptly. |
+| A rule that needs a tenant's secret is broken (a duplicate key or an unreadable secret), which the config check cannot find. | Only the tenants concerned are blocked, and the alert pages. A process-stopping assemble rule is found by the config check in CI. | The mistake is found at rollout, not in CI. Config revisions are immutable, but a replacement pod can still see updated Secret values. |
 
 ## Alternatives Considered
 

@@ -1,6 +1,53 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [4.3.0](https://github.com/rknightion/genai-otel-bridge/compare/v4.2.0...v4.3.0) (2026-11-27)
+
+
+### Features
+
+* accept the tenant shape and prove delivery end to end on k3d ([#563](https://github.com/rknightion/genai-otel-bridge/issues/563)) ([84fcd2c](https://github.com/rknightion/genai-otel-bridge/commit/84fcd2c6321b87a517ec0ffe0ba89fe07237da0f))
+
+
+### Bug Fixes
+
+* check every tenant pipeline in offline config validation ([#574](https://github.com/rknightion/genai-otel-bridge/issues/574)) ([3a87221](https://github.com/rknightion/genai-otel-bridge/commit/3a87221d253db0733ce71b55563f0dc7721b58d7))
+* pre-seed emit_errors_total and auth_errors_total so the first failure fires its alert ([#518](https://github.com/rknightion/genai-otel-bridge/issues/518)) ([2d8a6f8](https://github.com/rknightion/genai-otel-bridge/commit/2d8a6f81f5e36798d74016e7f35bf53782d60109))
+* **schedule:** keep scope auth backoff when checkpoint loads fail ([#571](https://github.com/rknightion/genai-otel-bridge/issues/571)) ([7ba3613](https://github.com/rknightion/genai-otel-bridge/commit/7ba361395b7b48ef849be79dde5b76bf9058af0c))
+* **selfobs:** attribute hook-fed counters to their source instance ([#577](https://github.com/rknightion/genai-otel-bridge/issues/577)) ([886e6f5](https://github.com/rknightion/genai-otel-bridge/commit/886e6f50348d789ff588efeabb8d9fc202ddc892))
+* **selfobs:** count failed scope match writes ([#579](https://github.com/rknightion/genai-otel-bridge/issues/579)) ([b842257](https://github.com/rknightion/genai-otel-bridge/commit/b8422570bbc322fca94b2abc1847bb253cecb54c))
+* stretch the wait for auth (401/403) failures like quota failures ([#540](https://github.com/rknightion/genai-otel-bridge/issues/540)) ([c062b1d](https://github.com/rknightion/genai-otel-bridge/commit/c062b1d251ab3e7c497245069e6a8b8fd8988f7e))
+
+
+### Refactor
+
+* add a vendor-neutral scope gate asked by the scheduler before each collect ([#548](https://github.com/rknightion/genai-otel-bridge/issues/548)) ([bd19f53](https://github.com/rknightion/genai-otel-bridge/commit/bd19f53730c9e5f01304fc60805aa205ebd0f3b4))
+* assemble one pipeline per plan row in three passes ([#546](https://github.com/rknightion/genai-otel-bridge/issues/546)) ([ecfac8d](https://github.com/rknightion/genai-otel-bridge/commit/ecfac8dbada85f825c8d2902e16b4fc053560f91))
+* assert a Portkey scope and send workspace_slug when a source has one ([#552](https://github.com/rknightion/genai-otel-bridge/issues/552)) ([b4004da](https://github.com/rknightion/genai-otel-bridge/commit/b4004da54ce4220dbbf1925e5fae0136b721e52b))
+* build the composition root from an emitter factory and a telemetry factory ([#545](https://github.com/rknightion/genai-otel-bridge/issues/545)) ([3b790ef](https://github.com/rknightion/genai-otel-bridge/commit/3b790ef8dbb8bcb5e7dc7b3b1abed4b40696044b))
+* carry tenant and pipeline labels and log attributes through self-telemetry ([#542](https://github.com/rknightion/genai-otel-bridge/issues/542)) ([dd50eea](https://github.com/rknightion/genai-otel-bridge/commit/dd50eeafa237950e6d77eb3aa96a9f2eababac71))
+* group alert rules and dashboard by tenant and pipeline, add scope alerts ([#560](https://github.com/rknightion/genai-otel-bridge/issues/560)) ([d9044d1](https://github.com/rknightion/genai-otel-bridge/commit/d9044d1ae32909f3a4b3477eab1df9a2ada8642e))
+* parse and validate the tenant config shape, refused as not yet enabled ([#554](https://github.com/rknightion/genai-otel-bridge/issues/554)) ([b637e16](https://github.com/rknightion/genai-otel-bridge/commit/b637e16ff2783a02bceb5f423425698592433b1b))
+* read tenant secrets, block duplicate keys and assemble tenant rows ([#559](https://github.com/rknightion/genai-otel-bridge/issues/559)) ([bb6fc6b](https://github.com/rknightion/genai-otel-bridge/commit/bb6fc6b2b10ad50da9b1691371eb918790673ecc))
+* render tenant configs and mount one optional secret per tenant in the chart ([#556](https://github.com/rknightion/genai-otel-bridge/issues/556)) ([c9a0877](https://github.com/rknightion/genai-otel-bridge/commit/c9a087794faea81673b471aaaaf2987679b9f314))
+* resolve config into a plan and print its table and hash in -validate-config ([#544](https://github.com/rknightion/genai-otel-bridge/issues/544)) ([2faffaf](https://github.com/rknightion/genai-otel-bridge/commit/2faffaf410343f180b5f71f6c87a3aa10bb1ede5))
+* resolve tenant-shape configs into plan rows with the resolve-phase rules ([#557](https://github.com/rknightion/genai-otel-bridge/issues/557)) ([a5627c3](https://github.com/rknightion/genai-otel-bridge/commit/a5627c3ab98980355ef25d77bbc5ec68f94b0712))
+
+
+### Documentation
+
+* align the multi-tenancy design with current main ([#519](https://github.com/rknightion/genai-otel-bridge/issues/519)) ([fb869d6](https://github.com/rknightion/genai-otel-bridge/commit/fb869d619bfeb617d6a44926d59a3ccd716f2572))
+* correct epoch, memory and CI guidance ([#575](https://github.com/rknightion/genai-otel-bridge/issues/575)) ([9a3f982](https://github.com/rknightion/genai-otel-bridge/commit/9a3f9825de17bdeaccd58e622bce47ec5c27d699))
+* describe the configmap checkpoint writer as it is ([#538](https://github.com/rknightion/genai-otel-bridge/issues/538)) ([99b66a1](https://github.com/rknightion/genai-otel-bridge/commit/99b66a19710a2f3c55fe88bc7274c7e850bcf662))
+* document the tenant shape and amend the design record ([#562](https://github.com/rknightion/genai-otel-bridge/issues/562)) ([ff9e5ca](https://github.com/rknightion/genai-otel-bridge/commit/ff9e5ca02634ca9604a842f052edf0d8020c9f3d))
+* realign the multi-tenancy design to one API key per workspace ([#514](https://github.com/rknightion/genai-otel-bridge/issues/514)) ([46574ee](https://github.com/rknightion/genai-otel-bridge/commit/46574eee3a336067980265953206cd47b5d7e93a))
+* record answers to every multi-tenancy design question ([#539](https://github.com/rknightion/genai-otel-bridge/issues/539)) ([9c2d16f](https://github.com/rknightion/genai-otel-bridge/commit/9c2d16f3b047e394f40e2ffe4fe429924bf969cd))
+
+
+### Build & CI
+
+* include the publish just pin in renovate updates ([#572](https://github.com/rknightion/genai-otel-bridge/issues/572)) ([c5da7dc](https://github.com/rknightion/genai-otel-bridge/commit/c5da7dc4ef8b9cc8e555b6b18abbf053370e7cc8))
+
 ## [4.2.0](https://github.com/rknightion/genai-otel-bridge/compare/v4.1.0...v4.2.0) (2026-11-26)
 
 

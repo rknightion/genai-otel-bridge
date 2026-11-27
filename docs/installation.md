@@ -244,6 +244,9 @@ configRevisionPruning:
   historyLimit: 3
 ```
 
+When using `--reuse-values` with a release from before this option existed, set both fields
+explicitly to opt in. An enabled hook requires a non-negative limit, not `null`.
+
 On a successful post-upgrade run, the Job keeps the desired revision, those referenced by the
 bridge Deployment, any Pod or ReplicaSet in the namespace (including scaled-down ReplicaSets),
 and the newest `historyLimit` **unused** revisions. Set the limit to `0` for no unused history.

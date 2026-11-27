@@ -5,7 +5,8 @@
 {{- if not (kindIs "map" $settings) -}}
 {{- fail "configRevisionPruning must be a map" -}}
 {{- end -}}
-{{- $prune = mergeOverwrite $prune $settings -}}
+{{- /* Do not fill in missing fields here. Helm removes explicitly null values. */ -}}
+{{- $prune = $settings -}}
 {{- end -}}
 {{- if not (kindIs "bool" $prune.enabled) -}}
 {{- fail "configRevisionPruning.enabled must be a boolean" -}}

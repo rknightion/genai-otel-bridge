@@ -258,12 +258,17 @@ class ConfigRevisions(unittest.TestCase):
             "data": {"release": base64.b64encode(base64.b64encode(gzip.compress(json.dumps(release).encode()))).decode()},
         }
         reads = {"/api/v1/namespaces/default/secrets": {"apiVersion": "v1", "kind": "SecretList", "items": [history]}}
-        with tempfile.TemporaryDirectory() as tmp, api_fixture(tmp, [legacy], reads) as (config, _):
-            result = subprocess.run([
-                os.getenv("HELM", "helm"), "upgrade", "test-release", str(chart), "--namespace", "default",
-                "--reuse-values", "--kubeconfig", str(config), "--dry-run=server", "--disable-openapi-validation",
-                "--output", "json",
-            ], text=True, capture_output=True, timeout=10)
+        old_revision = configmap(self.hash_name("1"))
+        with tempfile.TemporaryDirectory() as tmp, api_fixture(tmp, [legacy, old_revision], reads) as (config, _):
+            command = [os.getenv("HELM", "helm"), "upgrade", "test-release", str(chart), "--namespace", "default",
+                       "--kubeconfig", str(config), "--dry-run=server", "--disable-openapi-validation", "--output", "json"]
+            result = subprocess.run(command + ["--reuse-values"], text=True, capture_output=True, timeout=10)
+            # Helm coalesces an explicit null away. It must not mean permission to
+            # prune using an implicit replacement limit when pruning is enabled.
+            bad = subprocess.run(command + ["--set", "configRevisionPruning.enabled=true,configRevisionPruning.historyLimit=null"],
+                                 text=True, capture_output=True, timeout=10)
+        self.assertNotEqual(bad.returncode, 0, "Helm admitted pruning despite an explicit null retention limit")
+        self.assertIn("configRevisionPruning.historyLimit must be a non-negative integer", bad.stderr)
         self.assertEqual(result.returncode, 0, result.stderr)
         upgraded = json.loads(result.stdout)
         objects = [obj for obj in yaml.safe_load_all(upgraded["manifest"]) if obj]

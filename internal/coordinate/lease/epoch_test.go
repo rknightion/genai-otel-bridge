@@ -56,26 +56,27 @@ func TestEpochRetriesTransientGetError(t *testing.T) {
 // (the decision this reverses: a leader at epoch 0 is fenced for its whole term while it blocks every
 // standby). The read keeps retrying until the context is done, and only then returns 0.
 func TestEpochRetriesUntilContextDone(t *testing.T) {
+	const wantCalls = 6 // past the old ~800ms retry budget
+	// The timeout only bounds a broken retry loop. The failed reads drive cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	cs := fake.NewSimpleClientset()
 	var calls int32
 	cs.PrependReactor("get", "leases", func(ktesting.Action) (bool, kruntime.Object, error) {
-		atomic.AddInt32(&calls, 1)
+		if atomic.AddInt32(&calls, 1) == wantCalls {
+			cancel()
+		}
 		return true, nil, errors.New("sustained API outage")
 	})
 	c := New(cs, "genai-otel-bridge", "genai-otel-bridge-leader", "replica-a", time.Second, 700*time.Millisecond, 150*time.Millisecond)
 
-	const wait = 1500 * time.Millisecond // well past the old ~800ms budget
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
-	defer cancel()
-	began := time.Now()
 	if got := c.epoch(ctx); got != 0 {
 		t.Fatalf("epoch = %d, want 0 once the context is done", got)
 	}
-	if d := time.Since(began); d < wait {
-		t.Fatalf("epoch gave up after %v, before the context was done (%v)", d, wait)
-	}
-	if n := atomic.LoadInt32(&calls); n < 6 {
-		t.Fatalf("epoch made %d Get calls in %v, want it to keep retrying every %v", n, wait, epochReadBackoff)
+	if err := ctx.Err(); err != context.Canceled {
+		t.Fatalf("epoch returned after %d Get calls with context error %v; want cancellation on failed Get %d",
+			atomic.LoadInt32(&calls), err, wantCalls)
 	}
 }
 

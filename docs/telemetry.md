@@ -24,8 +24,12 @@ empty wire unit, so their Prometheus name is their name; their Unit cell is desc
 
 Product telemetry uses `ProductIdentity()` for its resource identity: it stamps
 `service.name`, `service.namespace`, and `deployment.environment.name`. It deliberately does
-not stamp `service.version`. The bridge sets `service.version` only on self-observability
-metrics and traces, from the build version configured in `provider.go` and `tracing.go`.
+not stamp `service.version`. The bridge sets `service.version` only on the self-observability
+trace resource (`tracing.go`), so a trace correlates to a build. The self-metrics resource
+(`provider.go`) deliberately omits it (#314): the Grafana Cloud OTLP ingest promotes it to a
+per-series `service_version` label, which minted a new set of self series on every release.
+Consequently `target_info` carries no build version either, and no other metric attribute
+replaces it; build correlation for metrics is not available.
 
 The resulting Prometheus labels are determined by the receiving OTLP gateway, not by this
 catalogue alone. With Mimir's default OTLP mapping, `service.name` and `service.namespace` are

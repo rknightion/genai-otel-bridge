@@ -22,7 +22,7 @@ type ProviderConfig struct {
 	ServiceNamespace            string // DISTINCT from product (H4), e.g. "genai-otel-bridge-meta"
 	Environment                 string
 	Instance                    string // [CP-H8] per-replica id (POD_NAME) — diagnose leader overlap/disappearance
-	Version                     string // [#91] build version → service.version resource attr (correlate a regression to a build)
+	Version                     string // [#91] build version; unused by the metrics resource (#314), kept so the config mapping is shared with tracing
 	Interval                    time.Duration
 	MaxDPM                      int // self-plane DPM cap: the reader interval is clamped to ≥ 60s/MaxDPM. <1 ⇒ 1.
 }
@@ -48,7 +48,8 @@ func NewProvider(ctx context.Context, cfg ProviderConfig) (*metric.MeterProvider
 	res := resource.NewSchemaless(
 		attribute.String("service.namespace", cfg.ServiceNamespace),
 		attribute.String("service.name", "genai-otel-bridge"),
-		attribute.String("service.version", cfg.Version), // [#91] build version (ldflags-stamped, "dev" if unset)
+		// [#314] No service.version here: the Grafana Cloud OTLP ingest promotes it to a per-series
+		// service_version label, minting a new self series set every release. Traces keep it (tracing.go).
 		attribute.String("deployment.environment.name", cfg.Environment),
 		attribute.String("service.instance.id", cfg.Instance), // [CP-H8] per-replica identity
 	)

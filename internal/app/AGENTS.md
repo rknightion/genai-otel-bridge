@@ -33,13 +33,11 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
 - `sourceDeps(t, authLim)` builds a row's `source.Deps` from its telemetry: the upstream-request
   observer and the settle-exceedance, capability, data-incompleteness and auth-error hooks. One
   auth-warning limiter serves every row; its key carries the source instance.
-- `ValidateConfigFile` validates and resolves the plan itself, then passes it to `BuildFromPlan`
-  with an inert emitter factory and `noopTelemetry`. A tenant-shape plan is assembled with
-  `placeholderSecrets` (no file is read; a value distinct per tenant and file), so every assemble
-  rule that needs no secret (scope assertion support, the reserved `scope-match` loop, no loop that
-  emits log records, per-group series ownership) fails the check, its error returned as it is. A
-  tenant-shape plan that assembles returns its table and hash with no error, as a legacy plan does.
-  An unreadable secret and a duplicate API key are found only when a pod reads the files.
+- `ValidateConfigFile` validates and resolves the plan, then uses `BuildFromPlan` with inert
+  dependencies. The validation copy of each tenant row supplies placeholder values in place of the
+  secret file references. No tenant secret is read or compared, so a fake key collision cannot hide
+  an assembly error by blocking a tenant. The check returns the original plan's table and hash.
+  Unreadable tenant secrets and duplicate API keys are still checked only at pod start.
 - `Options.Secrets` (`tenancy.SecretReader`) reads the secret files a row names. A legacy row names
   none, so `nil` is fine for it. `Options.Now` is the clock of every scope gate (nil: `time.Now`).
   `Options.OnTenantBlocked(tenant, reason, blocked)` is called for every tenant of the plan and both

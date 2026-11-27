@@ -7,8 +7,8 @@ metadata:
   labels:
     grafana.app/folder: genai-otel-bridge
 spec:
-  title: genai-otel-bridge:scrape_present
-  metric: genai-otel-bridge:scrape_present
+  title: genai_otel_bridge:scrape_present
+  metric: genai_otel_bridge:scrape_present
   targetDatasourceUID: grafanacloud-prom
   trigger:
     interval: 1m

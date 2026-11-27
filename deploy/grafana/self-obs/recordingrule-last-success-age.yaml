@@ -7,8 +7,8 @@ metadata:
   labels:
     grafana.app/folder: genai-otel-bridge
 spec:
-  title: genai-otel-bridge:last_success_age:seconds
-  metric: genai-otel-bridge:last_success_age:seconds
+  title: genai_otel_bridge:last_success_age:seconds
+  metric: genai_otel_bridge:last_success_age:seconds
   targetDatasourceUID: grafanacloud-prom
   trigger:
     interval: 1m

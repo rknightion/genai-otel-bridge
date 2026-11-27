@@ -187,6 +187,63 @@ func TestScopeGateDecisionEffects(t *testing.T) {
 	}
 }
 
+// When the checkpoint load fails on the first tick, a scope assertion's 401/403 still counts
+// and stretches the wait. A checkpoint load failure on its own keeps the cadence.
+func TestScopeGateAuthWithCheckpointLoadError(t *testing.T) {
+	const cadence = time.Minute
+	cases := []struct {
+		name            string
+		gateErr         error
+		rememberedMatch bool
+		wantAuth        []string
+		wantWait        time.Duration
+	}{
+		{name: "since only", wantWait: cadence},
+		{name: "auth and since", gateErr: &source.AuthError{Status: 403}, wantAuth: []string{"analytics/mt.t1.a"}, wantWait: 2 * cadence},
+		{name: "auth in grace and since", gateErr: &source.AuthError{Status: 403}, rememberedMatch: true,
+			wantAuth: []string{"analytics/mt.t1.a"}, wantWait: 2 * cadence},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := leaderCtx()
+			now := time.Unix(2000, 0).UTC()
+			key := model.CheckpointKey{SourceInstance: "mt.t1.a", Loop: "analytics", OutputFingerprint: "fp"}
+			loop := &countingLoop{key: key}
+			m := newGateMetrics()
+			r := NewLoopRunner(loop, &fakeEmitter{byTS: map[int64]error{}}, loadErrorCP{}, source.NewGuard(source.GuardConfig{}), 4, 1, m)
+			store := newMemCP()
+			const digest = "d"
+			if tc.rememberedMatch {
+				if err := store.Save(ctx, source.ScopeMatchKey(key.SourceInstance), model.Watermark{Time: now.Add(-time.Minute), Cursor: digest, Epoch: 1}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gate := source.NewScopeGate(source.ScopeGateConfig{Asserter: &scriptedAsserter{res: source.ScopeMatched, err: tc.gateErr},
+				Store: store, SourceInstance: key.SourceInstance, Digest: digest, Now: func() time.Time { return now },
+				Jitter: func(time.Duration) time.Duration { return 0 }}) // re-assert on the first tick even after restoring a match
+			gate.Elected(ctx)
+			sp := LoopSpec{Runner: r, Loop: loop, Cadence: cadence, Window: time.Hour, MaxBackfill: time.Hour, Metrics: m, Gate: gate}
+			out := NewScheduler(nil, NoopMetrics{}).tick(ctx, sp, now)
+
+			if got := m.emitErrs; got["checkpoint_load"] != 1 || len(got) != 1 {
+				t.Errorf("emit errors = %v, want only one checkpoint_load error", got)
+			}
+			if loop.Collects() != 0 || r.Busy() || m.lags != 0 || len(m.skipped) != 0 {
+				t.Errorf("unreadable checkpoint: collects=%d busy=%v lags=%d skipped=%v, want no work or lag accounting",
+					loop.Collects(), r.Busy(), m.lags, m.skipped)
+			}
+			if !slices.Equal(m.auth, tc.wantAuth) {
+				t.Errorf("auth errors = %v, want %v", m.auth, tc.wantAuth)
+			}
+			var st tickState
+			wait, _ := st.next(r.Degraded(), out, sp.MaxCatchupPerTick, sp.Cadence)
+			if wait != tc.wantWait {
+				t.Errorf("next wait before jitter = %v, want %v", wait, tc.wantWait)
+			}
+		})
+	}
+}
+
 // TestScopeGateCancelledCallNotCounted: a gate call cut short by leadership loss is the cancellation,
 // not a failure: nothing is recorded or counted and nothing is collected.
 func TestScopeGateCancelledCallNotCounted(t *testing.T) {

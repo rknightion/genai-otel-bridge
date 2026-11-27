@@ -287,7 +287,7 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	// mismatched end the tick with no lag and no unreadable time counted; a failed call is handled as a
 	// failed collect below, after the lag accounting.
 	var scopeErr error
-	gateAuth := false // the gate's call got a 401/403 inside the grace and the tick still collects
+	gateAuth := false // the gate's call got a 401/403, with or without matched grace
 	if sp.Gate != nil {
 		decision, err := sp.Gate.Before(ctx)
 		switch {
@@ -316,19 +316,25 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 		}
 	}
 	wm, err := sp.Runner.Since(ctx) // [CP-C1] in-memory saved frontier, or persisted checkpoint
+	if err != nil && ctx.Err() != nil {
+		// [#368] leadership lost / shutdown mid-load: the cancellation, not a checkpoint failure
+		span.SetAttributes(attribute.String("outcome", "cancelled"))
+		return tickOutcome{}
+	}
+	// A failed assertion outside the grace still raises its auth signal even when Since fails.
+	// The asserter does not count it, and the tick must back off instead of retrying at cadence.
+	if errors.Is(scopeErr, source.ErrAuth) {
+		gateAuth = true
+		m.AuthError(sp.Loop.Key().Loop, id.Source)
+	}
 	if err != nil {
-		if ctx.Err() != nil {
-			// [#368] leadership lost / shutdown mid-load: the cancellation, not a checkpoint failure
-			span.SetAttributes(attribute.String("outcome", "cancelled"))
-			return tickOutcome{}
-		}
 		m.EmitError(id, "checkpoint_load")
 		if s.lim.Allow(sp.Pipeline.limitKey("checkpoint_load", name)) {
 			slog.Warn("checkpoint load failed; skipping tick", append([]any{"loop", name, "err", err}, pattrs...)...)
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "checkpoint_load")
-		return tickOutcome{}
+		return tickOutcome{auth: gateAuth}
 	}
 	if !wm.Time.IsZero() {
 		// [AR-C6] window_lag floors at ~bucket_settle+cadence (we never emit unsettled buckets), so
@@ -353,20 +359,14 @@ func (s *Scheduler) tick(ctx context.Context, sp LoopSpec, now time.Time) tickOu
 	}
 	if scopeErr != nil {
 		// The scope assertion failed: like a failed collect, counted and logged against this loop, which
-		// retries with nothing advanced. A 401 or 403 (*source.AuthError, an ErrAuth) also raises the
-		// auth-error signal, since the asserter never calls the hook, and feeds the auth backoff streak as a
-		// collect's would [#537], so a bad key does not spend the request budget at cadence.
+		// retries with nothing advanced.
 		m.EmitError(id, "collect")
-		auth := errors.Is(scopeErr, source.ErrAuth)
-		if auth {
-			m.AuthError(sp.Loop.Key().Loop, id.Source)
-		}
 		if s.lim.Allow(sp.Pipeline.limitKey("scope_assertion", name)) {
 			slog.Warn("scope assertion failed; skipping collect", append([]any{"loop", name, "err", scopeErr}, pattrs...)...)
 		}
 		span.RecordError(scopeErr)
 		span.SetStatus(codes.Error, "scope_assertion")
-		return tickOutcome{auth: auth}
+		return tickOutcome{auth: gateAuth}
 	}
 	batch, err := sp.Loop.Collect(ctx, wm)
 	switch {

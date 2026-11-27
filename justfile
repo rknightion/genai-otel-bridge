@@ -164,11 +164,10 @@ spdx-check:
 [group('check')]
 [no-exit-message]
 [script('bash')]
-helm-lint: _tools-e2e _tools-pyyaml
+helm-lint: _tools-e2e
     set -euo pipefail
     helm="{{ tools_dir }}/helm"
     "$helm" lint deploy/helm
-    HELM="$helm" {{ tools_dir }}/pyenv/bin/python test/helm/config_revisions.py
     # Render with default values: a workload with an empty image (e.g. the cleanup hook) fails here, not at uninstall.
     rendered=$("$helm" template rel deploy/helm)
     if printf '%s\n' "$rendered" | grep -nE '^[[:space:]]+image:[[:space:]]*$'; then echo 'helm-lint: a default render has an empty container image' >&2; exit 1; fi
@@ -195,8 +194,7 @@ helm-lint: _tools-e2e _tools-pyyaml
 [script('bash')]
 helm-default-render: _tools-e2e
     set -euo pipefail
-    rendered=$({{ tools_dir }}/helm template rel deploy/helm | grep -vE 'helm\.sh/chart:|app\.kubernetes\.io/version:|checksum/config:|image: ghcr\.io/rknightion/genai-otel-bridge:')
-    printf '%s\n' "$rendered"
+    {{ tools_dir }}/helm template rel deploy/helm | grep -vE 'helm\.sh/chart:|app\.kubernetes\.io/version:|checksum/config:|image: ghcr\.io/rknightion/genai-otel-bridge:'
 
 # Format, validate, lint, and scan the ECS Terraform module; absent IaC tools self-skip.
 [group('check')]
@@ -227,7 +225,6 @@ tf-validate:
 [no-exit-message]
 e2e: helm-package image-local _tools-e2e
     IMAGE={{ image }} E2E_HELPER_IMAGE={{ e2e_helper_image }} K3S_IMAGE={{ k3s_image }} bash scripts/k3d-e2e.sh all
-    IMAGE={{ image }} E2E_HELPER_IMAGE={{ e2e_helper_image }} K3S_IMAGE={{ k3s_image }} bash test/helm/config-revisions-e2e.sh
 
 # Regenerate Helm, ECS, telemetry documentation and the self-observability dashboard.
 [group('gen')]

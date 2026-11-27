@@ -165,10 +165,9 @@ The pod's ServiceAccount is bound to a **namespace-scoped Role** (not a ClusterR
 - `coordination.k8s.io/leases`: `get`, `create`, `update` on the `genai-otel-bridge-leader`
   Lease only — the pod cannot touch any other Lease.
 - `configmaps`: `get`, `create`, `update` on the `genai-otel-bridge-checkpoints` ConfigMap only
-  — the bridge pod cannot read or modify its config revision via the API.
-- `delete` is not granted to the bridge pod's ServiceAccount. The uninstall and
-  [config revision pruning](./installation.md#config-revisions) hooks use separate
-  ServiceAccounts. Neither hook is granted Secret access.
+  — the pod cannot read or modify its own `genai-otel-bridge-config` ConfigMap.
+- `delete` is not granted to the pod's ServiceAccount. The post-delete cleanup hook uses a
+  separate ephemeral ServiceAccount that only exists during uninstall.
 
 ---
 

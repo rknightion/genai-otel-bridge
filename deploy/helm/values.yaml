@@ -44,12 +44,9 @@ rollingUpdate:
   maxUnavailable: 1
   maxSurge: 1
 
-# Number of unused config ConfigMap revisions to keep. Revisions referenced by Pods, ReplicaSets or
-# the current Deployment are kept separately. Set to 0 to keep only referenced revisions.
-configRevisionHistoryLimit: 3
-
-# Keep the checksum/config pod annotation for tooling. Changing the mounted config always rolls the
-# pods, even when this is false, because the pod template points to a new immutable ConfigMap.
+# Roll the pods automatically when the rendered config ConfigMap changes (adds a checksum/config pod
+# annotation). The binary reads config only at startup, so leave this true unless you want to stage a
+# config change and restart on your own schedule.
 rolloutOnConfigChange: true
 
 # PodDisruptionBudget: bound voluntary disruption (node drain, autoscaler/Karpenter consolidation) so

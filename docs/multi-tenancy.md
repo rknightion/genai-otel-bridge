@@ -263,15 +263,17 @@ must be ready before an old one is removed, and a pod that fails to load or asse
 never becomes ready. Run two replicas, a leader and a hot standby. About 25 tenants per install is
 the planned ceiling.
 
-When a new pod cannot start, the rollout stops and the old pods keep serving. **Roll a stopped
-rollout back promptly.** The config is one ConfigMap updated in place, so an old pod that restarts
-during the stopped rollout reads the new config and fails too.
+When a new pod cannot start, the rollout stops and the old pods keep serving. Each pod template
+mounts its own [immutable config revision](./installation.md#config-revisions), so a replacement
+pod from the old ReplicaSet reads the same config file. Roll back to restore redundancy. Config
+revisions do not pin Secret values; changes to credentials can still affect a restarted pod.
 
 ```bash
 kubectl -n <namespace> rollout status deployment/genai-otel-bridge --timeout=5m
 helm -n <namespace> rollback genai-otel-bridge <last good revision>
 ```
 
+For older Helm clients, [upgrade with the last good values instead](./installation.md#config-revisions).
 Roll back to the last revision that had a tenant-shape config. A `helm rollback` to a revision from
 before the tenant shape stops every tenant's pipelines, because that image does not know the
 config keys.
@@ -295,8 +297,8 @@ two steps:
    bytes and self-metric labels are unchanged, and a rollback to the previous image works.
 2. Change the config to the tenant shape and roll again.
 
-Do not skip step one: an old-image pod that restarts onto a tenant-shape config exits on the
-config keys it does not know. After step two the checkpoint keys change, so every loop starts from
+Do not skip step one: verify the new binary on the current shape before changing config and
+checkpoint keys. After step two the checkpoint keys change, so every loop starts from
 its `bootstrap_lookback` and sends the last settled buckets again. With an unchanged identity the
 backend treats them as repeats. With a new identity they are new series. An idle workspace emits
 nothing until its first match under the new keys, then emits zeros through idle spells as before.

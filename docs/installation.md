@@ -13,7 +13,8 @@ description: Install genai-otel-bridge from source or deploy it to Kubernetes wi
 
 - Go 1.27 or later (for building from source).
 - A Grafana Cloud account (or any OTLP/HTTP endpoint).
-- For Kubernetes deployment: Helm 3.x and a cluster with `coordination.k8s.io/v1` available (standard since Kubernetes 1.18).
+- For Kubernetes deployment: Helm 3 or 4 and a cluster supported by the chart's `kubeVersion`.
+  For native Helm rollback, see [Config revisions](#config-revisions).
 - For HA / ConfigMap checkpointing: the chart creates the required RBAC automatically.
 
 ---
@@ -208,9 +209,52 @@ runtimeEnv:
 
 The chart refuses to render without `grafanaSelfTokenSecret`. The default config also reads the product `GC_OTLP_*` values, which are provisioned only when `grafanaProductTokenSecret` is set, and `${ENV}`, which comes from `runtimeEnv.env` because the ExternalSecret does not carry it.
 
+### Config revisions
+
+The chart hashes the exact bytes of `config.yaml` and mounts the immutable ConfigMap named for
+that hash. A config change rolls the Deployment by changing its mount, even with
+`rolloutOnConfigChange: false`; that setting now controls only the optional checksum annotation.
+Secret updates are separate and do not change the ConfigMap revision. Never put credentials in
+`config` or `configOverride`.
+
+On the first live `helm upgrade` from the fixed-name ConfigMap, Helm preserves that map's bytes
+for older Pods. Use a live Helm upgrade for this migration, not an offline render with automatic
+pruning. The Helm caller must be allowed to list ConfigMaps in the namespace for discovery.
+
+After a live install or upgrade, a hook keeps revisions referenced by the bridge Deployment,
+Pods and ReplicaSets (including scaled-down ReplicaSets), plus the `configRevisionHistoryLimit`
+newest unused revisions. Set the limit to 0 to keep no unused revisions. If hooks are disabled or
+`--wait` times out before the hook runs, pruning waits for the next successful live upgrade.
+Do not change workload mount references outside Helm while pruning is running.
+
+A native `helm rollback` can reuse a retained ConfigMap or recreate a pruned one from Helm release
+history. Use Helm 3.22+ or 4.2+ for this. Older clients can fail if the rollback target's ConfigMap
+still exists but is not in the current manifest. On an older client, use `helm upgrade --reset-values`
+with a revision-aware chart, the last good values and, if needed, the previous image pinned in those
+values. Do not delete the target ConfigMap to make rollback work. Rollback does not prune: it replays
+stored manifests rather than discovering names again. The next live upgrade does the pruning.
+
+The pruning Job has a separate ServiceAccount and no Secret access. Allow the pinned k3s utility
+image to be pulled and the Job to reach the Kubernetes API. Its Role allows ConfigMap reads and
+deletes only by exact name: the newly rendered name and release-owned revisions discovered at
+render time. The Job rechecks ownership and workload references, and supplies the ConfigMap UID
+and resource version when deleting. RBAC is name-based, so reserve these names for the chart.
+The bridge's own Role is unchanged.
+
+Offline `helm template` cannot discover old names. For GitOps or direct application of manifests,
+omit Helm hooks (`helm template --no-hooks` for a standalone render), disable automatic pruning of
+these ConfigMaps, and arrange separate cleanup once nothing references a revision.
+
 ### Uninstall cleanup
 
-By default the chart registers a `post-delete` hook that removes the leader Lease and checkpoint ConfigMap when you run `helm uninstall`. Set `cleanup.retainCheckpoint: true` to keep both (the Lease carries the leader epoch the checkpoint was written under) so a later reinstall resumes the watermark instead of bootstrapping from scratch.
+Use `helm uninstall --cascade=foreground --wait` so Kubernetes removes Pods and ReplicaSets before
+the config hook runs. Uninstall uses the names saved with the last applied release. It leaves any
+still-referenced map or one outside that saved set, for example after rollback. A live upgrade
+refreshes discovery; otherwise remove leftovers only once no workload references them.
+
+By default a separate `post-delete` hook removes the leader Lease and checkpoint ConfigMap. Set
+`cleanup.retainCheckpoint: true` to keep both (the Lease carries the leader epoch the checkpoint
+was written under) so a later reinstall resumes the watermark instead of bootstrapping from scratch.
 
 ---
 

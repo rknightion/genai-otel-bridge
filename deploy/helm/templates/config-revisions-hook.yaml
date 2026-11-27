@@ -1,0 +1,172 @@
+{{- $limit := toString .Values.configRevisionHistoryLimit -}}
+{{- if not (regexMatch "^(0|[1-9][0-9]{0,8})$" $limit) -}}
+{{- fail "configRevisionHistoryLimit must be a non-negative integer (at most nine digits)" -}}
+{{- end -}}
+{{- /* Live Helm renders discover exact names. Offline renders can grant only the new name.
+       Use the same set for both RBAC and the Job, including when uninstall replays the hook. */ -}}
+{{- $names := list (include "genai-otel-bridge.configName" .) -}}
+{{- range (lookup "v1" "ConfigMap" .Release.Namespace "").items -}}
+  {{- $name := .metadata.name -}}
+  {{- $annotations := .metadata.annotations | default dict -}}
+  {{- $labels := .metadata.labels | default dict -}}
+  {{- if and (eq (get $annotations "meta.helm.sh/release-name") $.Release.Name) (eq (get $annotations "meta.helm.sh/release-namespace") $.Release.Namespace) -}}
+    {{- if or (eq $name "genai-otel-bridge-config") (and (regexMatch "^genai-otel-bridge-config-[0-9a-f]{64}$" $name) (eq (get $labels "app.kubernetes.io/component") "config-revision") (eq (get $annotations "helm.sh/resource-policy") "keep")) -}}
+      {{- $names = append $names $name -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $names = $names | uniq | sortAlpha -}}
+{{- $events := "post-install,post-upgrade,post-delete" -}}
+{{- /* Filter ownership in the kube template. Do not put annotation values in the shell records. */ -}}
+{{- $owned := printf `(and (eq (index . "meta.helm.sh/release-name") %q) (eq (index . "meta.helm.sh/release-namespace") %q))` .Release.Name .Release.Namespace -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: genai-otel-bridge-config-revisions
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ $events }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: genai-otel-bridge-config-revisions
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ $events }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: {{ $names | toJson }}
+    verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["genai-otel-bridge"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: genai-otel-bridge-config-revisions
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ $events }}
+    helm.sh/hook-weight: "-3"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: genai-otel-bridge-config-revisions
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: genai-otel-bridge-config-revisions
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: genai-otel-bridge-config-revisions
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ $events }}
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  activeDeadlineSeconds: 120
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: genai-otel-bridge-config-revisions
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prune
+          # k3s supplies both kubectl and a POSIX shell in one multi-platform image.
+          image: rancher/k3s:v1.37.2-k3s1@sha256:21ea6e0fac4e3930c2ce8aa40ddd41a8b18cb3e9a0222c030dc005e7e88c4332
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: "25m", memory: "32Mi"}
+            limits: {cpu: "250m", memory: "192Mi"}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: REVISION_NAMES
+              value: {{ $names | join " " | quote }}
+            - name: KEEP_UNUSED
+              value: {{ int $limit | quote }}
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              # kubectl needs an explicit in-cluster kubeconfig. It reads the token from the mounted
+              # service account file, never from the command line or an application Secret.
+              host=$KUBERNETES_SERVICE_HOST
+              case "$host" in (*:*) host="[$host]" ;; esac
+              kubectl config set-cluster local --kubeconfig=/tmp/api \
+                --server="https://$host:$KUBERNETES_SERVICE_PORT" \
+                --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt >/dev/null
+              kubectl config set users.pruner.tokenFile /var/run/secrets/kubernetes.io/serviceaccount/token \
+                --kubeconfig=/tmp/api >/dev/null
+              kubectl config set-context local --cluster=local --user=pruner --kubeconfig=/tmp/api >/dev/null
+              k() { kubectl --kubeconfig=/tmp/api --context=local --namespace "$POD_NAMESPACE" --request-timeout=10s "$@"; }
+              # Get only names granted at render time. Recheck ownership and keep the UID and
+              # resourceVersion from this snapshot, in case a name was reused or relabelled.
+              for name in $REVISION_NAMES; do
+                k get configmap "$name" --ignore-not-found \
+                  -o go-template='{{ `{{$m := .metadata}}{{with $m.labels}}{{if eq (index . "app.kubernetes.io/component") "config-revision"}}{{with $m.annotations}}{{if and (eq (index . "helm.sh/resource-policy") "keep")` }} {{ $owned }}{{ `}}{{println $m.creationTimestamp $m.name $m.uid $m.resourceVersion}}{{end}}{{end}}{{end}}{{end}}` }}'
+              done >/tmp/candidates
+              [ -s /tmp/candidates ] || exit 0
+
+              # Keep the desired revision, even if its ReplicaSet has not appeared yet. Also keep
+              # scaled-down ReplicaSets (kubectl rollout undo) and any Pod that still needs its mount.
+              mounts='{{ `{{range .volumes}}{{with .configMap}}{{println .name}}{{end}}{{with .projected}}{{range .sources}}{{with .configMap}}{{println .name}}{{end}}{{end}}{{end}}{{end}}` }}'
+              deployment=$(k get deployment genai-otel-bridge --ignore-not-found \
+                -o go-template='{{ `{{println "deployment"}}{{with .spec.template.spec}}` }}'"$mounts"'{{ `{{end}}` }}')
+              sets=$(k get replicasets -o go-template='{{ `{{range .items}}{{with .spec.template.spec}}` }}'"$mounts"'{{ `{{end}}{{end}}` }}')
+              pods=$(k get pods -o go-template='{{ `{{range .items}}{{with .spec}}` }}'"$mounts"'{{ `{{end}}{{end}}` }}')
+              protected=$(printf '%s\n' "$deployment" "$sets" "$pods")
+              # After uninstall there is no rollback workload to keep beyond the live references.
+              if [ -z "$deployment" ]; then KEEP_UNUSED=0; fi
+
+              sort -r /tmp/candidates | while read -r created name uid rv; do
+                printf '%s\n' "$name" | grep -Eq '^genai-otel-bridge-config(-[0-9a-f]{64})?$' || continue
+                if printf '%s\n' "$protected" | grep -Fxq "$name"; then continue; fi
+                if [ "$KEEP_UNUSED" -gt 0 ]; then KEEP_UNUSED=$((KEEP_UNUSED - 1)); continue; fi
+                # Never delete a replacement or a map whose ownership changed after the list.
+                printf '{"apiVersion":"v1","kind":"DeleteOptions","preconditions":{"uid":"%s","resourceVersion":"%s"}}\n' "$uid" "$rv" |
+                  k delete --raw "/api/v1/namespaces/$POD_NAMESPACE/configmaps/$name" -f - >/dev/null
+                printf 'pruned config revision %s\n' "$name"
+              done
+      volumes:
+        - name: tmp
+          emptyDir: {}

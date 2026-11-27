@@ -3,6 +3,7 @@
 """Render the chart and check the mounted revision and pruning permissions."""
 
 import base64
+import gzip
 import hashlib
 import json
 import os
@@ -236,6 +237,40 @@ class ConfigRevisions(unittest.TestCase):
         self.assertEqual(saved["data"], legacy["data"])
         self.assertEqual(saved["metadata"]["annotations"]["helm.sh/resource-policy"], "keep")
         self.assertNotEqual(revision(objects)[0], saved["metadata"]["name"])
+
+    def test_first_upgrade_with_reused_legacy_values_keeps_pruning_off(self):
+        # A deployed Helm revision from before this option existed. Helm's upgrade path
+        # (not `template --is-upgrade`) reuses the stored, older chart defaults.
+        chart = Path("deploy/helm")
+        values = yaml.safe_load((chart / "values.yaml").read_text())
+        values.pop("configRevisionPruning", None)
+        legacy = configmap("genai-otel-bridge-config", component="legacy")
+        del legacy["metadata"]["annotations"]["helm.sh/resource-policy"]
+        release = {
+            "name": "test-release", "namespace": "default", "version": 1,
+            "info": {"status": "deployed"}, "config": {}, "manifest": yaml.safe_dump(legacy),
+            "chart": {"metadata": yaml.safe_load((chart / "Chart.yaml").read_text()), "values": values},
+        }
+        history = {
+            "apiVersion": "v1", "kind": "Secret", "type": "helm.sh/release.v1",
+            "metadata": {"name": "sh.helm.release.v1.test-release.v1", "namespace": "default",
+                         "labels": {"name": "test-release", "owner": "helm", "status": "deployed", "version": "1"}},
+            "data": {"release": base64.b64encode(base64.b64encode(gzip.compress(json.dumps(release).encode()))).decode()},
+        }
+        reads = {"/api/v1/namespaces/default/secrets": {"apiVersion": "v1", "kind": "SecretList", "items": [history]}}
+        with tempfile.TemporaryDirectory() as tmp, api_fixture(tmp, [legacy], reads) as (config, _):
+            result = subprocess.run([
+                os.getenv("HELM", "helm"), "upgrade", "test-release", str(chart), "--namespace", "default",
+                "--reuse-values", "--kubeconfig", str(config), "--dry-run=server", "--disable-openapi-validation",
+                "--output", "json",
+            ], text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        upgraded = json.loads(result.stdout)
+        objects = [obj for obj in yaml.safe_load_all(upgraded["manifest"]) if obj]
+        saved, = (obj for obj in objects if obj["kind"] == "ConfigMap" and obj["metadata"]["name"] == legacy["metadata"]["name"])
+        self.assertEqual(saved["data"], legacy["data"])
+        self.assertEqual(saved["metadata"]["annotations"]["helm.sh/resource-policy"], "keep")
+        self.assertFalse(any(hook["name"] == "genai-otel-bridge-config-revisions" for hook in upgraded.get("hooks", [])))
 
     def test_prune_job_keeps_referenced_and_newest_unused_revisions(self):
         old, recent, in_rs, in_pod, in_deploy = (self.hash_name(str(n)) for n in range(1, 6))

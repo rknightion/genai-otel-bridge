@@ -1,4 +1,12 @@
-{{- $prune := .Values.configRevisionPruning -}}
+{{- /* --reuse-values can start from a release whose chart predates this option. */ -}}
+{{- $prune := dict "enabled" false "historyLimit" 3 -}}
+{{- if hasKey .Values "configRevisionPruning" -}}
+{{- $settings := .Values.configRevisionPruning -}}
+{{- if not (kindIs "map" $settings) -}}
+{{- fail "configRevisionPruning must be a map" -}}
+{{- end -}}
+{{- $prune = mergeOverwrite $prune $settings -}}
+{{- end -}}
 {{- if not (kindIs "bool" $prune.enabled) -}}
 {{- fail "configRevisionPruning.enabled must be a boolean" -}}
 {{- end -}}

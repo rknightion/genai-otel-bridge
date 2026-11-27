@@ -268,11 +268,16 @@ kubectl -n <namespace> delete rolebinding genai-otel-bridge-config-revisions --i
 kubectl -n <namespace> delete job,role,serviceaccount genai-otel-bridge-config-revisions --ignore-not-found
 ```
 
-For manual ConfigMap cleanup, check the owning release, the current Deployment mount and every
-ReplicaSet and Pod reference in the namespace. Keep referenced maps and any unused history you
-want. Delete only the exact names you have checked, including the old fixed-name map after
-migration or after uninstall once all consumers are gone. Do not delete by label alone or
-remove the checkpoint ConfigMap as part of revision cleanup.
+For manual cleanup, list candidates by revision label, then check their owning release and
+all Deployment, ReplicaSet and Pod references in the namespace:
+
+```bash
+kubectl -n <namespace> get configmaps -l app.kubernetes.io/component=config-revision
+```
+
+Keep referenced maps and any unused history you want. Delete only exact names you have checked,
+including the old fixed-name map after migration or uninstall once its consumers are gone. Never
+delete by label alone or remove the checkpoint ConfigMap as part of revision cleanup.
 
 ### Uninstall cleanup
 

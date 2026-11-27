@@ -53,8 +53,8 @@ for name in "$old_unused" "$new_unused" "$foreign"; do
 done
 absent() {
   local result
-  result=$(k get cm "$1" --ignore-not-found -o name)
-  [ -z "$result" ] || { echo "FAIL: unexpected retained ConfigMap $result" >&2; return 1; }
+  result=$(k get "$1" "$2" --ignore-not-found -o name) || return 1
+  [ -z "$result" ] || { echo "FAIL: unexpected retained resource $result" >&2; return 1; }
 }
 
 # Only wait for the hook; the bad Deployment must never become Ready.
@@ -62,7 +62,8 @@ h upgrade "$release" deploy/helm "${values[@]}" --set-file "configOverride=$scra
   --set configRevisionPruning.enabled=true,configRevisionPruning.historyLimit=1 --wait=hookOnly --timeout 120s
 new_map=$(k get deployment "$release" -o "jsonpath=$deployment_mount")
 [ "$old_map" != "$new_map" ]
-absent "$old_unused"
+absent rolebinding genai-otel-bridge-config-revisions
+absent cm "$old_unused"
 k get cm "$old_map" "$new_map" "$new_unused" "$foreign"
 if k rollout status "deployment/$release" --timeout=12s; then
   echo 'FAIL: rollout with invalid config became Ready' >&2; exit 1
@@ -98,7 +99,8 @@ done <<<"$bad_pods"
 k get cm "$new_map" "$new_unused"  # the default-off recovery upgrade didn't prune
 h upgrade "$release" deploy/helm "${values[@]}" --set configRevisionPruning.enabled=true,configRevisionPruning.historyLimit=0 \
   --wait --timeout 120s
-absent "$new_map"
-absent "$new_unused"
+absent rolebinding genai-otel-bridge-config-revisions
+absent cm "$new_map"
+absent cm "$new_unused"
 k get cm "$old_map" "$foreign"
 echo 'AC3: limits 1 and 0 pruned only unused, owned revisions; default-off recovery kept them'

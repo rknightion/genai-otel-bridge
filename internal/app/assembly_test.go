@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint"
 	"github.com/rknightion/genai-otel-bridge/internal/checkpoint/file"
 	"github.com/rknightion/genai-otel-bridge/internal/config"
 	"github.com/rknightion/genai-otel-bridge/internal/coordinate"
@@ -637,9 +638,10 @@ func scopedRow(pkURL, tenant, target, endpoint, instanceID, key string, scope co
 // scopeTelemetry records the two scope signals a gate reports through its row's telemetry.
 type scopeTelemetry struct {
 	noopTelemetry
-	mu      sync.Mutex
-	states  []string
-	results []string
+	mu            sync.Mutex
+	states        []string
+	results       []string
+	writeFailures int
 }
 
 func (s *scopeTelemetry) ScopeState(state string) {
@@ -652,6 +654,12 @@ func (s *scopeTelemetry) ScopeAssertion(result string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.results = append(s.results, result)
+}
+
+func (s *scopeTelemetry) ScopeMatchWriteFailed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeFailures++
 }
 
 func (s *scopeTelemetry) seen() (states, results []string) {
@@ -760,6 +768,18 @@ func TestScopeMatchLoopNameFails(t *testing.T) {
 	}
 }
 
+type matchWriteErrorStore struct {
+	checkpoint.Checkpointer
+	key model.CheckpointKey
+}
+
+func (s matchWriteErrorStore) Save(ctx context.Context, key model.CheckpointKey, wm model.Watermark) error {
+	if key == s.key {
+		return errors.New("injected remembered-match write error")
+	}
+	return s.Checkpointer.Save(ctx, key, wm)
+}
+
 // TestScopedRowSharesOneGate (AC6): every loop of a scoped row carries the same gate, and two rows have
 // two gates. The gate is wired to its own row: it asserts with that row's key (read from its secret
 // file) and slug, writes the remembered match to the checkpoint store under the row's scope-match key
@@ -784,7 +804,7 @@ func TestScopedRowSharesOneGate(t *testing.T) {
 		return tel[pipeline]
 	}
 	at := time.Date(2026, 3, 1, 9, 30, 0, 0, time.UTC)
-	cp := assemblyCheckpointer(t)
+	cp := matchWriteErrorStore{Checkpointer: assemblyCheckpointer(t), key: source.ScopeMatchKey(rowB.Source.SourceInstance)}
 	a, err := BuildFromPlan(context.Background(), minimalConfig(pk.URL), tenancy.Plan{Rows: []tenancy.Row{rowA, rowB}}, cp, coordinate.Noop{}, (&specRecorder{}).factory, tf,
 		Options{Secrets: &mapSecrets{values: map[[2]string]string{{"tenant-a", "api-key"}: keyA}}, Now: func() time.Time { return at }})
 	if err != nil {
@@ -841,6 +861,9 @@ func TestScopedRowSharesOneGate(t *testing.T) {
 	}
 	if _, results := tel[rowB.Pipeline].seen(); fmt.Sprint(results) != "[mismatch]" {
 		t.Fatalf("row B's telemetry saw results %v, want [mismatch]", results)
+	}
+	if a, b := tel[rowA.Pipeline].writeFailures, tel[rowB.Pipeline].writeFailures; a != 0 || b != 1 {
+		t.Fatalf("remembered scope write failures by pipeline = (%d, %d), want (0, 1)", a, b)
 	}
 }
 

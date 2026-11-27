@@ -144,6 +144,9 @@ type ScopeGateConfig struct {
 	// OnState, if set, is told the gate's state when it changes: matched, unverified, mismatched, or
 	// "" for no result.
 	OnState func(state string)
+	// OnMatchWriteFailure is called under the gate lock once for each failed Save, including
+	// clears and retries. It must not call back into the gate.
+	OnMatchWriteFailure func()
 }
 
 // ScopeGate is the per-pipeline scope policy of design §5.1, asked by the scheduler before every
@@ -388,6 +391,9 @@ func (g *ScopeGate) saveLocked(ctx context.Context, now time.Time, cursor string
 	}
 	w := model.Watermark{Time: t, Cursor: cursor, Epoch: coordinate.EpochFromContext(ctx)}
 	if err := g.cfg.Store.Save(ctx, ScopeMatchKey(g.cfg.SourceInstance), w); err != nil {
+		if g.cfg.OnMatchWriteFailure != nil {
+			g.cfg.OnMatchWriteFailure()
+		}
 		return err
 	}
 	g.viewKnown, g.storedTime, g.storedCursor = true, t, cursor

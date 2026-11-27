@@ -33,6 +33,12 @@ func (a telemetryAdapter) ScopeAssertion(result string) {
 	}
 }
 
+func (a telemetryAdapter) ScopeMatchWriteFailed() {
+	if s, ok := a.Metrics.(interface{ ScopeMatchWriteFailed() }); ok {
+		s.ScopeMatchWriteFailed()
+	}
+}
+
 // SeedScope forwards the optional scope-assertion seeding, as SeedLoop does.
 func (a telemetryAdapter) SeedScope() {
 	if s, ok := a.Metrics.(interface{ SeedScope() }); ok {

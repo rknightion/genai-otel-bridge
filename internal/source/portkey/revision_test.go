@@ -151,15 +151,17 @@ func TestRevisionHistoryEvicts(t *testing.T) {
 // --- integration: detection fires through Collect with the OnBucketRevised hook ------------------
 
 type revisionRecorder struct {
-	mu    sync.Mutex
-	loops []string
-	ages  []time.Duration
+	mu      sync.Mutex
+	loops   []string
+	sources []string
+	ages    []time.Duration
 }
 
-func (r *revisionRecorder) hook(loop string, age time.Duration) {
+func (r *revisionRecorder) hook(loop, instance string, age time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.loops = append(r.loops, loop)
+	r.sources = append(r.sources, instance)
 	r.ages = append(r.ages, age)
 }
 
@@ -169,7 +171,7 @@ func (r *revisionRecorder) count() int {
 	return len(r.loops)
 }
 
-func mkSourceWithRevision(t *testing.T, baseURL string, now time.Time, onRevised func(string, time.Duration)) *analyticsLoop {
+func mkSourceWithRevision(t *testing.T, baseURL string, now time.Time, onRevised func(string, string, time.Duration)) *analyticsLoop {
 	t.Helper()
 	cfg := config.SourceConfig{
 		Type: "portkey", Enabled: true, BaseURL: baseURL, SourceInstance: "pk-test",
@@ -245,8 +247,11 @@ func TestCollectFiresRevisionHook(t *testing.T) {
 	}
 	// the hook must carry a positive lateness age (now − bucketEnd) for the age histogram, not 0.
 	rec.mu.Lock()
-	age := rec.ages[0]
+	age, loop, instance := rec.ages[0], rec.loops[0], rec.sources[0]
 	rec.mu.Unlock()
+	if want := lp.Key(); loop != want.Loop || instance != want.SourceInstance {
+		t.Errorf("revision hook identity = (%q, %q), want (%q, %q)", loop, instance, want.Loop, want.SourceInstance)
+	}
 	if age <= 0 {
 		t.Fatalf("revision age must be positive (now − bucketEnd), got %v", age)
 	}
@@ -277,7 +282,7 @@ func TestCollectFetchWindowNeverExceeds55m(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lp := mkSourceWithRevision(t, srv.URL, now, func(string, time.Duration) {})
+	lp := mkSourceWithRevision(t, srv.URL, now, func(string, string, time.Duration) {})
 	lp.maxBackfill = 120 * time.Minute             // raised for long-outage recovery (uncapped, GS2)
 	lp.settle = 10 * time.Minute                   // the new default
 	lp.band = detectionBand(10 * time.Minute)      // band = 20m

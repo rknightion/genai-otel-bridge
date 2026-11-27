@@ -20,6 +20,7 @@ spec:
       relativeTimeRange: {from: 6m0s, to: 0s}
       model:
         datasource: {type: prometheus, uid: grafanacloud-prom}
+        # Keep the source instance and the bare hook loop name.
         expr: 'sum by (tenant, pipeline, source, loop) (rate(genai_otel_bridge_source_data_incomplete_total{reason="window_truncated"}[5m]))'
         instant: true
         range: false

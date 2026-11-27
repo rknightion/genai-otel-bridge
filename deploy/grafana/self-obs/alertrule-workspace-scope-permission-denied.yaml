@@ -16,7 +16,7 @@ spec:
   labels:
     severity: critical
   annotations:
-    summary: "genai-otel-bridge {{ $labels.loop }} loop is denied the workspace_scope capability"
+    summary: "genai-otel-bridge {{ if $labels.source }}{{ $labels.source }}/{{ end }}{{ $labels.loop }} is denied the workspace_scope capability"
     description: "genai_otel_bridge_source_capability_total{graph=\"workspace_scope\",state=\"permission-denied\"} increased for the {{ $labels.loop }} loop in the last 15m. The loop refuses to emit data until the configured credential and expected workspace scope agree; check recent key rotation and scope configuration. See deploy/grafana/README.md."
   expressions:
     query:

@@ -142,7 +142,7 @@ func TestGroupsDedupCollapseIsObservable(t *testing.T) {
 	defer srv.Close()
 	var events [][2]string
 	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "emit_prompts": "false"}),
-		source.Deps{OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
+		source.Deps{OnDataIncomplete: func(loop, _ string, reason source.IncompleteReason) {
 			events = append(events, [2]string{loop, string(reason)})
 		}}, now)
 	b, err := gl.Collect(context.Background(), model.Watermark{})
@@ -168,7 +168,7 @@ func TestGroupsCollect404FiresCapabilityHook(t *testing.T) {
 	defer srv.Close()
 	var capabilities [][3]string
 	gl := mkGroups(t, groupsCfg(srv, map[string]string{"page_size": "100", "metadata_keys": "use_case"}),
-		source.Deps{OnCapability: func(loop, graph string, state source.CapabilityState) {
+		source.Deps{OnCapability: func(loop, _, graph string, state source.CapabilityState) {
 			capabilities = append(capabilities, [3]string{loop, graph, string(state)})
 		}}, now)
 	b, err := gl.Collect(context.Background(), model.Watermark{})
@@ -698,8 +698,8 @@ func TestGroupsPromptDimensionOptOut(t *testing.T) {
 // auth hooks append "cap:<endpoint>" / "auth".
 func recordDeps(events *[]string) source.Deps {
 	return source.Deps{
-		OnCapability:     func(_, g string, _ source.CapabilityState) { *events = append(*events, "cap:"+g) },
-		OnDataIncomplete: func(l string, r source.IncompleteReason) { *events = append(*events, l+":"+string(r)) },
+		OnCapability:     func(_, _, g string, _ source.CapabilityState) { *events = append(*events, "cap:"+g) },
+		OnDataIncomplete: func(l, _ string, r source.IncompleteReason) { *events = append(*events, l+":"+string(r)) },
 		OnAuthError:      func(_, _ string) { *events = append(*events, "auth") },
 	}
 }

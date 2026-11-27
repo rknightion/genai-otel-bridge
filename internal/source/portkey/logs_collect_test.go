@@ -493,7 +493,7 @@ func TestLogsCollectStuckJobTimeout(t *testing.T) {
 	clock := &cur
 	var reasons []source.IncompleteReason
 	src, err := New(logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m", "job_poll_timeout": "2m"}), source.Deps{
-		OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
+		OnDataIncomplete: func(loop, _ string, reason source.IncompleteReason) {
 			if loop == "logs_export" {
 				reasons = append(reasons, reason)
 			}
@@ -600,7 +600,7 @@ func TestLogsCollectFailedJobFiresMetric(t *testing.T) {
 	f := newFakeExport(t, 3, func(page int) string { return nLines(3, "m") })
 	f.failStatus = "failed"
 	var reasons []source.IncompleteReason
-	deps := source.Deps{OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
+	deps := source.Deps{OnDataIncomplete: func(loop, _ string, reason source.IncompleteReason) {
 		if loop == "logs_export" {
 			reasons = append(reasons, reason)
 		}
@@ -658,7 +658,7 @@ func TestLogsCollectCompletesWindowWithOversizeLine(t *testing.T) {
 	body := exportLine(0, "m") + big + exportLine(2, "m")
 	f := newFakeExport(t, 3, func(int) string { return body })
 	var reasons []source.IncompleteReason
-	deps := source.Deps{OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
+	deps := source.Deps{OnDataIncomplete: func(loop, _ string, reason source.IncompleteReason) {
 		if loop == "logs_export" {
 			reasons = append(reasons, reason)
 		}
@@ -721,7 +721,7 @@ func TestLogsCollectOversizeWindowParksNoOrphanSpam(t *testing.T) {
 	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
 	f := newFakeExport(t, 10, func(int) string { return nLines(2, "m") }) // total 10
 	var reasons []source.IncompleteReason
-	deps := source.Deps{OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
+	deps := source.Deps{OnDataIncomplete: func(loop, _ string, reason source.IncompleteReason) {
 		if loop == "logs_export" {
 			reasons = append(reasons, reason)
 		}
@@ -875,7 +875,7 @@ func lostJobFixture(t *testing.T, phase string, mut func(*fakeExport), pollDeadl
 	}
 	var events []string
 	l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}),
-		source.Deps{OnDataIncomplete: func(_ string, r source.IncompleteReason) { events = append(events, string(r)) }}, now)
+		source.Deps{OnDataIncomplete: func(_, _ string, r source.IncompleteReason) { events = append(events, string(r)) }}, now)
 	cur := exportCursor{Phase: phase, JobID: "job-gone", WinMin: "2026-06-19T10:00:00Z",
 		WinMax: "2026-06-19T11:00:00Z", Pages: 1, TotalRecords: 3, PollDeadline: pollDeadline}
 	return l, &events, model.Watermark{Time: now.Add(-2 * time.Hour), Cursor: cur.encode()}
@@ -983,7 +983,7 @@ func TestLogsExportCreateResponseSchema(t *testing.T) {
 		f.createRaw = raw
 		var caps []string
 		l := mkLogsLoopDeps(t, logsCfg(f.srv, map[string]string{"window": "1h", "settle": "10m"}),
-			source.Deps{OnCapability: func(loop, graph string, st source.CapabilityState) {
+			source.Deps{OnCapability: func(loop, _, graph string, st source.CapabilityState) {
 				caps = append(caps, loop+"/"+graph+"/"+string(st))
 			}}, now)
 		return l, f, &caps
@@ -1047,7 +1047,7 @@ func TestLogsExportBackfillSkipCounted(t *testing.T) {
 		f := newFakeExport(t, 1, func(int) string { return nLines(1, "m") })
 		var events []string
 		l := mkLogsLoopDeps(t, logsCfg(f.srv, settings),
-			source.Deps{OnDataIncomplete: func(_ string, r source.IncompleteReason) { events = append(events, string(r)) }}, now)
+			source.Deps{OnDataIncomplete: func(_, _ string, r source.IncompleteReason) { events = append(events, string(r)) }}, now)
 		return l, f, &events
 	}
 	t.Run("old watermark creates the export and counts once", func(t *testing.T) {

@@ -40,8 +40,9 @@ The instruments the scheduler records (emitted, skipped, emit errors, guard drop
 `last_success`, `window_lag`, `queue_depth` and `loop_degraded` gauges) carry `source` (the configured
 `source_instance`) and `loop`, from the leaf `internal/loopid.ID` (#387). Both are configuration-bounded;
 never add a data-derived value. The hook-fed counters (`bucket_revised_after_settle`,
-`source_capability`, `source_data_incomplete`) still carry only `loop`; `auth_errors_total` already
-carries `source` with the same meaning.
+`source_capability`, `source_data_incomplete` and `auth_errors_total`) carry the same `source` and
+keep the bare `Key().Loop` even for fan-out loops. The bucket revision age histogram still carries
+`loop` without `source`.
 
 `(*Metrics).With(tenant, pipeline)` (#521) returns a copy that shares the instruments and appends
 `tenant` and `pipeline`, each only when non-empty, to every series it records: the per-loop
@@ -109,7 +110,8 @@ Only a configured sub-floor value is clamped up, and that clamp is logged.
 telemetry, so a `With` copy seeds only its own pipeline's loops, via an optional interface so
 `schedule.Metrics` is unchanged) creates at 0 the series that a bundled alert reads with `increase()`:
 `samples_skipped_total` under the runner's `{source, loop, reason}` and `source_data_incomplete_total`
-under the hook's `{loop, reason}` (#387: a seed under any other attribute set is a different series). Without it the first event is a series born
+under the hook's `{source, loop, reason}` (the runner's source and the hook's bare loop name; a seed
+under any other attribute set is a different series). Without it the first event is a series born
 at 1 and the alert misses it. `TestSeededReasonsMatchBundledAlertRules` reads the rule files: a rule
 reading an unseeded reason, or a seeded reason no rule reads, fails. Edit the seed lists when you edit a rule.
 

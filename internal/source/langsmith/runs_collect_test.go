@@ -214,7 +214,7 @@ func TestRunsCollectBackfillFloorCounted(t *testing.T) {
 	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
 	lp := newTestRunsLoop(t, srv.URL, now, map[string]string{"window": "10m", "settle": "1m", "max_backfill": "1h"})
 	var skipped int32
-	lp.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+	lp.onDataIncomplete = func(loop, _ string, reason source.IncompleteReason) {
 		if loop == "runs" && reason == source.IncompleteBackfillSkipped {
 			atomic.AddInt32(&skipped, 1)
 		}
@@ -241,7 +241,7 @@ func TestRunsCollectMaxPagesTruncation(t *testing.T) {
 	now := time.Date(2026, 6, 20, 2, 0, 0, 0, time.UTC)
 	lp := newTestRunsLoop(t, srv.URL, now, map[string]string{"window": "1h", "settle": "10m", "max_pages_per_window": "1"})
 	var skipped int32
-	lp.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+	lp.onDataIncomplete = func(loop, _ string, reason source.IncompleteReason) {
 		if loop == "runs" && reason == source.IncompleteWindowTruncated {
 			atomic.AddInt32(&skipped, 1)
 		}

@@ -264,7 +264,7 @@ func TestDownloadChunkSkipsMalformedLine(t *testing.T) {
 	srv := bodyServer(t, body)
 	l := dlLoop(t, srv)
 	var events [][2]string
-	l.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+	l.onDataIncomplete = func(loop, _ string, reason source.IncompleteReason) {
 		events = append(events, [2]string{loop, string(reason)})
 	}
 	recs, lines, _, eof, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 10, time.Unix(0, 0).UTC())
@@ -301,7 +301,7 @@ func TestDownloadChunkCountsUnparsedTraceID(t *testing.T) {
 	l := dlLoop(t, srv)
 	l.policy = defaultLogFieldPolicy().withMetadataFields(nil, "correlation_id")
 	var events [][2]string
-	l.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+	l.onDataIncomplete = func(loop, _ string, reason source.IncompleteReason) {
 		events = append(events, [2]string{loop, string(reason)})
 	}
 	recs, _, _, _, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 10, time.Unix(0, 0).UTC())
@@ -338,7 +338,7 @@ func TestDownloadChunkCountsUnparsedTopLevelTraceID(t *testing.T) {
 	l := dlLoop(t, srv)
 	l.policy = defaultLogFieldPolicy().withTraceIDField("trace_id")
 	var events [][2]string
-	l.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+	l.onDataIncomplete = func(loop, _ string, reason source.IncompleteReason) {
 		events = append(events, [2]string{loop, string(reason)})
 	}
 	recs, _, _, _, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 10, time.Unix(0, 0).UTC())
@@ -402,7 +402,7 @@ func TestDownloadChunkSkipsOversizeLine(t *testing.T) {
 	l := dlLoop(t, srv)
 	l.maxLineBytes = 1024 // a normal exportLine (~few hundred B) fits; the padded line (>4 KiB) is over-long
 	var events [][2]string
-	l.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+	l.onDataIncomplete = func(loop, _ string, reason source.IncompleteReason) {
 		events = append(events, [2]string{loop, string(reason)})
 	}
 	recs, lines, _, eof, err := l.downloadChunk(context.Background(), srv.URL+"/f.jsonl", 0, 0, 10, time.Unix(0, 0).UTC())

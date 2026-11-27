@@ -301,8 +301,8 @@ type analyticsLoop struct {
 	// first poll(s) after failover re-learn the trailing band and cannot flag a revision that
 	// happened across the handoff. Accepted blind spot (the metric is a drift indicator, not a
 	// correctness gate).
-	onBucketRevised func(loop string, age time.Duration)
-	onCapability    func(loop, graph string, state source.CapabilityState)
+	onBucketRevised func(loop, instance string, age time.Duration)
+	onCapability    func(loop, instance, graph string, state source.CapabilityState)
 	onAuthError     func(loop, source string)
 	// expectedWorkspace, if set (settings.expected_workspace), asserts the key's analytics scope is exactly
 	// that workspace before emitting (a too-broad key would emit cross-workspace aggregates). scopeVerified
@@ -418,7 +418,7 @@ func (l *analyticsLoop) collectPass(ctx context.Context, p resolvedUseCase, star
 			if l.onCapability != nil {
 				// round3-#4: make the (otherwise silent) per-graph skip observable. Fires per skipped
 				// graph — including when ALL graphs 404 (which ALSO errors loudly below).
-				l.onCapability(l.Key().Loop, g, source.CapabilityTransient404)
+				l.onCapability(l.Key().Loop, l.sourceInstance, g, source.CapabilityTransient404)
 			}
 			continue // capability detection (F5): derive from the rest
 		}
@@ -454,7 +454,7 @@ func (l *analyticsLoop) collectPass(ctx context.Context, p resolvedUseCase, star
 			if l.onBucketRevised != nil {
 				for _, bucketEnd := range h.observe(settled, until) {
 					// age = how late the revision is (now − bucketEnd); always ≥ settle by construction.
-					l.onBucketRevised("analytics", now.Sub(bucketEnd))
+					l.onBucketRevised("analytics", l.sourceInstance, now.Sub(bucketEnd))
 				}
 			} else {
 				h.observe(settled, until) // keep history current even with no hook wired

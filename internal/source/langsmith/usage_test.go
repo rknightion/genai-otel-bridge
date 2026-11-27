@@ -199,7 +199,7 @@ func TestUsageCollectSpanCallSkipKeepsTraces(t *testing.T) {
 	f.statsCode = http.StatusInternalServerError
 	lp := mkUsageLoop(t, f, now, nil)
 	var skips int
-	lp.onDataIncomplete = func(loop string, reason source.IncompleteReason) {
+	lp.onDataIncomplete = func(loop, _ string, reason source.IncompleteReason) {
 		if loop == "usage" && reason == source.IncompleteSpanStatsUnavailable {
 			skips++
 		}
@@ -292,7 +292,7 @@ func TestUsageMaxSessionsTruncationCounted(t *testing.T) {
 			f := newFakeUsageServer(t, usageFixture())
 			lp := mkUsageLoop(t, f, now, func(c *usageConfig) { c.MaxSessions = tc.max; c.EmitSpanCounts = false })
 			var events []string
-			lp.onDataIncomplete = func(loop string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
+			lp.onDataIncomplete = func(loop, _ string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
 			if _, err := lp.Collect(context.Background(), model.Watermark{}); err != nil {
 				t.Fatal(err)
 			}
@@ -340,7 +340,7 @@ func TestUsageSpanFanoutBreaker(t *testing.T) {
 	f.statsCode = http.StatusServiceUnavailable
 	lp := mkUsageLoop(t, f, time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC), nil)
 	var events int
-	lp.onDataIncomplete = func(loop string, r source.IncompleteReason) {
+	lp.onDataIncomplete = func(loop, _ string, r source.IncompleteReason) {
 		if loop == "usage" && r == source.IncompleteSpanStatsUnavailable {
 			events++
 		}
@@ -395,7 +395,7 @@ func TestUsageSpanFanout429KeepsProgress(t *testing.T) {
 	f.statsCodeAt = map[int]int{nth: http.StatusTooManyRequests}
 	lp := mkUsageLoop(t, f, time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC), nil)
 	var events int
-	lp.onDataIncomplete = func(loop string, r source.IncompleteReason) {
+	lp.onDataIncomplete = func(loop, _ string, r source.IncompleteReason) {
 		if loop == "usage" && r == source.IncompleteSpanStatsUnavailable {
 			events++
 		}

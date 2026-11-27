@@ -176,7 +176,7 @@ func TestCollectMaxSessionsCapBounds(t *testing.T) {
 	cfg.MaxSessions = 1 // cap below the population
 	lp := mkLoop(t, cfg, now)
 	var events []string
-	lp.onDataIncomplete = func(loop string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
+	lp.onDataIncomplete = func(loop, _ string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
 
 	b, err := lp.Collect(context.Background(), model.Watermark{})
 	if err != nil {
@@ -201,7 +201,7 @@ func TestCollectBelowMaxSessionsFiresNoSignal(t *testing.T) {
 	defer srv.Close()
 	lp := mkLoop(t, testConfig(srv), now)
 	var events []string
-	lp.onDataIncomplete = func(loop string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
+	lp.onDataIncomplete = func(loop, _ string, r source.IncompleteReason) { events = append(events, loop+":"+string(r)) }
 	if _, err := lp.Collect(context.Background(), model.Watermark{}); err != nil {
 		t.Fatal(err)
 	}

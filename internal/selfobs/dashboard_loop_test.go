@@ -51,9 +51,9 @@ func loopValuesByInstrument(t *testing.T) map[string]string {
 	m.WindowLag(id, time.Second)
 	m.LoopDegraded(id, "r", true)
 	// Hook-fed (bare loop name from the source).
-	m.BucketRevisedAfterSettle(fanoutBase, time.Second)
-	m.SourceCapability(fanoutBase, "g", "permission-denied")
-	m.SourceDataIncomplete(fanoutBase, "window_truncated")
+	m.BucketRevisedAfterSettle(fanoutBase, id.Source, time.Second)
+	m.SourceCapability(fanoutBase, id.Source, "g", "permission-denied")
+	m.SourceDataIncomplete(fanoutBase, id.Source, "window_truncated")
 	m.AuthError(fanoutBase, "s")
 
 	var rm metricdata.ResourceMetrics

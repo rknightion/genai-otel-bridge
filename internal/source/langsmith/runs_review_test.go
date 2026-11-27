@@ -81,7 +81,7 @@ func TestSessionDiscoveryTruncationCounted_M1(t *testing.T) {
 	lp := &runsLoop{
 		baseURL: srv.URL, authHdr: "x-api-key", authVal: "k", hc: runsTestClient(t),
 		sessionFilter: `eq(name,"x")`, maxSessions: 2, sessionRefresh: time.Hour,
-		onDataIncomplete: func(loop string, reason source.IncompleteReason) {
+		onDataIncomplete: func(loop, _ string, reason source.IncompleteReason) {
 			if loop == "runs" && reason == source.IncompleteSessionsTruncated {
 				atomic.AddInt32(&skipped, 1)
 			}

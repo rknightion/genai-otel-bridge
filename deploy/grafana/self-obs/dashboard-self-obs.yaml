@@ -1409,7 +1409,7 @@ spec:
       spec:
         id: 137
         title: Buckets revised after settle /s
-        description: rate(genai_otel_bridge_bucket_revised_after_settle_total). A settled bucket changed value after bucket_settle (late arrivals). Persistent non-zero => widen the loop's bucket_settle (GenaiOtelBridgeBucketRevisedAfterSettle).
+        description: rate(genai_otel_bridge_bucket_revised_after_settle_total) by loop, summed across sources within each pipeline. A settled bucket changed value after bucket_settle (late arrivals). Persistent non-zero => widen the loop's bucket_settle (GenaiOtelBridgeBucketRevisedAfterSettle).
         links: []
         data:
           kind: QueryGroup
@@ -1959,7 +1959,7 @@ spec:
       spec:
         id: 144
         title: Source capability outcomes /s
-        description: rate(genai_otel_bridge_source_capability_total) by loop, graph, and state. permission-denied means the capability cannot be used; GenaiOtelBridgeWorkspaceScopePermissionDenied covers workspace_scope. endpoint-absent and plan-unsupported are valid reserved states but currently producerless, so no series distinguishes them; a single 404 remains ambiguous and steady versus intermittent increments require query-time judgement.
+        description: rate(genai_otel_bridge_source_capability_total) by loop, graph, and state, summed across sources within each pipeline. permission-denied means the capability cannot be used; GenaiOtelBridgeWorkspaceScopePermissionDenied covers workspace_scope. endpoint-absent and plan-unsupported are valid reserved states but currently producerless, so no series distinguishes them; a single 404 remains ambiguous and steady versus intermittent increments require query-time judgement.
         links: []
         data:
           kind: QueryGroup
@@ -2017,7 +2017,7 @@ spec:
       spec:
         id: 145
         title: Source data incompleteness /s
-        description: rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason. window_truncated (LangSmith runs only) is a counted dropped-records gap; export_failed/export_stuck mean the export pipeline cannot produce data; window_oversize is a parked Portkey logs_export window (nothing dropped, shrink settings.window). GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.
+        description: rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason, summed across sources within each pipeline. window_truncated is a counted gap; export_failed/export_stuck mean the export pipeline cannot produce data; window_oversize is a parked Portkey logs_export window (nothing dropped, shrink settings.window). GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.
         links: []
         data:
           kind: QueryGroup

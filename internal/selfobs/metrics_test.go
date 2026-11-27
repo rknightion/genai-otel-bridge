@@ -486,11 +486,11 @@ var legacyLabelKeys = map[string][]string{
 	"genai_otel_bridge_samples_skipped_total":                   {"loop", "reason", "source"},
 	"genai_otel_bridge_emit_errors_total":                       {"kind", "loop", "source"},
 	"genai_otel_bridge_guard_dropped_total":                     {"loop", "source"},
-	"genai_otel_bridge_bucket_revised_after_settle_total":       {"loop"},
+	"genai_otel_bridge_bucket_revised_after_settle_total":       {"loop", "source"},
 	"genai_otel_bridge_new_label_values_total":                  {"series"},
 	"genai_otel_bridge_samples_capped_total":                    {"loop", "reason", "source"},
-	"genai_otel_bridge_source_capability_total":                 {"graph", "loop", "state"},
-	"genai_otel_bridge_source_data_incomplete_total":            {"loop", "reason"},
+	"genai_otel_bridge_source_capability_total":                 {"graph", "loop", "source", "state"},
+	"genai_otel_bridge_source_data_incomplete_total":            {"loop", "reason", "source"},
 	"genai_otel_bridge_auth_errors_total":                       {"loop", "source"},
 	"genai_otel_bridge_emit_partial_success_rejected_total":     {"plane"},
 	"genai_otel_bridge_last_success_timestamp_seconds":          {"loop", "source"},
@@ -534,11 +534,11 @@ func driveAll(m *Metrics) {
 	m.SamplesSkipped(id, "too_old", 1)
 	m.EmitError(id, "collect")
 	m.GuardDropped(id, 1)
-	m.BucketRevisedAfterSettle("analytics", time.Minute)
+	m.BucketRevisedAfterSettle(id.Loop, id.Source, time.Minute)
 	m.NewLabelValue("series-a")
 	m.SamplesCapped(id, 1)
-	m.SourceCapability("analytics", "graph-a", "no-data")
-	m.SourceDataIncomplete("analytics", "window_truncated")
+	m.SourceCapability(id.Loop, id.Source, "graph-a", "no-data")
+	m.SourceDataIncomplete(id.Loop, id.Source, "window_truncated")
 	m.AuthError("analytics", "src-a")
 	m.QueueDepth(id, 1)
 	m.LastSuccess(id, time.Unix(1700, 0))

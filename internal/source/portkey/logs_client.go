@@ -81,7 +81,7 @@ func (l *logsExportLoop) createExport(ctx context.Context, winMin, winMax time.T
 	}
 	if out.ID == "" || out.Total == nil {
 		if l.onCapability != nil {
-			l.onCapability("logs_export", "logs/exports", source.CapabilitySchemaChanged)
+			l.onCapability("logs_export", l.sourceInstance, "logs/exports", source.CapabilitySchemaChanged)
 		}
 		return "", 0, fmt.Errorf("portkey logs_export: create response missing id/total (schema changed?)")
 	}

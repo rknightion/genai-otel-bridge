@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # k3d 3-node failover e2e: create cluster, import images, helm-install the chart with the e2e overlay,
 # then run the Go failover suite (tag e2e). A second phase upgrades the same release to the tenant shape
-# and runs the tenant tests. `all` brings it up, runs both phases, checks uninstall, and tears down.
+# and runs the tenant tests. `all` also checks uninstall and config revisions before teardown.
 set -euo pipefail
 CLUSTER="${E2E_CLUSTER:-genai-otel-bridge-e2e}"
 NS="${E2E_NAMESPACE:-genai-otel-bridge-e2e}"
@@ -119,6 +119,10 @@ case "${1:-all}" in
   down) down ;;
   verify-cleanup) uninstall_verify ;;
   tenant-tests) run_tenant_tests ;;
-  all) trap down EXIT; up; run_tests; run_tenant_tests; uninstall_verify ;;
+  all)
+    trap down EXIT
+    up; run_tests; run_tenant_tests; uninstall_verify
+    bash test/helm/config-revisions-e2e.sh "$NS-revisions" "$IMAGE" "$E2E_HELPER_IMAGE" "$BUSYBOX_IMAGE"
+    ;;
   *) echo "usage: $0 up|down|verify-cleanup|tenant-tests|all"; exit 2 ;;
 esac

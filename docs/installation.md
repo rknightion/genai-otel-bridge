@@ -13,7 +13,7 @@ description: Install genai-otel-bridge from source or deploy it to Kubernetes wi
 
 - Go 1.27 or later (for building from source).
 - A Grafana Cloud account (or any OTLP/HTTP endpoint).
-- For Kubernetes deployment: Helm 3.x and a cluster with `coordination.k8s.io/v1` available (standard since Kubernetes 1.18).
+- For Kubernetes deployment: Helm 3 or 4 and a cluster supported by the chart's `kubeVersion`.
 - For HA / ConfigMap checkpointing: the chart creates the required RBAC automatically.
 
 ---
@@ -207,6 +207,61 @@ runtimeEnv:
 ```
 
 The chart refuses to render without `grafanaSelfTokenSecret`. The default config also reads the product `GC_OTLP_*` values, which are provisioned only when `grafanaProductTokenSecret` is set, and `${ENV}`, which comes from `runtimeEnv.env` because the ExternalSecret does not carry it.
+
+### Config revisions
+
+The chart names each immutable ConfigMap by the SHA-256 of the mounted `config.yaml`. A config
+edit changes the Deployment's volume reference, so a replacement Pod from an old ReplicaSet
+still mounts the old file. Config changes always roll the Deployment. `rolloutOnConfigChange: false`
+now removes only the optional `checksum/config` annotation. Secret values are not pinned by
+config revisions. Do not put credentials in `config` or `configOverride`.
+
+On the first **live Helm upgrade** from the old fixed-name map, the chart looks up the
+release-owned `genai-otel-bridge-config`, preserves its data and marks it to keep. The Helm
+caller must be able to get that ConfigMap. Do not use an offline render for this migration if
+old workloads could lose their map. To restore a known good config, upgrade with the
+revision-aware chart and last good values (`--reset-values`), pinning the last good image if
+needed. Helm can reuse the kept map or recreate it from those values. Some Helm clients cannot
+roll back to a retained map absent from the current manifest. Do not delete a map to make rollback
+work.
+
+**Argo CD:** each new revision opts out of both sync pruning (`Prune=false`) and Application
+deletion (`Delete=false`). Helm's `keep` annotation alone does not stop Argo CD sync pruning.
+Before the first sync from the fixed-name map, disable sync pruning temporarily or ensure the
+old live map has both options and self-heal will not remove them. Preserve the old map until
+no workload references it. Retained maps may appear out of sync until you remove them.
+
+#### Cleaning up old revisions
+
+Nothing in the chart deletes an old revision, so one accumulates for each config change. Remove
+unused ones by hand, when no Helm operation or rollout is in progress. First list the revisions of
+the release that no Deployment, ReplicaSet or Pod in the namespace refers to:
+
+```bash
+ns=<namespace>; release=<release name>
+rm -f in-use.txt unused.txt
+kubectl -n "$ns" get deployments,replicasets,pods \
+  -o jsonpath='{..configMap.name} {..configMapRef.name} {..configMapKeyRef.name}{"\n"}' \
+  | tr ' ' '\n' | sed '/^$/d' | sort -u >in-use.txt
+test -s in-use.txt && kubectl -n "$ns" get configmaps -o name \
+  -l "app.kubernetes.io/component=config-revision,app.kubernetes.io/instance=$release" \
+  | sed 's|^configmap/||' | grep -vxF -f in-use.txt >unused.txt
+cat in-use.txt unused.txt
+```
+
+Check both lists. `in-use.txt` must include the map the Deployment mounts: if it is empty or a
+command failed, stop, because every revision would look unused. A scaled-down ReplicaSet counts
+as a reference, so `revisionHistoryLimit` also bounds the revisions this keeps. Then delete
+exactly the names you checked:
+
+```bash
+xargs -r kubectl -n "$ns" delete configmap <unused.txt
+```
+
+The list includes the old fixed-name map once nothing refers to it. The checkpoint ConfigMap has
+no revision label and is never listed. `helm uninstall` leaves every revision behind too: once the
+release's Pods are gone, delete them with the same label selector. Outside an uninstall, never
+delete revisions by label alone.
 
 ### Uninstall cleanup
 

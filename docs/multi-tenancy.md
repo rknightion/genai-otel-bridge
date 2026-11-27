@@ -263,18 +263,11 @@ must be ready before an old one is removed, and a pod that fails to load or asse
 never becomes ready. Run two replicas, a leader and a hot standby. About 25 tenants per install is
 the planned ceiling.
 
-When a new pod cannot start, the rollout stops and the old pods keep serving. **Roll a stopped
-rollout back promptly.** The config is one ConfigMap updated in place, so an old pod that restarts
-during the stopped rollout reads the new config and fails too.
-
-```bash
-kubectl -n <namespace> rollout status deployment/genai-otel-bridge --timeout=5m
-helm -n <namespace> rollback genai-otel-bridge <last good revision>
-```
-
-Roll back to the last revision that had a tenant-shape config. A `helm rollback` to a revision from
-before the tenant shape stops every tenant's pipelines, because that image does not know the
-config keys.
+When a new pod cannot start, the rollout stops and the old pods keep serving. A replacement pod
+from the old ReplicaSet mounts its original [config revision](./installation.md#config-revisions),
+not the bad config. Secret values can still change independently. Restore the last good tenant
+config and compatible image to regain redundancy. Do not roll back to a version from before the
+tenant shape: its binary does not know the config keys.
 
 Load, resolve and most assemble rules stop the process and are found by the config check in CI. An
 unreadable secret and a duplicate key are not: they block one tenant and are found at rollout.
@@ -295,8 +288,8 @@ two steps:
    bytes and self-metric labels are unchanged, and a rollback to the previous image works.
 2. Change the config to the tenant shape and roll again.
 
-Do not skip step one: an old-image pod that restarts onto a tenant-shape config exits on the
-config keys it does not know. After step two the checkpoint keys change, so every loop starts from
+Do not skip step one: verify the new binary on the current shape before changing the config and
+checkpoint keys. After step two the checkpoint keys change, so every loop starts from
 its `bootstrap_lookback` and sends the last settled buckets again. With an unchanged identity the
 backend treats them as repeats. With a new identity they are new series. An idle workspace emits
 nothing until its first match under the new keys, then emits zeros through idle spells as before.

@@ -1,6 +1,14 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [5.0.1](https://github.com/rknightion/genai-otel-bridge/compare/v5.0.0...v5.0.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **deps:** update go modules (non-major) ([#593](https://github.com/rknightion/genai-otel-bridge/issues/593)) ([b002f1c](https://github.com/rknightion/genai-otel-bridge/commit/b002f1c43300ebbe7c987b62e80bfba8493ed917))
+* **selfobs:** stop stamping service.version on self metrics ([#591](https://github.com/rknightion/genai-otel-bridge/issues/591)) ([84922b3](https://github.com/rknightion/genai-otel-bridge/commit/84922b33547579ae11de7a189d312f015564ac92))
+
 ## [5.0.0](https://github.com/rknightion/genai-otel-bridge/compare/v4.3.1...v5.0.0) (2026-11-27)
 
 

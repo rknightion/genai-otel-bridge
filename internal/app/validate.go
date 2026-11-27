@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/rknightion/genai-otel-bridge/internal/config"
@@ -58,14 +59,11 @@ var validateEnvRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // + secret substitution + semantic Validate against the registered source types) WITHOUT requiring real
 // secrets: any `${ENV}` ref that is unset gets a placeholder so an overlay full of injected refs can be
 // checked in CI. Endpoints/URLs get an https placeholder to satisfy the endpoint gate; everything else
-// gets a non-empty token. After Validate it resolves the plan and runs app.BuildFromPlan on it with inert
-// dependencies (no-op checkpoint, emitter and coordinator; no network), so every check the source constructors and Build
-// make at startup (unknown loop or graph, bootstrap_lookback, content-floor keys, stream-label budget,
-// series ownership, no enabled loops) fails here too. Only a file is checked, not the inline
-// GENAI_OTEL_BRIDGE_CONFIG form. For a valid config it returns the resolved plan's table and hash
-// (tenancy.Plan.Table and Hash; the table holds no secret) and a nil error; otherwise only the error. A
-// tenant-shape config is assembled with placeholderSecrets (no secret file read), so an unreadable secret
-// and a duplicate API key are found only when a pod reads the files.
+// gets a non-empty token. Then it resolves the plan and runs the same assembly as startup with inert
+// dependencies (no-op checkpoint, emitter and coordinator; no network). For tenant rows it supplies
+// placeholder credentials directly, so no tenant secret files are read and no rows are skipped by the
+// duplicate-key check. Only a file is checked, not the inline GENAI_OTEL_BRIDGE_CONFIG form. On success
+// it returns the original resolved plan's table and hash (neither holds a secret); otherwise only the error.
 // The hash of a config with an unset ${ENV} ref covers its placeholder, so it matches a running
 // leader's only when CI has the same environment.
 func ValidateConfigFile(path string) (table, hash string, err error) {
@@ -111,29 +109,27 @@ func ValidateConfigFile(path string) (table, hash string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	// Constructors only build clients; the first network call is the lazy first Collect, which never runs.
-	// The config is validated and resolved above, so assembly starts from that plan. A tenant-shape plan
-	// is assembled with placeholderSecrets, never the real secret files, so every assemble rule that needs
-	// no secret (scope assertion support, the reserved scope-match loop, no loop that emits log records,
-	// series ownership per group) fails here as it would at startup; an unreadable secret and a duplicate
-	// API key are found only when a pod reads the files.
-	opts := Options{}
-	if plan.TenantShape {
-		opts.Secrets = placeholderSecrets{}
-	}
-	if _, err := BuildFromPlan(context.Background(), cfg, plan, inertCheckpointer{}, coordinate.Noop{}, inertEmitterFactory, noopTelemetryFactory, opts); err != nil {
+	// Constructors only build clients; neither Collect nor a scope assertion runs during assembly.
+	if _, err := BuildFromPlan(context.Background(), cfg, planForValidation(plan), inertCheckpointer{}, coordinate.Noop{}, inertEmitterFactory, noopTelemetryFactory, Options{}); err != nil {
 		return "", "", err
 	}
 	return plan.Table(), plan.Hash(), nil
 }
 
-// placeholderSecrets is the SecretReader of the config check: it reads no file and returns a value that
-// differs for every tenant and file (neither can contain "/"), so assembly sees a distinct API key per
-// target and no tenant is blocked for a key the check never read.
-type placeholderSecrets struct{}
-
-func (placeholderSecrets) Read(tenant, file string) (string, error) {
-	return "placeholder/" + tenant + "/" + file, nil
+// planForValidation fills in placeholders without going through readPlanSecrets' file and key checks.
+// A fake SecretReader would still compare fabricated API keys and could skip building an entire tenant
+// (for example, if two targets name the same key file), masking its real assembly errors.
+func planForValidation(plan tenancy.Plan) tenancy.Plan {
+	if !plan.TenantShape {
+		return plan
+	}
+	plan.Rows = slices.Clone(plan.Rows)
+	for i := range plan.Rows {
+		row := &plan.Rows[i]
+		row.Source.Auth.Value, row.Destination.Token = "placeholder", "placeholder"
+		row.AuthValueFile, row.TokenFile = "", ""
+	}
+	return plan
 }
 
 // inertCheckpointer and inertEmitter let ValidateConfigFile run BuildFromPlan without any store or backend.

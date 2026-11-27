@@ -7,6 +7,7 @@ deploy-on-push: no
 grafana-stack: none
 tracker: github
 landing: pr
+guarded-paths: test/helm/default-render.yaml, deploy/helm/templates/rbac.yaml, deploy/helm/templates/*hook*.yaml, internal/source/guard.go
 
 Public repository: `scripts/forbidden-words.sh` blocks deployment-specific identifiers anywhere in
 the tracked tree, `.github/tracker/history/` included. Write the shape, not the instance. Run `just`

@@ -22,7 +22,7 @@ import (
 type Metrics struct {
 	emitted, emittedLogs, skipped, emitErr, guardDropped, revised, newLabel, capped, sourceCapability, sourceDataIncomplete, authErr metric.Int64Counter
 	partialRejected                                                                                                                  metric.Int64Counter
-	scopeAssertion                                                                                                                   metric.Int64Counter
+	scopeAssertion, scopeMatchWriteFailures                                                                                          metric.Int64Counter
 	lastSuccess, windowLag, queueDepth, loopDegraded, leader, scopeState, tenantBlocked                                              metric.Float64Gauge
 	upstreamDur, revisedAge, emitDur                                                                                                 metric.Float64Histogram
 	// extra are the pipeline labels (tenant, pipeline) a With copy appends to every per-pipeline series
@@ -93,11 +93,11 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	// 10m, making an increase[10m] alert flap. A 0/1 gauge answers it in one query and supports a
 	// non-flapping `== 1 for 15m` alert. Bounded cardinality: the reason attr is the fixed enterDegraded set.
 	m.loopDegraded = mg("loop_degraded", "1 while a loop is degraded (reason attribute), 0 after the clearing commit or when leadership ends", "1")
-	// The scope gate's two signals (design §8). scope_state has no unit, so its exported name has no
-	// suffix. Both are recorded only through a pipeline's With copy (the gate exists only in the tenant
-	// shape), so a legacy install exports neither.
+	// Scope signals are recorded through a pipeline's With copy. The gate exists only in the tenant
+	// shape, so a legacy install exports none. scope_state has no unit, so its exported name has no suffix.
 	m.scopeState = mg("scope_state", "1 for the scope gate's current state (matched, unverified or mismatched) and 0 for the others; all 0 with no result, which is what a replica that is not leading reports", "")
 	m.scopeAssertion = mk("scope_assertion_total", "scope assertion calls by result: matched, mismatch, unverifiable or error")
+	m.scopeMatchWriteFailures = mk("scope_match_write_failures_total", "failed checkpoint saves of a pipeline's remembered scope match, including clears and retry attempts")
 	// Whether a tenant was left unbuilt at assembly, by reason (design §8, §9). No unit, so its exported name
 	// has no suffix. Recorded only for a tenant-shape plan, so a legacy install exports none; every replica
 	// records it from its own read of the secrets.
@@ -309,6 +309,12 @@ func (m *Metrics) ScopeState(state string) {
 // A With copy adds tenant and pipeline.
 func (m *Metrics) ScopeAssertion(result string) {
 	m.scopeAssertion.Add(context.Background(), 1, m.attrs(attribute.String("result", result)))
+}
+
+// ScopeMatchWriteFailed counts one failed Save of a remembered scope match. Call it on the
+// pipeline's With copy. A failed clear may leave a stale match for a later leader to restore.
+func (m *Metrics) ScopeMatchWriteFailed() {
+	m.scopeMatchWriteFailures.Add(context.Background(), 1, m.attrs())
 }
 
 // TenantBlocked records whether reason blocks tenant at assembly: 1 when blocked, else 0, under exactly

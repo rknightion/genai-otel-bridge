@@ -11,7 +11,16 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/rknightion/genai-otel-bridge/internal/checkpoint/configmap"
 	"github.com/rknightion/genai-otel-bridge/internal/model"
+	"github.com/rknightion/genai-otel-bridge/internal/selfobs"
 	"github.com/rknightion/genai-otel-bridge/internal/source"
 )
 
@@ -182,6 +191,117 @@ func TestScopeGateDecisionEffects(t *testing.T) {
 			}
 			if wantWait := map[bool]time.Duration{true: 2 * sp.Cadence, false: sp.Cadence}[tc.wantAuthStreak]; tc.wantDegraded == nil && wait != wantWait {
 				t.Fatalf("next wait %v, want %v", wait, wantWait)
+			}
+		})
+	}
+}
+
+// Remembering a match and clearing it on a mismatch both use the scope gate's Save path. A
+// write that later recovers still counts; when both Saves fail, each counts once.
+func TestScopeGateMatchWriteFailureCounter(t *testing.T) {
+	const digest = "test-match"
+	const tenant, pipeline = "t1", "t1.a"
+	for _, tc := range []struct {
+		name      string
+		result    source.ScopeResult
+		failSaves int
+		failRead  bool
+		wantSaved bool
+	}{
+		{name: "remember succeeds", result: source.ScopeMatched, wantSaved: true},
+		{name: "remember fails then recovers", result: source.ScopeMatched, failSaves: 1, wantSaved: true},
+		{name: "clear succeeds", result: source.ScopeMismatch, wantSaved: true},
+		{name: "clear and reread fail", result: source.ScopeMismatch, failSaves: 1, failRead: true},
+		{name: "both clear attempts fail", result: source.ScopeMismatch, failSaves: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := leaderCtx()
+			now := time.Unix(2000, 0).UTC()
+			loop := &countingLoop{key: model.CheckpointKey{SourceInstance: "mt.t1.a", Loop: "analytics", OutputFingerprint: "fp"}}
+			matchKey := source.ScopeMatchKey(loop.Key().SourceInstance)
+			cs := fake.NewSimpleClientset()
+			store := configmap.New(cs, "test", "checkpoints")
+			wantCursor, wantCollects := digest, 1
+			old := model.Watermark{Time: now.Add(-time.Minute), Cursor: "previous-match", Epoch: 1}
+			if tc.result == source.ScopeMismatch {
+				old.Cursor = digest
+				wantCursor, wantCollects = "", 0
+			}
+			if err := store.Save(ctx, matchKey, old); err != nil {
+				t.Fatal(err)
+			}
+			remaining := tc.failSaves
+			readUnavailable := false
+			cs.PrependReactor("get", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+				if readUnavailable {
+					return true, nil, errors.New("checkpoint unreadable")
+				}
+				return false, nil, nil
+			})
+			cs.PrependReactor("update", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+				if remaining == 0 {
+					return false, nil, nil
+				}
+				remaining--
+				readUnavailable = tc.failRead
+				return true, nil, errors.New("checkpoint unavailable")
+			})
+
+			reader := metric.NewManualReader()
+			m, err := selfobs.NewMetrics(metric.NewMeterProvider(metric.WithReader(reader)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pipelineMetrics := m.With(tenant, pipeline)
+			a := &scriptedAsserter{res: tc.result}
+			gate := source.NewScopeGate(source.ScopeGateConfig{Asserter: a, Store: store, SourceInstance: loop.Key().SourceInstance,
+				Digest: digest, Now: func() time.Time { return now }, Jitter: func(time.Duration) time.Duration { return 0 },
+				OnMatchWriteFailure: pipelineMetrics.ScopeMatchWriteFailed})
+			gate.Elected(ctx)
+			r := NewLoopRunner(loop, &fakeEmitter{}, store, source.NewGuard(source.GuardConfig{}), 1, 1, pipelineMetrics)
+			sp := LoopSpec{Runner: r, Loop: loop, Cadence: time.Minute, Metrics: pipelineMetrics, Gate: gate,
+				Pipeline: Pipeline{Tenant: tenant, ID: pipeline}}
+			NewScheduler(nil, m).RunOnceForTest(ctx, sp, now)
+
+			readUnavailable = false
+			got, err := store.Load(ctx, matchKey)
+			want := old
+			if tc.wantSaved {
+				want = model.Watermark{Time: now, Cursor: wantCursor, Epoch: old.Epoch}
+			}
+			if err != nil || got != want || remaining != 0 {
+				t.Fatalf("remembered match = %+v, %v; want %+v (unused write failures: %d)", got, err, want, remaining)
+			}
+			if n := loop.Collects(); n != wantCollects {
+				t.Fatalf("collects = %d, want %d", n, wantCollects)
+			}
+
+			var rm metricdata.ResourceMetrics
+			if err := reader.Collect(ctx, &rm); err != nil {
+				t.Fatal(err)
+			}
+			var points []metricdata.DataPoint[int64]
+			for _, sm := range rm.ScopeMetrics {
+				for _, mm := range sm.Metrics {
+					if mm.Name != "genai_otel_bridge_scope_match_write_failures_total" {
+						continue
+					}
+					sum, ok := mm.Data.(metricdata.Sum[int64])
+					if !ok || !sum.IsMonotonic {
+						t.Fatalf("%s is not a counter: %T", mm.Name, mm.Data)
+					}
+					points = append(points, sum.DataPoints...)
+				}
+			}
+			if tc.failSaves == 0 {
+				if len(points) != 0 {
+					t.Fatalf("successful writes should not record the failure counter, got %+v", points)
+				}
+				return
+			}
+			attrs := attribute.NewSet(attribute.String("tenant", tenant), attribute.String("pipeline", pipeline))
+			if len(points) != 1 || points[0].Value != int64(tc.failSaves) || !points[0].Attributes.Equals(&attrs) {
+				t.Fatalf("scope match write failure points = %+v; want one point with %v and count %d", points, attrs.ToSlice(), tc.failSaves)
 			}
 		})
 	}

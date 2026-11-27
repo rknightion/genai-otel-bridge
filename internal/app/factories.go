@@ -14,7 +14,7 @@ import (
 )
 
 // PipelineTelemetry is the self-telemetry one pipeline records through: the scheduler and runner seam
-// plus the three request observers the emitter and the source HTTP client feed, and the two signals of
+// plus the request observers the emitter and the source HTTP client feed, and the signals of
 // the pipeline's scope gate (a row with a scope has one). *selfobs.Metrics (and its With copies)
 // satisfies it, so this package still does not import selfobs. SeedLoop stays an optional capability:
 // Build type-asserts it on the PipelineTelemetry value it is given.
@@ -27,6 +27,8 @@ type PipelineTelemetry interface {
 	ScopeState(state string)
 	// ScopeAssertion counts one assertion call by result: matched, mismatch, unverifiable or error.
 	ScopeAssertion(result string)
+	// ScopeMatchWriteFailed counts one failed checkpoint save of the pipeline's remembered match.
+	ScopeMatchWriteFailed()
 }
 
 // noopTelemetry records nothing. ValidateConfigFile passes it, so the config check builds the app
@@ -38,6 +40,7 @@ func (noopTelemetry) ObserveEmitRequest(string, int, error, time.Duration)      
 func (noopTelemetry) ObserveEmitPartialReject(string, int64)                           {}
 func (noopTelemetry) ScopeState(string)                                                {}
 func (noopTelemetry) ScopeAssertion(string)                                            {}
+func (noopTelemetry) ScopeMatchWriteFailed()                                           {}
 
 // TelemetryFactory returns the telemetry hooks for one tenant and pipeline. Both are empty in the
 // legacy shape, where the hooks must record exactly today's label sets.

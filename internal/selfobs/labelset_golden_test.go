@@ -56,7 +56,7 @@ func attrKeys(set attribute.Set) string {
 }
 
 // TestSelfMetricLabelSetsGolden checks the attribute keys of legacy recordings and loop seeds,
-// plus the scope seeds a tenant pipeline records, through a manual reader.
+// plus the scope seeds and write failure counter a tenant pipeline records, through a manual reader.
 func TestSelfMetricLabelSetsGolden(t *testing.T) {
 	reader := metric.NewManualReader()
 	mp := metric.NewMeterProvider(metric.WithReader(reader), metric.WithView(selfHistogramView()))
@@ -93,8 +93,12 @@ func TestSelfMetricLabelSetsGolden(t *testing.T) {
 	}
 
 	// Check the legacy sets before With also seeds a pipeline-labelled partial reject series.
-	m.With("tenant", "pipeline").SeedScope()
-	assertLabelSet(t, collectLabelSets(t, reader), "genai_otel_bridge_scope_assertion_total", "pipeline,result,tenant")
+	pipelineMetrics := m.With("tenant", "pipeline")
+	pipelineMetrics.SeedScope()
+	pipelineMetrics.ScopeMatchWriteFailed()
+	got = collectLabelSets(t, reader)
+	assertLabelSet(t, got, "genai_otel_bridge_scope_assertion_total", "pipeline,result,tenant")
+	assertLabelSet(t, got, "genai_otel_bridge_scope_match_write_failures_total", "pipeline,tenant")
 }
 
 func collectLabelSets(t *testing.T, reader *metric.ManualReader) map[string]map[string]bool {

@@ -73,7 +73,8 @@ concurrent ticks wait for the first call's result rather than calling again.
   clears a remembered match at once even when the election read failed and the record is ahead of this
   leader's clock (PR #548 review). A write that still does not land is logged and tried again at the
   next such result; the in-memory state does not depend on it, so the pipeline stays mismatched. Until a read or
-  write succeeds the view is unknown, and both writes are made.
+  write succeeds the view is unknown, and both writes are made. `OnMatchWriteFailure` reports each
+  failed `Save`, including a clear or retry, without changing this policy.
 - `KeyFingerprint` and the digest are never logged or emitted.
 
 ## Guard

@@ -80,13 +80,14 @@ func rowScopeGate(row tenancy.Row, src source.Source, t PipelineTelemetry, cp ch
 		return nil, fmt.Errorf("source %q (type %q) has a scope, but the source type cannot assert one (it does not implement source.ScopeAsserter); a scope is never collected unchecked", row.Source.SourceInstance, row.Source.Type)
 	}
 	return source.NewScopeGate(source.ScopeGateConfig{
-		Asserter:       asserter,
-		Store:          cp,
-		SourceInstance: row.Source.SourceInstance,
-		Digest:         source.ScopeMatchDigest(source.KeyFingerprint(row.Source.Auth.Value), scope.Name, scope.ID),
-		Now:            now,
-		OnResult:       t.ScopeAssertion,
-		OnState:        t.ScopeState,
+		Asserter:            asserter,
+		Store:               cp,
+		SourceInstance:      row.Source.SourceInstance,
+		Digest:              source.ScopeMatchDigest(source.KeyFingerprint(row.Source.Auth.Value), scope.Name, scope.ID),
+		Now:                 now,
+		OnResult:            t.ScopeAssertion,
+		OnState:             t.ScopeState,
+		OnMatchWriteFailure: t.ScopeMatchWriteFailed,
 	}), nil
 }
 

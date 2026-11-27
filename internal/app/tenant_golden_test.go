@@ -272,7 +272,8 @@ var goldenSelfLabelSets = map[string][]string{
 		"loop=analytics,pipeline=team-a.prod,reason=payload_too_large,source=mt.team-a.prod,tenant=team-a",
 		"loop=analytics,pipeline=team-a.prod,reason=too_old,source=mt.team-a.prod,tenant=team-a",
 	},
-	"genai_otel_bridge_scope_assertion_total": {"pipeline=team-a.prod,result=matched,tenant=team-a"},
+	"genai_otel_bridge_scope_assertion_total":            {"pipeline=team-a.prod,result=matched,tenant=team-a"},
+	"genai_otel_bridge_scope_match_write_failures_total": {"pipeline=team-a.prod,tenant=team-a"},
 	"genai_otel_bridge_scope_state": {
 		"pipeline=team-a.prod,state=matched,tenant=team-a", "pipeline=team-a.prod,state=mismatched,tenant=team-a", "pipeline=team-a.prod,state=unverified,tenant=team-a",
 	},
@@ -287,8 +288,8 @@ var goldenSelfLabelSets = map[string][]string{
 }
 
 // TestTenantSelfMetricLabelSetsGolden (AC6): the label set, key and value, of every self-metric recorded
-// through With("team-a", "team-a.prod"), the scope_state, scope_assertion_total and tenant_blocked
-// instruments included; every self-metric in selfobs.Signals() is in the literal.
+// through With("team-a", "team-a.prod"), including the scope and tenant blocking instruments.
+// Every self-metric in selfobs.Signals() is in the literal.
 func TestTenantSelfMetricLabelSetsGolden(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -321,6 +322,7 @@ func TestTenantSelfMetricLabelSetsGolden(t *testing.T) {
 	m.SetLeader(true)
 	m.ScopeState("matched")
 	m.ScopeAssertion("matched")
+	m.ScopeMatchWriteFailed()
 	m.TenantBlocked("team-a", "duplicate_key", true)
 
 	var rm metricdata.ResourceMetrics

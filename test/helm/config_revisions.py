@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -41,8 +42,8 @@ def revision(objects):
 
 
 @contextmanager
-def api_fixture(tmp, maps, reads=None):
-    """Serve the Kubernetes reads Helm makes at the local HTTP boundary."""
+def api_fixture(tmp, maps, reads=None, forbidden=()):
+    """Serve the Kubernetes reads Helm and kubectl make at the local HTTP boundary."""
     path = "/api/v1/namespaces/default/configmaps"
     groups = {
         "v1": {"configmaps": "ConfigMap", "serviceaccounts": "ServiceAccount", "services": "Service", "pods": "Pod"},
@@ -72,12 +73,15 @@ def api_fixture(tmp, maps, reads=None):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            result = responses.get(self.path.split("?", 1)[0])
-            self.send_response(200 if result else 404)
+            target = self.path.split("?", 1)[0]
+            result = None if target in forbidden else responses.get(target)
+            code = 200 if result else 403 if target in forbidden else 404
+            self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
+            reason = {403: "Forbidden", 404: "NotFound"}.get(code)
             self.wfile.write(json.dumps(result or {"apiVersion": "v1", "kind": "Status",
-                                                  "status": "Failure", "reason": "NotFound", "code": 404}).encode())
+                                                  "status": "Failure", "reason": reason, "code": code}).encode())
 
         def log_message(self, *_):
             pass
@@ -96,6 +100,11 @@ def api_fixture(tmp, maps, reads=None):
         finally:
             server.shutdown()
             thread.join()
+
+
+def cleanup_block(text, opening, closing):
+    start = text.index(opening) + len(opening)
+    return text[start:text.index(closing, start)].strip("\n")
 
 
 def upgrade(config, *args):
@@ -178,6 +187,54 @@ class ConfigRevisions(unittest.TestCase):
                 self.assertEqual(data, payload)
                 names.add(name)
         self.assertEqual(len(names), len(variants), "two different configs share a revision name")
+
+    def test_documented_cleanup_keeps_every_referenced_revision_and_stops_on_a_partial_read(self):
+        docs = cleanup_block(Path("docs/installation.md").read_text(),
+                             '```bash\nns=<namespace>; release=<release name>\n', "```")
+        e2e = cleanup_block(Path("test/helm/config-revisions-e2e.sh").read_text(),
+                            "# >>> docs clean-up block\n", "# <<< docs clean-up block")
+        self.assertEqual(docs, e2e, "the e2e no longer runs the documented clean-up")
+        current, undo, unused = (self.hash_name(n) for n in "123")
+        maps = [configmap(name) for name in (current, undo, unused)]
+        deployment = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "genai-otel-bridge"},
+                      "spec": {"template": {"spec": {"volumes": [{"name": "config", "configMap": {"name": current}}]}}}}
+        apps = "/apis/apps/v1/namespaces/default"
+        reads = {
+            f"{apps}/deployments/genai-otel-bridge": deployment,
+            f"{apps}/deployments": {"apiVersion": "apps/v1", "kind": "DeploymentList", "items": [deployment]},
+            # A scaled-down ReplicaSet keeps the revision `kubectl rollout undo` needs.
+            f"{apps}/replicasets": {"apiVersion": "apps/v1", "kind": "ReplicaSetList", "items": [
+                {"metadata": {"name": "old"}, "spec": {"replicas": 0, "template": {"spec": {
+                    "volumes": [{"name": "config", "configMap": {"name": undo}}]}}}}]},
+            # Every Pod mounts kube-root-ca.crt, so a non-empty in-use list proves nothing.
+            "/api/v1/namespaces/default/pods": {"apiVersion": "v1", "kind": "PodList", "items": [
+                {"metadata": {"name": "p"}, "spec": {"volumes": [
+                    {"name": "config", "configMap": {"name": current}},
+                    {"name": "ca", "projected": {"sources": [{"configMap": {"name": "kube-root-ca.crt"}}]}}]}}]},
+        }
+        kubectl = os.path.abspath(shutil.which(os.getenv("KUBECTL", "kubectl")))
+        cases = {"all reads succeed": ((), [unused]),
+                 "replicasets forbidden": ((f"{apps}/replicasets",), None),
+                 "deployment unreadable": ((f"{apps}/deployments/genai-otel-bridge",), None)}
+        for case, (forbidden, expected) in cases.items():
+            with self.subTest(case), tempfile.TemporaryDirectory() as tmp, \
+                    api_fixture(tmp, maps, reads, forbidden) as config:
+                Path(tmp, "bin").mkdir()
+                Path(tmp, "bin", "kubectl").symlink_to(kubectl)
+                env = {**os.environ, "KUBECONFIG": str(config), "PATH": f"{tmp}/bin:{os.environ['PATH']}",
+                       "ns": "default", "release": "test-release"}
+                result = subprocess.run(["bash", "-c", docs], cwd=tmp, env=env, text=True, capture_output=True, timeout=30)
+                listed = Path(tmp, "unused.txt")
+                if expected is None:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertFalse(listed.exists(), "a failed read still wrote unused.txt")
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(listed.read_text().split(), expected)
+
+    @staticmethod
+    def hash_name(digit):
+        return "genai-otel-bridge-config-" + digit * 64
 
     def test_migration_keeps_the_fixed_name_map_without_rewriting_its_config(self):
         legacy = configmap("genai-otel-bridge-config", component="legacy")

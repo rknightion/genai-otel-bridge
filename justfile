@@ -168,7 +168,7 @@ helm-lint: _tools-e2e _tools-pyyaml
     set -euo pipefail
     helm="{{ tools_dir }}/helm"
     "$helm" lint deploy/helm
-    HELM="$helm" {{ tools_dir }}/pyenv/bin/python test/helm/config_revisions.py
+    HELM="$helm" KUBECTL={{ tools_dir }}/kubectl {{ tools_dir }}/pyenv/bin/python test/helm/config_revisions.py
     # Render with default values: a workload with an empty image (e.g. the cleanup hook) fails here, not at uninstall.
     rendered=$("$helm" template rel deploy/helm)
     if printf '%s\n' "$rendered" | grep -nE '^[[:space:]]+image:[[:space:]]*$'; then echo 'helm-lint: a default render has an empty container image' >&2; exit 1; fi

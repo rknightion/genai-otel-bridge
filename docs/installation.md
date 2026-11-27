@@ -13,7 +13,7 @@ description: Install genai-otel-bridge from source or deploy it to Kubernetes wi
 
 - Go 1.27 or later (for building from source).
 - A Grafana Cloud account (or any OTLP/HTTP endpoint).
-- For Kubernetes deployment: Helm 3 or 4 and a cluster supported by the chart's `kubeVersion`.
+- For Kubernetes deployment: Helm 4, or Helm 3 (v3.22.1 or later to roll back across a config change; see [Config revisions](#config-revisions)), and a cluster supported by the chart's `kubeVersion`.
 - For HA / ConfigMap checkpointing: the chart creates the required RBAC automatically.
 
 ---
@@ -221,9 +221,13 @@ release-owned `genai-otel-bridge-config`, preserves its data and marks it to kee
 caller must be able to get that ConfigMap. Do not use an offline render for this migration if
 old workloads could lose their map. To restore a known good config, upgrade with the
 revision-aware chart and last good values (`--reset-values`), pinning the last good image if
-needed. Helm can reuse the kept map or recreate it from those values. Some Helm clients cannot
-roll back to a retained map absent from the current manifest. Do not delete a map to make rollback
-work.
+needed. Helm can reuse the kept map or recreate it from those values.
+
+`helm rollback`, and `--atomic` (`--rollback-on-failure` in Helm 4), go back to a revision whose
+map Helm kept but no longer lists in the current release. That needs a Helm that adopts an
+existing, release-owned resource on update. It is verified with Helm 4.3.2 and v3.22.1. Older Helm 3
+releases may fail with `no ConfigMap with the name ... found`: upgrade Helm rather than delete a map
+to make rollback work.
 
 **Argo CD:** each new revision opts out of both sync pruning (`Prune=false`) and Application
 deletion (`Delete=false`). Helm's `keep` annotation alone does not stop Argo CD sync pruning.
@@ -239,20 +243,32 @@ the release that no Deployment, ReplicaSet or Pod in the namespace refers to:
 
 ```bash
 ns=<namespace>; release=<release name>
-rm -f in-use.txt unused.txt
-kubectl -n "$ns" get deployments,replicasets,pods \
-  -o jsonpath='{..configMap.name} {..configMapRef.name} {..configMapKeyRef.name}{"\n"}' \
-  | tr ' ' '\n' | sed '/^$/d' | sort -u >in-use.txt
-test -s in-use.txt && kubectl -n "$ns" get configmaps -o name \
-  -l "app.kubernetes.io/component=config-revision,app.kubernetes.io/instance=$release" \
-  | sed 's|^configmap/||' | grep -vxF -f in-use.txt >unused.txt
-cat in-use.txt unused.txt
+(
+  set -euo pipefail
+  rm -f in-use.txt unused.txt
+  # Each read stops the block on any error, so a partial read cannot mark a revision unused.
+  mounted=$(kubectl -n "$ns" get deployment genai-otel-bridge \
+    -o jsonpath='{.spec.template.spec.volumes[?(@.name=="config")].configMap.name}')
+  refs=$(kubectl -n "$ns" get deployments,replicasets,pods \
+    -o jsonpath='{..configMap.name} {..configMapRef.name} {..configMapKeyRef.name}{"\n"}')
+  revisions=$(kubectl -n "$ns" get configmaps -o name \
+    -l "app.kubernetes.io/component=config-revision,app.kubernetes.io/instance=$release")
+  tr ' ' '\n' <<<"$refs" | sed '/^$/d' | sort -u >in-use.txt
+  if [ -z "$mounted" ] || ! grep -qxF "$mounted" in-use.txt; then
+    echo "stop: the map the Deployment mounts is not in in-use.txt" >&2; exit 1
+  fi
+  sed -e 's|^configmap/||' -e '/^$/d' <<<"$revisions" \
+    | { grep -vxF -f in-use.txt || [ "$?" -eq 1 ]; } >unused.txt
+  cat in-use.txt unused.txt
+)
 ```
 
-Check both lists. `in-use.txt` must include the map the Deployment mounts: if it is empty or a
-command failed, stop, because every revision would look unused. A scaled-down ReplicaSet counts
-as a reference, so `revisionHistoryLimit` also bounds the revisions this keeps. Then delete
-exactly the names you checked:
+The block needs `get` on the bridge Deployment and `list` on Deployments, ReplicaSets, Pods and
+ConfigMaps in the namespace. It stops, and writes no `unused.txt`, if any read fails or the map the
+Deployment mounts is missing from `in-use.txt`. Every Pod also mounts `kube-root-ca.crt`, so a
+non-empty `in-use.txt` alone proves nothing. A scaled-down ReplicaSet counts as a reference, which
+keeps the revisions a `kubectl rollout undo` needs, so `revisionHistoryLimit` also bounds what
+this keeps. Check both lists, then delete exactly the names you checked:
 
 ```bash
 xargs -r kubectl -n "$ns" delete configmap <unused.txt
@@ -262,6 +278,12 @@ The list includes the old fixed-name map once nothing refers to it. The checkpoi
 no revision label and is never listed. `helm uninstall` leaves every revision behind too: once the
 release's Pods are gone, delete them with the same label selector. Outside an uninstall, never
 delete revisions by label alone.
+
+Revisions that survive `helm uninstall` keep the old release's ownership annotations
+(`meta.helm.sh/release-name` and `meta.helm.sh/release-namespace`). A reinstall under the same
+release name in the same namespace adopts them. A reinstall under a different release name in that
+namespace fails on an ownership conflict for any map it renders with the same name, until you
+delete those revision maps.
 
 ### Uninstall cleanup
 

@@ -78,18 +78,32 @@ while IFS= read -r pod; do
 done <<<"$bad_pods"
 k get cm "$old_map" "$new_map" "$foreign"
 
-# The manual clean-up in docs/installation.md (Cleaning up old revisions); keep the two in step.
+# The manual clean-up in docs/installation.md (Cleaning up old revisions). config_revisions.py
+# checks that the block between these markers matches the documented one.
+pushd "$scratch" >/dev/null
+# >>> docs clean-up block
 (
-  cd "$scratch"
-  kubectl -n "$ns" get deployments,replicasets,pods \
-    -o jsonpath='{..configMap.name} {..configMapRef.name} {..configMapKeyRef.name}{"\n"}' \
-    | tr ' ' '\n' | sed '/^$/d' | sort -u >in-use.txt
-  test -s in-use.txt && kubectl -n "$ns" get configmaps -o name \
-    -l "app.kubernetes.io/component=config-revision,app.kubernetes.io/instance=$release" \
-    | sed 's|^configmap/||' | grep -vxF -f in-use.txt >unused.txt
-  [ "$(cat unused.txt)" = "$new_map" ] || { echo "FAIL: clean-up listed: $(cat unused.txt)" >&2; exit 1; }
-  xargs -r kubectl -n "$ns" delete configmap <unused.txt
+  set -euo pipefail
+  rm -f in-use.txt unused.txt
+  # Each read stops the block on any error, so a partial read cannot mark a revision unused.
+  mounted=$(kubectl -n "$ns" get deployment genai-otel-bridge \
+    -o jsonpath='{.spec.template.spec.volumes[?(@.name=="config")].configMap.name}')
+  refs=$(kubectl -n "$ns" get deployments,replicasets,pods \
+    -o jsonpath='{..configMap.name} {..configMapRef.name} {..configMapKeyRef.name}{"\n"}')
+  revisions=$(kubectl -n "$ns" get configmaps -o name \
+    -l "app.kubernetes.io/component=config-revision,app.kubernetes.io/instance=$release")
+  tr ' ' '\n' <<<"$refs" | sed '/^$/d' | sort -u >in-use.txt
+  if [ -z "$mounted" ] || ! grep -qxF "$mounted" in-use.txt; then
+    echo "stop: the map the Deployment mounts is not in in-use.txt" >&2; exit 1
+  fi
+  sed -e 's|^configmap/||' -e '/^$/d' <<<"$revisions" \
+    | { grep -vxF -f in-use.txt || [ "$?" -eq 1 ]; } >unused.txt
+  cat in-use.txt unused.txt
 )
+# <<< docs clean-up block
+[ "$(cat unused.txt)" = "$new_map" ] || { echo "FAIL: clean-up listed: $(cat unused.txt)" >&2; exit 1; }
+xargs -r kubectl -n "$ns" delete configmap <unused.txt
+popd >/dev/null
 k wait "cm/$new_map" --for=delete --timeout=30s
 k get cm "$old_map" "$foreign"
 k rollout status "deployment/$release" --timeout=30s

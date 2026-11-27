@@ -8,7 +8,9 @@ description: How genai-otel-bridge collects and emits telemetry from the Portkey
 genai-otel-bridge collects operational telemetry from [Portkey](https://portkey.ai) via three
 independent loops: **`analytics`** (bucketed workspace-aggregate metrics), **`groups`** (per-dimension
 snapshot metrics), and **`logs_export`** (content-free per-request log records). Each loop is
-independently enabled via its own `loops.<name>` config block.
+independently enabled via its own `loops.<name>` config block, and runs only when that block sets
+`enabled: true`: an omitted `enabled` means off. `logs_export` is off in every shipped example;
+the metric loops do not need it.
 
 !!! info "Content-free by design"
     None of the three loops ever request or emit prompt text, completion text, or message bodies.
@@ -153,6 +155,10 @@ The logs export loop creates and downloads Portkey export jobs, then emits one c
 OTLP log record per request. Log records carry operational fields (status, latency, tokens,
 cost) as structured metadata; they never contain prompt or response text.
 
+The loop is opt-in. It runs only when `loops.logs_export.enabled` is `true`, and it needs
+`workspace_id`, `signed_url_allow_hosts` and an API key that is allowed to export logs. A key
+without export permission can run the `analytics` and `groups` loops alone.
+
 ### What each log record contains
 
 Each log record includes (as structured metadata, not stream labels):
@@ -173,8 +179,9 @@ exclusive.
 
 ### Required settings
 
-`workspace_id` and `signed_url_allow_hosts` are required. The signed URL host must match
-Portkey's export download host (check your Portkey workspace for the correct value).
+`workspace_id` and `signed_url_allow_hosts` are required once the loop is enabled. The signed URL
+host must match Portkey's export download host (check your Portkey workspace for the correct value).
+The API key must be allowed to export logs.
 
 ### Memory and payload size
 
@@ -193,7 +200,7 @@ loop, with defaults and a one-line description each, is the generated example bl
 ```yaml
 loops:
   logs_export:
-    enabled: true
+    enabled: false   # opt in: set true; needs workspace_id, signed_url_allow_hosts and a key allowed to export logs
     cadence: 60s
     settings:
       workspace_id: ${PORTKEY_WORKSPACE_ID}

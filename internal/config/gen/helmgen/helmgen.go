@@ -505,7 +505,7 @@ func RenderValue(v any, srcPath string) ([]byte, error) {
 	if rv.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("helmgen: RenderValue: expected struct, got %s", rv.Kind())
 	}
-	node, err := renderValueStruct(rv, docs, nil)
+	node, err := renderValueStruct(rv, docs, valueComments{})
 	if err != nil {
 		return nil, err
 	}
@@ -521,11 +521,19 @@ func RenderValue(v any, srcPath string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// valueComments carries an example's head-comments down the value path. settings is keyed by the key
+// of a string-valued map (a settings map); blocks by the key of a struct-valued map (a loop block). The
+// zero value adds no comment, and output is then byte-identical to the pre-unified path.
+type valueComments struct {
+	settings map[string]string
+	blocks   map[string]string
+}
+
 // renderValueStruct builds a yaml MappingNode for a struct reflect.Value, emitting only non-zero
-// fields, in field-declaration order. comments, if non-nil, is passed down to renderValueField so
-// that map[string]string fields (i.e. settings maps) can receive per-key head-comments; nil
-// comments produces byte-identical output to the pre-unified path.
-func renderValueStruct(rv reflect.Value, docs fieldDocs, comments map[string]string) (*yaml.Node, error) {
+// fields, in field-declaration order. comments is passed down to renderValueField so that
+// map[string]string fields (i.e. settings maps) and struct-valued map keys (loop blocks) can receive
+// per-key head-comments; zero comments produces byte-identical output to the pre-unified path.
+func renderValueStruct(rv reflect.Value, docs fieldDocs, comments valueComments) (*yaml.Node, error) {
 	rt := rv.Type()
 	m := &yaml.Node{Kind: yaml.MappingNode}
 	for i := 0; i < rt.NumField(); i++ {
@@ -566,11 +574,11 @@ func renderValueStruct(rv reflect.Value, docs fieldDocs, comments map[string]str
 	return m, nil
 }
 
-// renderValueField converts a reflect.Value into a yaml.Node for use by RenderValue. comments, if
-// non-nil, is threaded through so that map[string]string fields whose element kind is
-// reflect.String receive per-key head-comments from comments[key]; nil comments is a no-op (output
-// byte-identical to the pre-unified path).
-func renderValueField(ft reflect.Type, fv reflect.Value, docs fieldDocs, comments map[string]string) (*yaml.Node, error) {
+// renderValueField converts a reflect.Value into a yaml.Node for use by RenderValue. comments is
+// threaded through so that map[string]string fields whose element kind is reflect.String receive
+// per-key head-comments from comments.settings[key], and struct-valued map keys from
+// comments.blocks[key]; zero comments is a no-op (output byte-identical to the pre-unified path).
+func renderValueField(ft reflect.Type, fv reflect.Value, docs fieldDocs, comments valueComments) (*yaml.Node, error) {
 	// Dereference pointers in type/value simultaneously.
 	for ft.Kind() == reflect.Pointer {
 		if fv.IsNil() {
@@ -616,10 +624,15 @@ func renderValueField(ft reflect.Type, fv reflect.Value, docs fieldDocs, comment
 			// supplied a non-empty comment for this key. The double-hash ("# # comment") is
 			// intentional: RenderExampleBlock prefixes every rendered line with "# ", so the
 			// head-comment appears double-hashed and uncommenting the block leaves a real YAML comment.
-			if elemType.Kind() == reflect.String && comments != nil {
-				if c := comments[k]; c != "" {
-					keyNode.HeadComment = "# " + c
-				}
+			var c string
+			switch elemType.Kind() {
+			case reflect.String:
+				c = comments.settings[k]
+			case reflect.Struct:
+				c = comments.blocks[k]
+			}
+			if c != "" {
+				keyNode.HeadComment = "# " + c
 			}
 			m.Content = append(m.Content, keyNode, valNode)
 		}
@@ -696,10 +709,13 @@ func compactDuration(d time.Duration) string {
 // Example pairs a SourceConfig-shaped value (Settings populated at defaults) with vendor-owned
 // per-settings-key head-comments. SettingsComments is keyed by the settings KEY (e.g. "window");
 // a key shared across loops for the same source uses one comment (same meaning per vendor).
-// When SettingsComments is nil or empty the output is byte-identical to the pre-typed path.
+// LoopComments is keyed by loop name and head-comments that loop's block, for example to say how to
+// opt in to a loop the example shows off (#585). When both are nil or empty the output is
+// byte-identical to the pre-typed path.
 type Example struct {
 	Value            any
 	SettingsComments map[string]string
+	LoopComments     map[string]string
 }
 
 // RenderExampleBlock renders example source values as a COMMENTED-OUT `sources:` snippet wrapped in the
@@ -717,7 +733,7 @@ func RenderExampleBlock(examples []Example) ([]byte, error) {
 	body.WriteString("sources:\n")
 	for _, ex := range examples {
 		// renderValueWithComments is the unified path: nil comments → byte-identical to RenderValue.
-		y, err := renderValueWithComments(ex.Value, ex.SettingsComments)
+		y, err := renderValueWithComments(ex.Value, valueComments{settings: ex.SettingsComments, blocks: ex.LoopComments})
 		if err != nil {
 			return nil, err
 		}
@@ -747,10 +763,10 @@ func RenderExampleBlock(examples []Example) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// renderValueWithComments is the internal entry point used by both RenderValue (comments=nil) and
-// RenderExampleBlock (comments=ex.SettingsComments). nil comments → byte-identical output to the
+// renderValueWithComments is the internal entry point used by RenderExampleBlock (comments from the
+// Example's SettingsComments and LoopComments). Zero comments → byte-identical output to the
 // pre-unified path.
-func renderValueWithComments(v any, comments map[string]string) ([]byte, error) {
+func renderValueWithComments(v any, comments valueComments) ([]byte, error) {
 	docs, err := parseFieldDocs("") // no doc comments on the value/example path
 	if err != nil {
 		return nil, err

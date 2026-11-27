@@ -27,7 +27,7 @@ import (
 func TestECSConfigExampleUpToDate(t *testing.T) {
 	const ecsConfigPath = "../../deploy/ecs/terraform/config.example.yaml"
 	want, err := helmgen.RenderECSConfigFile(reflect.TypeFor[config.Config](), "config.go", []helmgen.Example{
-		{Value: portkey.ExampleSource(), SettingsComments: portkey.ExampleSettingsComments()},
+		{Value: portkey.ExampleSource(), SettingsComments: portkey.ExampleSettingsComments(), LoopComments: portkey.ExampleLoopComments()},
 		{Value: langsmith.ExampleSource(), SettingsComments: langsmith.ExampleSettingsComments()},
 	})
 	if err != nil {

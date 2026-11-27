@@ -112,7 +112,7 @@ configOverride: |
     tracing:
       enabled: true
   sources:
-    # ── Portkey (LLM gateway) — both planes, all loops ────────────────────────
+    # ── Portkey (LLM gateway) — metric loops on, logs_export off (opt in below) ──
     # The source API key's ANALYTICS data is scoped to a single workspace (the analytics
     # groups/workspace endpoint returns one row), so analytics+groups can't be request-targeted to a
     # workspace. They DO carry an optional SAFETY assertion: expected_workspace = the workspace SLUG
@@ -157,8 +157,9 @@ configOverride: |
             expected_workspace: ${PORTKEY_EXPECTED_WORKSPACE}   # SLUG (not the UUID), env-injected; scope-assert the key, refuse-to-emit on mismatch
         # LOGS — Portkey log export → signed-URL S3 download. workspace_id REQUIRED (UUID form, per
         # the live API), env-injected and kept out of git; signed_url_allow_hosts is the SSRF allow-list.
+        # OFF by default (#585): to opt in set enabled: true; it needs workspace_id, signed_url_allow_hosts and an API key allowed to export logs.
         logs_export:
-          enabled: true
+          enabled: false
           cadence: 60s
           settings:
             workspace_id: ${PORTKEY_WORKSPACE_ID}

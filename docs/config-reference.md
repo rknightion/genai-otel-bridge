@@ -108,7 +108,7 @@ Each entry in the `sources` list has:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `type` | string | `portkey` | Source type. Currently: `portkey`, `langsmith`. |
-| `enabled` | bool | `true` | Enable this source. |
+| `enabled` | bool | `false` when omitted | Enable this source. The generated chart default sets `true`. |
 | `base_url` | string | `https://api.portkey.ai/v1` | Source API base URL. Must be `https://` unless `http.allow_private=true`. |
 | `source_instance` | string | `portkey-${ENV}` | Stable per-environment identifier. Part of the CheckpointKey; changing it resets the watermark. Must not contain `/`. |
 | `auth.header` | string | `x-portkey-api-key` | HTTP request header name for the API key. |
@@ -124,7 +124,7 @@ Each entry in the `sources` list has:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `enabled` | bool | `true` | Enable this loop. |
+| `enabled` | bool | `false` when omitted | Enable this loop. The generated chart default sets `true` on `analytics`; Portkey `logs_export` is off in every shipped example. |
 | `cadence` | duration | `60s` | Poll interval (±10% jitter). Must be ≥ 10s. |
 | `window` | duration | `50m` | Time range queried per collect. Must be ≤ 55m (Portkey granularity clamp). |
 | `bucket_settle` | duration | `10m` | Age at which a bucket is considered final. |

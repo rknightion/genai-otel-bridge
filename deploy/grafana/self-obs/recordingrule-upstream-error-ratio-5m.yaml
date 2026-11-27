@@ -1,14 +1,14 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: RecordingRule
 metadata:
-  name: genai-otel-bridge-upstream-error-ratio-5m
+  name: genai-otel-bridge-upstream-error-ratio
   annotations:
     grafana.app/folder: genai-otel-bridge
   labels:
     grafana.app/folder: genai-otel-bridge
 spec:
-  title: genai-otel-bridge:upstream_error_ratio:5m
-  metric: genai-otel-bridge:upstream_error_ratio:5m
+  title: genai_otel_bridge:upstream_error_ratio:5m
+  metric: genai_otel_bridge:upstream_error_ratio:5m
   targetDatasourceUID: grafanacloud-prom
   trigger:
     interval: 1m

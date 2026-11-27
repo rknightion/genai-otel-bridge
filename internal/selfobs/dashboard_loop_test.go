@@ -114,7 +114,7 @@ func loopValuesByInstrument(t *testing.T) map[string]string {
 }
 
 var (
-	selectorRe  = regexp.MustCompile(`(genai_otel_bridge_[a-zA-Z0-9_]+|genai-otel-bridge:[a-zA-Z0-9_:]+)(\{[^}]*\})?`)
+	selectorRe  = regexp.MustCompile(`(genai_otel_bridge_[a-zA-Z0-9_]+|genai_otel_bridge:[a-zA-Z0-9_:]+)(\{[^}]*\})?`)
 	loopMatchRe = regexp.MustCompile(`(?:^\{|,)\s*loop\s*(=~|=)\s*"([^"]*)"`)
 )
 

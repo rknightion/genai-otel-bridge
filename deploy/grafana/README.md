@@ -61,7 +61,7 @@ pick the datasources per stack. Push: `gcx resources push -p deploy/grafana/self
 **Self-relative staleness (the decoupled threshold model).** Loops have wildly different healthy
 staleness — a snapshot loop (`sessions`) settles in ~2m, a windowed log-export loop (`runs`) sawtooths
 to tens of minutes — so a flat threshold can't serve them. The freshness panels colour on
-`genai-otel-bridge:freshness_ratio` = each loop's current staleness ÷ its OWN trailing-6h p90 baseline: `<1.5`
+`genai_otel_bridge:freshness_ratio` = each loop's current staleness ÷ its OWN trailing-6h p90 baseline: `<1.5`
 green, `1.5–2` yellow, `>2` red, uniform across every loop with **no hardcoded per-loop or
 per-deployment constants**. The freshness/upstream-ratio panels need the recording rules pushed
 (deploy the whole dir). The basic age/lag/liveness panels are computed inline and need no rules.
@@ -179,16 +179,16 @@ versus intermittent observed capability increments at query time rather than ass
 Zero `portkey_api_requests` could mean a genuine quiet period OR a downed poller. Pair traffic/error
 alerts with the poller-health recording rules:
 
-- **`genai-otel-bridge:scrape_healthy`** — 1 when the leader's last successful collect+emit is recent.
-- **`genai-otel-bridge:scrape_present`** — 1 if `genai_otel_bridge_last_success_timestamp_seconds` was exported in the last 15m
+- **`genai_otel_bridge:scrape_healthy`** — 1 when the leader's last successful collect+emit is recent.
+- **`genai_otel_bridge:scrape_present`** — 1 if `genai_otel_bridge_last_success_timestamp_seconds` was exported in the last 15m
   (missing entirely ⇒ leader gone, distinct from stale).
 - **`genai_otel_bridge_window_lag_seconds`** — gap from now to the last emitted bucket; rising ⇒ poller falling behind.
 
 ```promql
 # genuine quiet period: no requests 15m AND poller healthy
-sum_over_time(portkey_api_requests[15m]) == 0 and on() genai-otel-bridge:scrape_healthy == 1
+sum_over_time(portkey_api_requests[15m]) == 0 and on() genai_otel_bridge:scrape_healthy == 1
 # poller stale
-genai-otel-bridge:scrape_healthy == 0
+genai_otel_bridge:scrape_healthy == 0
 # leader gone (use absent, not just staleness — F46)
 absent_over_time(genai_otel_bridge_last_success_timestamp_seconds[15m])
 ```

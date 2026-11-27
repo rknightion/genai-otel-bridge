@@ -1,7 +1,7 @@
 apiVersion: rules.alerting.grafana.app/v0alpha1
 kind: AlertRule
 metadata:
-  name: genai-otel-bridge-export-pipeline-data-incomplete
+  name: genai-otel-bridge-export-data-incomplete
   annotations:
     grafana.app/folder: genai-otel-bridge
   labels:

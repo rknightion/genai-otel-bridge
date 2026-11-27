@@ -77,7 +77,7 @@ edit the generator and run `just gen-dashboard` to regenerate it.
 
 ### Self-relative freshness
 
-The freshness panels colour on a self-relative staleness ratio (`genai-otel-bridge:freshness_ratio`)
+The freshness panels colour on a self-relative staleness ratio (`genai_otel_bridge:freshness_ratio`)
 rather than a flat threshold. Each loop's current staleness is divided by its own trailing-6h
 p90 baseline: `< 1.5` green, `1.5–2` yellow, `> 2` red. This prevents false positives on the
 log-export loops, which legitimately sawtooth to tens of minutes, while keeping full sensitivity
@@ -112,13 +112,13 @@ provisioning.
 
 | Rule | What it computes |
 |------|-----------------|
-| `genai-otel-bridge:last_success_age:seconds` | `time() − max by (tenant, pipeline, source, loop)(last_success_timestamp_seconds)` — staleness in seconds per loop instance |
-| `genai-otel-bridge:last_success_age:baseline6h` | Trailing 6h p90 of `last_success_age:seconds` per loop — the self-relative staleness baseline |
-| `genai-otel-bridge:freshness_ratio` | `last_success_age:seconds / clamp_min(last_success_age:baseline6h, 120)` — the ratio the dashboard colours on; the 120s floor stops a fast, quiet loop dividing by about 0 |
-| `genai-otel-bridge:upstream_error_ratio:5m` | Error ratio per upstream `target`, for the upstream-health panel. The `GenaiOtelBridgeUpstreamErrorBudget` alert inlines its own query and does not read this rule |
-| `genai-otel-bridge:window_truncated:rate5m` | Rate of window-truncation events per loop, for dashboards. The `GenaiOtelBridgeWindowTruncatedDroppingRecords` alert inlines its own query and does not read this rule |
-| `genai-otel-bridge:scrape_healthy` | 1 when the leader's last successful collect+emit is recent |
-| `genai-otel-bridge:scrape_present` | 1 if `last_success_timestamp_seconds` was exported in the last 15m |
+| `genai_otel_bridge:last_success_age:seconds` | `time() − max by (tenant, pipeline, source, loop)(last_success_timestamp_seconds)` — staleness in seconds per loop instance |
+| `genai_otel_bridge:last_success_age:baseline6h` | Trailing 6h p90 of `last_success_age:seconds` per loop — the self-relative staleness baseline |
+| `genai_otel_bridge:freshness_ratio` | `last_success_age:seconds / clamp_min(last_success_age:baseline6h, 120)` — the ratio the dashboard colours on; the 120s floor stops a fast, quiet loop dividing by about 0 |
+| `genai_otel_bridge:upstream_error_ratio:5m` | Error ratio per upstream `target`, for the upstream-health panel. The `GenaiOtelBridgeUpstreamErrorBudget` alert inlines its own query and does not read this rule |
+| `genai_otel_bridge:window_truncated:rate5m` | Rate of window-truncation events per loop, for dashboards. The `GenaiOtelBridgeWindowTruncatedDroppingRecords` alert inlines its own query and does not read this rule |
+| `genai_otel_bridge:scrape_healthy` | 1 when the leader's last successful collect+emit is recent |
+| `genai_otel_bridge:scrape_present` | 1 if `last_success_timestamp_seconds` was exported in the last 15m |
 
 ---
 

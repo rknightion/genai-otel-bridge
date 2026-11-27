@@ -8,7 +8,7 @@ metadata:
     grafana.app/folder: genai-otel-bridge
 spec:
   title: "genai-otel-bridge \u2014 self-observability"
-  description: "Operational health of the genai-otel-bridge integrator itself (the genai_otel_bridge_* self-metrics, the poller's own stdout logs, and its runtime profiles). Tabbed top-down triage. Staleness is shown self-relative (genai-otel-bridge:freshness_ratio: >1 = staler than the loop's own 6h baseline) so one scale serves loops of any cadence. Stack-agnostic: pick the Prometheus/Loki/Pyroscope datasources via the variables. NOTE: emitted/last_success/window_lag are recorded only on a SUCCESSFUL emit (the watermark must leave zero) \u2014 empty there is a real signal that emit is failing, not a broken panel. The freshness/upstream-ratio panels need the self-obs recording rules pushed."
+  description: "Operational health of the genai-otel-bridge integrator itself (the genai_otel_bridge_* self-metrics, the poller's own stdout logs, and its runtime profiles). Tabbed top-down triage. Staleness is shown self-relative (genai_otel_bridge:freshness_ratio: >1 = staler than the loop's own 6h baseline) so one scale serves loops of any cadence. Stack-agnostic: pick the Prometheus/Loki/Pyroscope datasources via the variables. NOTE: emitted/last_success/window_lag are recorded only on a SUCCESSFUL emit (the watermark must leave zero) \u2014 empty there is a real signal that emit is failing, not a broken panel. The freshness/upstream-ratio panels need the self-obs recording rules pushed."
   tags:
   - genai-otel-bridge
   - self-obs
@@ -241,7 +241,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: (max(genai-otel-bridge:freshness_ratio{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"}) < bool 2) * (max(time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"})) < bool 10800)
+                    expr: (max(genai_otel_bridge:freshness_ratio{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"}) < bool 2) * (max(time() - max by (tenant, pipeline, source, loop) (genai_otel_bridge_last_success_timestamp_seconds{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"})) < bool 10800)
                     legendFormat: ''
                     range: false
                     instant: true
@@ -428,7 +428,7 @@ spec:
       spec:
         id: 103
         title: Worst freshness ratio
-        description: 'max(genai-otel-bridge:freshness_ratio): each loop''s staleness over its OWN trailing-6h p90 baseline. <1.5 normal, >2 = much staler than this loop''s normal. Uniform scale across loops of any cadence. Needs the recording rules pushed.'
+        description: 'max(genai_otel_bridge:freshness_ratio): each loop''s staleness over its OWN trailing-6h p90 baseline. <1.5 normal, >2 = much staler than this loop''s normal. Uniform scale across loops of any cadence. Needs the recording rules pushed.'
         links: []
         data:
           kind: QueryGroup
@@ -446,7 +446,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: max(genai-otel-bridge:freshness_ratio{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"})
+                    expr: max(genai_otel_bridge:freshness_ratio{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"})
                     legendFormat: ''
                     range: false
                     instant: true
@@ -612,7 +612,7 @@ spec:
       spec:
         id: 110
         title: Freshness ratio by loop (self-relative staleness)
-        description: "genai-otel-bridge:freshness_ratio per loop. 1.0 = exactly the loop's own 6h-p90 staleness; the lines mark 1 (baseline) and 2 (alert). This is the decoupled, per-loop staleness view \u2014 a flat 15m threshold can't serve loops whose normal ranges from ~2m (sessions) to tens of minutes (runs)."
+        description: "genai_otel_bridge:freshness_ratio per loop. 1.0 = exactly the loop's own 6h-p90 staleness; the lines mark 1 (baseline) and 2 (alert). This is the decoupled, per-loop staleness view \u2014 a flat 15m threshold can't serve loops whose normal ranges from ~2m (sessions) to tens of minutes (runs)."
         links: []
         data:
           kind: QueryGroup
@@ -630,7 +630,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: genai-otel-bridge:freshness_ratio{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"}
+                    expr: genai_otel_bridge:freshness_ratio{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"}
                     legendFormat: '{{source}} / {{loop}}'
                     range: true
                     instant: false
@@ -817,7 +817,7 @@ spec:
       spec:
         id: 121
         title: Last-success age vs each loop's baseline
-        description: Solid = time() - last_success (age). Dashed = genai-otel-bridge:last_success_age:baseline6h (the loop's own 6h-p90 normal). Age sawtoothing under its baseline is healthy; age pulling away above the baseline is the staleness signal GenaiOtelBridgePollerStale fires on.
+        description: Solid = time() - last_success (age). Dashed = genai_otel_bridge:last_success_age:baseline6h (the loop's own 6h-p90 normal). Age sawtoothing under its baseline is healthy; age pulling away above the baseline is the staleness signal GenaiOtelBridgePollerStale fires on.
         links: []
         data:
           kind: QueryGroup
@@ -853,7 +853,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: genai-otel-bridge:last_success_age:baseline6h{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"}
+                    expr: genai_otel_bridge:last_success_age:baseline6h{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"}
                     legendFormat: '{{source}} / {{loop}} baseline'
                     range: true
                     instant: false
@@ -969,7 +969,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: genai-otel-bridge:freshness_ratio{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"}
+                    expr: genai_otel_bridge:freshness_ratio{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"}
                     legendFormat: ''
                     range: false
                     instant: true
@@ -1832,7 +1832,7 @@ spec:
       spec:
         id: 142
         title: Upstream error ratio by target
-        description: "genai-otel-bridge:upstream_error_ratio:5m \u2014 fraction of requests to each target with status_class 4xx/5xx/error (incl. timeouts). >0.2 sustained => GenaiOtelBridgeUpstreamErrorBudget. Needs the recording rules pushed."
+        description: "genai_otel_bridge:upstream_error_ratio:5m \u2014 fraction of requests to each target with status_class 4xx/5xx/error (incl. timeouts). >0.2 sustained => GenaiOtelBridgeUpstreamErrorBudget. Needs the recording rules pushed."
         links: []
         data:
           kind: QueryGroup
@@ -1850,7 +1850,7 @@ spec:
                     name: ${datasource}
                   spec:
                     editorMode: code
-                    expr: genai-otel-bridge:upstream_error_ratio:5m
+                    expr: genai_otel_bridge:upstream_error_ratio:5m
                     legendFormat: '{{target}}'
                     range: true
                     instant: false

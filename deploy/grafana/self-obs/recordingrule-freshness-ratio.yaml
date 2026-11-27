@@ -7,8 +7,8 @@ metadata:
   labels:
     grafana.app/folder: genai-otel-bridge
 spec:
-  title: genai-otel-bridge:freshness_ratio
-  metric: genai-otel-bridge:freshness_ratio
+  title: genai_otel_bridge:freshness_ratio
+  metric: genai_otel_bridge:freshness_ratio
   targetDatasourceUID: grafanacloud-prom
   trigger:
     interval: 1m

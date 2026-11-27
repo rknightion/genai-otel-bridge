@@ -311,27 +311,22 @@ of bucket-time resolution. Not used in v1; documented in followup.md if needed.)
   + one-collect-cycle` (acquisition + the new leader's first successful pull/emit), potentially
   minutes. Staleness-alert thresholds are
   set off *that* bound + margin, not off the lease duration.
-- **Resource / memory (modelled & bounded to the container limit).** It is fine for the app to use
-  several GB if needed, **provided memory is modelled and bounded under the k8s container limit** —
-  never OOM-killed. The model:
-  - **Dominant consumers:** (a) the per-loop queues — at most one batch per loop is queued or in flight (collection is single-flight), so the ceiling is `Σ max_batch_bytes` over loops, and `queue.max_batches` is only an upper bound on depth;
-    (b) the **largest single in-flight payload** — for Portkey `logs_export` a job can be up to
-    **50k records**, which if buffered whole is the real spike; (c) OTLP encode buffers; (d) Go
-    runtime overhead.
-  - **Bounding levers:** set `queue.max_batches` (per loop) and `max_batch_bytes` so worst-case
-    `Σ + max_in_flight_download_chunk + overhead ≤ container limit × safety_factor`. **Stream/chunk
-    large downloads** (decode the logs-export JSONL incrementally and enqueue in chunks — never hold
-    the whole 50k-record file in memory), so per-loop memory is bounded by chunk size, not export
-    size. Cap simultaneous in-flight batches (per-loop single-flight already does this for emit).
-  - **Set `GOMEMLIMIT` to (a fraction of) the container memory limit** so Go's GC targets it and
-    applies backpressure/GC before the cgroup OOM-kills — graceful degradation, not a hard kill.
-  - **Self-observation of heap and limit is not on `main` yet** (open PR #497 adds it); until it lands there
-    is no process memory gauge to alert on, so size the limit from the model above.
-  - **LangSmith runs page cap:** a runs page is held whole in RAM before content is stripped, so the
-    per-page decode cap (`settings.max_response_bytes`, default 32 MiB; an oversize page is a loud decode
-    error) is part of the per-loop bound. It is positive-only today; an upper cap is in PR #497.
-  - k8s `requests`/`limits` set from the model; document the formula so the limit and `queue.*`/
-    `GOMEMLIMIT` are tuned together.
+- **Resource / memory sizing.** Estimate peak memory as **the sum of about 3 × the response
+  decode cap for each loop that can decode concurrently, plus an OTLP encode-buffer allowance
+  (including gzip), plus Go runtime overhead**. Allow extra encoding headroom when several loops
+  emit at once. This is a sizing estimate, not a hard bound. Collection is single-flight per loop,
+  so at most one batch per loop is queued or in flight. `queue.max_batches` does not limit the
+  number of simultaneous decodes, and `queue.max_batch_bytes` governs OTLP splitting, not decode memory.
+  - The **LangSmith runs loop** holds a whole page in RAM before stripping fields. The decoder buffers the
+    input and copies raw JSON fields, so a page can cost roughly 2 to 3 times its input size.
+    `settings.max_response_bytes` defaults to 32 MiB and rejects values above 256 MiB. An oversize
+    page can fail decoding; lower `page_size` to reduce the working set. Budget for every configured
+    loop that can decode at once, rather than just the largest page in the process.
+  - **Portkey `logs_export`** streams JSONL in chunks. Budget for the chunk, not the whole export.
+  - Use the estimate with headroom to size container requests and limits. Set `GOMEMLIMIT` below
+    the container memory limit. It is a soft Go GC target and does not prevent an OOM kill.
+    The `go_heap_inuse_bytes` and `go_memory_limit_bytes` self-metrics back the
+    [memory alert](../deploy/grafana/README.md); watch them when tuning page size or memory limits.
 - **Cardinality:** every series' label set is bounded and config-declared; guard rejects violations.
 - **Security:** secrets never logged, never in config-in-git, never in self-telemetry; least-privilege
   RBAC (own namespace: leases + configmaps).

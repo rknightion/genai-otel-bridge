@@ -135,9 +135,9 @@ failure handling) before changing a seam.
 - The e2e utility image must be flattened before k3d import on both hosted Docker and
   Docker-out-of-Docker. Placement does not identify a containerd-backed image store; a
   successful pull alone does not prove its saved OCI index contains every referenced blob.
-- `ci-success` is the only required check on `main`; the individual CI legs are not, so adding or
-  renaming a leg never touches branch rules. Renovate PRs self-automerge, majors included, once
-  `ci-success` is green.
+- Check live branch requirements with `gh ruleset check main`; see `LOOP.md` for the required
+  aggregate checks. Individual CI legs are not branch requirements. Renovate PRs self-automerge,
+  majors included, once the required checks are green.
 
 Off the Mac, when the remote gate runner is installed (`which gaterun`): `gaterun -- just ci` (or
 `just check`), paced across lanes with `gaterun-slot <lane> -- gaterun -- just ci`; `.gaterunner.yaml`

@@ -362,10 +362,10 @@ opt-in persistent sending queue, distinct from the always-on `remote_write` WAL.
 out-of-order / too-old accept window** — surviving a multi-hour outage means widening that window
 (Grafana Support), not buffering. For logs, a buffer also avoids an expensive re-fetch.
 
-**Memory is modelled and bounded to the container limit** (never OOM-killed): the dominant consumers
-are the largest in-flight payload per loop, because collection is single-flight and at most one batch per loop is queued or in flight (a Portkey logs-export can be 50k
-records — **streamed/chunked, never buffered whole**); `queue.*` sizes + `GOMEMLIMIT` are set against
-the k8s memory limit, and the LangSmith runs per-page decode cap (`max_response_bytes`, default 32 MiB) bounds its largest in-flight page. Process heap and limit gauges are not on `main` yet (PR #497). Detail in `docs/DESIGN.md` §5.
+**Size the container for concurrent decodes, not queue depth.** Collection is single-flight within
+one loop, but several loops can decode at once. See the [memory sizing model](docs/DESIGN.md#5-non-functional-requirements)
+for the per-loop decode allowance, OTLP encoding and runtime overhead, and how to use the heap and
+limit gauges to check headroom.
 
 ---
 

@@ -40,8 +40,13 @@
   and default image lines removed). Regenerate it with `just helm-default-render > test/helm/default-render.yaml`
   only for an intended change to the default render.
 - The termination grace period bounds time to SIGKILL and covers the emit-retry budget; it is not a drain window (see `internal/coordinate/AGENTS.md`).
-- The `checksum/config` pod annotation (gated by `rolloutOnConfigChange`) hashes **only**
-  `templates/configmap.yaml`, never the app-created checkpoint state CM.
+- Config revisions: `configBytes` is exactly the file mounted by a Pod. Its SHA-256 suffix in
+  the ConfigMap volume reference drives rollouts; the optional `checksum/config` annotation
+  uses the same bytes. The checkpoint ConfigMap is not a config revision. Live Helm renders
+  discover release-owned revision names. The pruning hook gets and deletes only the exact
+  discovered and newly rendered names, with no Secret permissions. Do not run it on rollback:
+  Helm replays old hooks rather than refreshing discovery. See `docs/installation.md#config-revisions`
+  for migration, rollback and GitOps constraints.
 - Topology spread is by host **and** zone, both `ScheduleAnyway`, so a single-node or single-AZ dev
   cluster still schedules while multi-AZ EKS lands the standby elsewhere.
 - **The `config:` map in `values.yaml` (between the `# >>> BEGIN/END generated config <<<` markers)

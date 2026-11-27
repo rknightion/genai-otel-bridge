@@ -13,8 +13,8 @@ so `cmd` supplies real ones and tests supply fakes. The guard's per-metric cardi
 ## Factories (`factories.go`)
 
 - `PipelineTelemetry` is `schedule.Metrics` plus `ObserveUpstreamRequest`, `ObserveEmitRequest`,
-  `ObserveEmitPartialReject` and the scope gate's two signals, `ScopeState` and `ScopeAssertion`
-  (`noopTelemetry` has no-op ones). `*selfobs.Metrics` satisfies it, so this package does not import
+  `ObserveEmitPartialReject` and the scope gate's `ScopeState`, `ScopeAssertion` and
+  `ScopeMatchWriteFailed` hooks. `*selfobs.Metrics` satisfies it, so this package does not import
   `selfobs`. `SeedLoop` stays an optional capability: `BuildFromPlan` type-asserts it on each row's
   `PipelineTelemetry` value, so an adapter that wraps another value must forward it
   (`helpers_test.go`'s `telemetryAdapter` does).

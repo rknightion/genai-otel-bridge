@@ -18,15 +18,16 @@ type runsStatsResp struct {
 	RunCount *int `json:"run_count"`
 }
 
-// fetchSpanCount POSTs /runs/stats scoped to one project over [statsStart, now], returning the ALL-RUNS
+// fetchSpanCount POSTs /runs/stats scoped to one project over [statsStart, statsEnd], returning the ALL-RUNS
 // count = spans (the storage/"excessive spans" driver). NO `is_root` filter (that would count traces,
 // which we already get free from /sessions). Returns (count, http status, transport error); the caller
 // maps the taxonomy (429 → quota; other non-200 → counted skip). runs/stats 400s without a scope, so the
 // session id is always sent. The request body NEVER names a content field.
-func (l *usageLoop) fetchSpanCount(ctx context.Context, sessionID string, statsStart time.Time) (*int, int, error) {
+func (l *usageLoop) fetchSpanCount(ctx context.Context, sessionID string, statsStart, statsEnd time.Time) (*int, int, error) {
 	body, err := json.Marshal(map[string]any{
 		"session":    []string{sessionID},
 		"start_time": statsStart.UTC().Format(time.RFC3339),
+		"end_time":   statsEnd.UTC().Format(time.RFC3339),
 	})
 	if err != nil {
 		return nil, 0, err

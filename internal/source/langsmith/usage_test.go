@@ -45,7 +45,7 @@ func newFakeUsageServer(t *testing.T, all []json.RawMessage) *fakeUsageServer {
 			return
 		}
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/runs/stats"):
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/runs/stats"):
 			b, _ := io.ReadAll(r.Body)
 			f.statsBodies = append(f.statsBodies, string(b))
 			if c, ok := f.statsCodeAt[len(f.statsBodies)]; ok {
@@ -142,6 +142,47 @@ func TestUsageCollectTracesSpansTier(t *testing.T) {
 	}
 	if !b.Watermark.Time.Equal(now) {
 		t.Fatalf("watermark=%v want now=%v (forward-only liveness)", b.Watermark.Time, now)
+	}
+}
+
+func TestUsageSpanCallsShareEndTime(t *testing.T) {
+	now := time.Date(2026, 7, 2, 14, 15, 30, 0, time.FixedZone("UTC+2", 2*60*60))
+	f := newFakeUsageServer(t, usageFixture())
+	lp := mkUsageLoop(t, f, now, func(c *usageConfig) { c.StatsWindow = 7 * time.Minute })
+	// A fresh clock read during fan-out would give a different bound.
+	next := now
+	lp.now = func() time.Time {
+		current := next
+		next = next.Add(time.Second)
+		return current
+	}
+
+	if _, err := lp.Collect(context.Background(), model.Watermark{}); err != nil {
+		t.Fatal(err)
+	}
+	projects := map[string]bool{"p1": true, "p2": true}
+	if got := len(f.statsBodies); got != len(projects) {
+		t.Fatalf("runs/stats calls = %d, want %d", got, len(projects))
+	}
+	for _, body := range f.statsBodies {
+		var req struct {
+			Session   []string `json:"session"`
+			StartTime string   `json:"start_time"`
+			EndTime   string   `json:"end_time"`
+		}
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatal(err)
+		}
+		if len(req.Session) != 1 || !projects[req.Session[0]] {
+			t.Fatalf("unexpected project scope %v", req.Session)
+		}
+		delete(projects, req.Session[0])
+		if want := "2026-07-02T12:08:30Z"; req.StartTime != want {
+			t.Errorf("project %s: start_time = %q, want %q", req.Session[0], req.StartTime, want)
+		}
+		if want := "2026-07-02T12:15:30Z"; req.EndTime != want {
+			t.Errorf("project %s: end_time = %q, want %q", req.Session[0], req.EndTime, want)
+		}
 	}
 }
 

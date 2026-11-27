@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to genai-otel-bridge. Generated from Conventional Commits.
+## [4.3.1](https://github.com/rknightion/genai-otel-bridge/compare/v4.3.0...v4.3.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **langsmith:** bound usage span-stat windows ([#582](https://github.com/rknightion/genai-otel-bridge/issues/582)) ([4465d4d](https://github.com/rknightion/genai-otel-bridge/commit/4465d4d224930e5f5c36f380c599c90f0b6979b0))
+
 ## [4.3.0](https://github.com/rknightion/genai-otel-bridge/compare/v4.2.0...v4.3.0) (2026-11-27)
 
 

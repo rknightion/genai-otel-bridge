@@ -193,7 +193,7 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 		var lastErr error
 	fanout:
 		for i, s := range sessions {
-			n, code, err := l.fetchSpanCount(ctx, s.ID, statsStart)
+			n, code, err := l.fetchSpanCount(ctx, s.ID, statsStart, now)
 			if code == http.StatusTooManyRequests {
 				// Quota mid-fan-out: keep what was fetched (trace gauges for every project, span gauges for
 				// the projects already counted) and stop. Discarding the lot would retry the same prefix

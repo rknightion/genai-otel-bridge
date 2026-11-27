@@ -1,24 +1,46 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: genai-otel-bridge-config
+  name: {{ include "genai-otel-bridge.configName" . }}
   namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+    # Argo CD's Helm keep equivalent covers Application deletion, not sync pruning.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
   labels:
     {{- include "genai-otel-bridge.labels" . | nindent 4 }}
-data:
-  # config.yaml is either the verbatim .Values.configOverride string (e.g. a fully-resolved e2e
-  # config) or, by default, the generated default config map (.Values.config) serialised back to
-  # YAML. The generated map lives in values.yaml and is produced from the Go schema by `just
-  # gen` (see internal/config/gen). ${ENV} refs are scalar strings and survive toYaml intact;
-  # they are injected from the genai-otel-bridge-secrets Secret via envFrom at runtime.
-  config.yaml: |
-{{- if .Values.configOverride }}
-{{ .Values.configOverride | indent 4 }}
-{{- else if .Values.config.tenants }}
-{{- /* Tenant shape: sources and emit.telemetry belong to the legacy shape and must be absent. */}}
-{{- $config := omit .Values.config "sources" }}
-{{- $_ := set $config "emit" (omit (get $config "emit" | default dict) "telemetry") }}
-{{ $config | toYaml | indent 4 }}
-{{- else }}
-{{ .Values.config | toYaml | indent 4 }}
+    app.kubernetes.io/component: config-revision
+immutable: true
+binaryData:
+  # Base64 keeps the mounted bytes identical to the hash input, even when YAML would fold
+  # Unicode line breaks in a quoted scalar or normalise line endings in a block scalar.
+  config.yaml: {{ include "genai-otel-bridge.configBytes" . | b64enc | quote }}
+{{- /* On the first live upgrade, preserve the fixed-name map without replacing its bytes.
+       Helm otherwise deletes it while old pods and ReplicaSets still refer to it. */ -}}
+{{- if .Release.IsUpgrade }}
+{{- with lookup "v1" "ConfigMap" .Release.Namespace "genai-otel-bridge-config" }}
+{{- $annotations := .metadata.annotations | default dict }}
+{{- $labels := .metadata.labels | default dict }}
+{{- if and (eq (get $annotations "meta.helm.sh/release-name") $.Release.Name) (eq (get $annotations "meta.helm.sh/release-namespace") $.Release.Namespace) -}}
+{{- if not (and (eq (get $labels "app.kubernetes.io/component") "config-revision") (eq (get $annotations "helm.sh/resource-policy") "keep")) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: genai-otel-bridge-config
+  namespace: {{ $.Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "genai-otel-bridge.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: config-revision
+{{- with .data }}
+data: {{ toJson . | replace "\u0085" "\\u0085" }}
+{{- end }}
+{{- with .binaryData }}
+binaryData: {{ toJson . }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end }}

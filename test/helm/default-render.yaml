@@ -194,79 +194,23 @@ metadata:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: genai-otel-bridge-config
+  name: genai-otel-bridge-config-295523d247dfea177ee25b143bd067f23ec8087af877ca3a766b2d32b1cac483
   namespace: default
+  annotations:
+    helm.sh/resource-policy: keep
+    # Argo CD's Helm keep equivalent covers Application deletion, not sync pruning.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
   labels:
     app: genai-otel-bridge
     app.kubernetes.io/name: genai-otel-bridge
     app.kubernetes.io/instance: rel
     app.kubernetes.io/managed-by: Helm
-data:
-  # config.yaml is either the verbatim .Values.configOverride string (e.g. a fully-resolved e2e
-  # config) or, by default, the generated default config map (.Values.config) serialised back to
-  # YAML. The generated map lives in values.yaml and is produced from the Go schema by `just
-  # gen` (see internal/config/gen). ${ENV} refs are scalar strings and survive toYaml intact;
-  # they are injected from the genai-otel-bridge-secrets Secret via envFrom at runtime.
-  config.yaml: |
-    emit:
-      telemetry:
-        otlp:
-          allow_insecure: false
-          endpoint: ${GC_OTLP_ENDPOINT}
-          instance_id: ${GC_INSTANCE_ID}
-          token: ${GC_OTLP_TOKEN}
-    governance:
-      allow_label_keys: []
-      max_catchup_per_tick: 1
-      max_dpm: 1
-      max_stream_label_keys: 15
-      per_metric_cardinality_budget: 10000
-    ha:
-      checkpoint: configmap
-      coordinator: lease
-    identity:
-      deployment_environment: ${ENV}
-      service_namespace: genai-otel-bridge
-    log:
-      format: logfmt
-      level: info
-    queue:
-      emit_workers: 1
-      max_batch_bytes: 1048576
-      max_batches: 256
-    selfobs:
-      profiling:
-        enabled: false
-        mode: pull
-        pull: {}
-      tracing:
-        enabled: false
-    sources:
-    - auth:
-        header: x-portkey-api-key
-        value: ${PORTKEY_API_KEY}
-      base_url: https://api.portkey.ai/v1
-      enabled: true
-      loops:
-        analytics:
-          bootstrap_lookback: 50m
-          bucket_settle: 10m
-          cadence: 60s
-          enabled: true
-          graphs:
-          - requests
-          - cost
-          - tokens
-          - latency
-          - errors
-          max_backfill: 90m
-          metric_prefix: portkey_api
-          window: 50m
-      rate_limit:
-        burst: 3
-        rps: 1
-      source_instance: portkey-${ENV}
-      type: portkey
+    app.kubernetes.io/component: config-revision
+immutable: true
+binaryData:
+  # Base64 keeps the mounted bytes identical to the hash input, even when YAML would fold
+  # Unicode line breaks in a quoted scalar or normalise line endings in a block scalar.
+  config.yaml: "ZW1pdDoKICB0ZWxlbWV0cnk6CiAgICBvdGxwOgogICAgICBhbGxvd19pbnNlY3VyZTogZmFsc2UKICAgICAgZW5kcG9pbnQ6ICR7R0NfT1RMUF9FTkRQT0lOVH0KICAgICAgaW5zdGFuY2VfaWQ6ICR7R0NfSU5TVEFOQ0VfSUR9CiAgICAgIHRva2VuOiAke0dDX09UTFBfVE9LRU59CmdvdmVybmFuY2U6CiAgYWxsb3dfbGFiZWxfa2V5czogW10KICBtYXhfY2F0Y2h1cF9wZXJfdGljazogMQogIG1heF9kcG06IDEKICBtYXhfc3RyZWFtX2xhYmVsX2tleXM6IDE1CiAgcGVyX21ldHJpY19jYXJkaW5hbGl0eV9idWRnZXQ6IDEwMDAwCmhhOgogIGNoZWNrcG9pbnQ6IGNvbmZpZ21hcAogIGNvb3JkaW5hdG9yOiBsZWFzZQppZGVudGl0eToKICBkZXBsb3ltZW50X2Vudmlyb25tZW50OiAke0VOVn0KICBzZXJ2aWNlX25hbWVzcGFjZTogZ2VuYWktb3RlbC1icmlkZ2UKbG9nOgogIGZvcm1hdDogbG9nZm10CiAgbGV2ZWw6IGluZm8KcXVldWU6CiAgZW1pdF93b3JrZXJzOiAxCiAgbWF4X2JhdGNoX2J5dGVzOiAxMDQ4NTc2CiAgbWF4X2JhdGNoZXM6IDI1NgpzZWxmb2JzOgogIHByb2ZpbGluZzoKICAgIGVuYWJsZWQ6IGZhbHNlCiAgICBtb2RlOiBwdWxsCiAgICBwdWxsOiB7fQogIHRyYWNpbmc6CiAgICBlbmFibGVkOiBmYWxzZQpzb3VyY2VzOgotIGF1dGg6CiAgICBoZWFkZXI6IHgtcG9ydGtleS1hcGkta2V5CiAgICB2YWx1ZTogJHtQT1JUS0VZX0FQSV9LRVl9CiAgYmFzZV91cmw6IGh0dHBzOi8vYXBpLnBvcnRrZXkuYWkvdjEKICBlbmFibGVkOiB0cnVlCiAgbG9vcHM6CiAgICBhbmFseXRpY3M6CiAgICAgIGJvb3RzdHJhcF9sb29rYmFjazogNTBtCiAgICAgIGJ1Y2tldF9zZXR0bGU6IDEwbQogICAgICBjYWRlbmNlOiA2MHMKICAgICAgZW5hYmxlZDogdHJ1ZQogICAgICBncmFwaHM6CiAgICAgIC0gcmVxdWVzdHMKICAgICAgLSBjb3N0CiAgICAgIC0gdG9rZW5zCiAgICAgIC0gbGF0ZW5jeQogICAgICAtIGVycm9ycwogICAgICBtYXhfYmFja2ZpbGw6IDkwbQogICAgICBtZXRyaWNfcHJlZml4OiBwb3J0a2V5X2FwaQogICAgICB3aW5kb3c6IDUwbQogIHJhdGVfbGltaXQ6CiAgICBidXJzdDogMwogICAgcnBzOiAxCiAgc291cmNlX2luc3RhbmNlOiBwb3J0a2V5LSR7RU5WfQogIHR5cGU6IHBvcnRrZXkK"
 
 ---
 # Source: genai-otel-bridge/templates/rbac.yaml
@@ -398,13 +342,7 @@ spec:
         app.kubernetes.io/instance: rel
         app.kubernetes.io/managed-by: Helm
       annotations:
-        # Roll the pods when the rendered config ConfigMap changes. The binary reads config only at
-        # startup, so without this a `helm upgrade` that changes config: / configOverride updates the
-        # ConfigMap but leaves pods on stale config. Hashes ONLY templates/configmap.yaml (the
-        # genai-otel-bridge-config CM); the runtime genai-otel-bridge-checkpoints state CM is app-created, not chart-rendered,
-        # so it is intentionally not hashed here. A roll triggers one Lease failover: SIGTERM
-        # hard-cancels in-flight work (no drain), and the next leader re-pulls the interrupted window
-        # idempotently from the last committed watermark — so the roll is safe without a drain window.
+        # Retain the optional checksum for tooling. The volume reference now drives config rollouts.
     spec:
       serviceAccountName: genai-otel-bridge
 
@@ -527,7 +465,7 @@ spec:
               protocol: TCP
 
           volumeMounts:
-            # Config from the genai-otel-bridge-config ConfigMap (config.yaml with ${ENV} refs pre-resolved).
+            # Each pod template pins the immutable revision of its config.yaml.
             - name: config
               mountPath: /etc/genai-otel-bridge
               readOnly: true
@@ -544,7 +482,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: genai-otel-bridge-config
+            name: genai-otel-bridge-config-295523d247dfea177ee25b143bd067f23ec8087af877ca3a766b2d32b1cac483
         # emptyDir: lost on pod restart, which is correct (the durable watermark is the ConfigMap
         # checkpoint; state/ is only ever written by the dev file checkpointer).
         - name: state

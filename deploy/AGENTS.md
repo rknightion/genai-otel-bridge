@@ -40,8 +40,12 @@
   and default image lines removed). Regenerate it with `just helm-default-render > test/helm/default-render.yaml`
   only for an intended change to the default render.
 - The termination grace period bounds time to SIGKILL and covers the emit-retry budget; it is not a drain window (see `internal/coordinate/AGENTS.md`).
-- The `checksum/config` pod annotation (gated by `rolloutOnConfigChange`) hashes **only**
-  `templates/configmap.yaml`, never the app-created checkpoint state CM.
+- Config revisions: `configBytes` is the exact mounted file. Its SHA-256 names the immutable
+  ConfigMap and drives rollout via the Deployment volume reference. `rolloutOnConfigChange`
+  gates only the optional `checksum/config` annotation. The app-created checkpoint ConfigMap
+  is not a revision. Both Helm keep and Argo CD sync-prune protection apply to each revision.
+  Nothing in the chart deletes old revisions; clean-up is manual. See
+  [Config revisions](../docs/installation.md#config-revisions) for migration and clean-up.
 - Topology spread is by host **and** zone, both `ScheduleAnyway`, so a single-node or single-AZ dev
   cluster still schedules while multi-AZ EKS lands the standby elsewhere.
 - **The `config:` map in `values.yaml` (between the `# >>> BEGIN/END generated config <<<` markers)

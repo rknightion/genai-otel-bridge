@@ -37,14 +37,8 @@ spec:
         {{- include "genai-otel-bridge.labels" . | nindent 8 }}
       {{- if .Values.rolloutOnConfigChange }}
       annotations:
-        # Roll the pods when the rendered config ConfigMap changes. The binary reads config only at
-        # startup, so without this a `helm upgrade` that changes config: / configOverride updates the
-        # ConfigMap but leaves pods on stale config. Hashes ONLY templates/configmap.yaml (the
-        # genai-otel-bridge-config CM); the runtime genai-otel-bridge-checkpoints state CM is app-created, not chart-rendered,
-        # so it is intentionally not hashed here. A roll triggers one Lease failover: SIGTERM
-        # hard-cancels in-flight work (no drain), and the next leader re-pulls the interrupted window
-        # idempotently from the last committed watermark — so the roll is safe without a drain window.
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Retain the optional checksum for tooling. The volume reference now drives config rollouts.
+        checksum/config: {{ include "genai-otel-bridge.configBytes" . | sha256sum }}
       {{- end }}
     spec:
       serviceAccountName: genai-otel-bridge
@@ -212,7 +206,7 @@ spec:
 {{- end }}
 
           volumeMounts:
-            # Config from the genai-otel-bridge-config ConfigMap (config.yaml with ${ENV} refs pre-resolved).
+            # Each pod template pins the immutable revision of its config.yaml.
             - name: config
               mountPath: /etc/genai-otel-bridge
               readOnly: true
@@ -238,7 +232,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: genai-otel-bridge-config
+            name: {{ include "genai-otel-bridge.configName" . }}
         # emptyDir: lost on pod restart, which is correct (the durable watermark is the ConfigMap
         # checkpoint; state/ is only ever written by the dev file checkpointer).
         - name: state

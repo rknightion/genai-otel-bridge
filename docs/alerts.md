@@ -178,20 +178,16 @@ See also: [Troubleshooting — auth errors](./troubleshooting.md#auth-errors-401
 
 **Severity:** warning
 
-**Fires when:** the LangSmith `runs` loop truncated a window — it advanced past undrained
-records with a counted gap. Some log records were dropped. Only `runs` emits `window_truncated`;
-a Portkey `logs_export` window that is too large is parked instead (see
+**Fires when:** a source loop truncates a window, for example when LangSmith `runs` reaches
+its page cap. The loop advances past undrained records with a counted gap. A Portkey `logs_export`
+window that is too large is parked instead (see
 [GenaiOtelBridgeExportPipelineDataIncomplete](#genaiotelbridgeexportpipelinedataincomplete)).
 
-**Query:** `sum by (loop) (increase(genai_otel_bridge_source_data_incomplete_total{reason="window_truncated"}[10m])) > 0`
+**Query:** see the [bundled window-truncation rule](../deploy/grafana/self-obs/alertrule-window-truncated.yaml).
+It groups by source and loop and keeps tenant and pipeline when present.
 
-The truncated count is unknowable by construction (the loop stops at the page cap).
-
-**What to check:**
-
-1. Which loop truncated? The `loop` label identifies it (`runs`).
-2. Increase `settings.max_pages_per_window` or narrow the scope
-   via `settings.session_filter`.
+**What to check:** find the affected `source` and `loop`. Raise the loop's page cap or narrow
+its scope or window. The number of undrained records is unknown because the loop stops at the cap.
 
 ---
 
@@ -205,7 +201,8 @@ produce the target's data. `window_oversize` means a Portkey `logs_export` windo
 than `settings.max_pages_per_window`: the loop fires the counter once, parks the window and stops
 advancing. Nothing was dropped, but the loop is stalled until the window changes.
 
-**Query:** `sum by (loop, reason) (increase(genai_otel_bridge_source_data_incomplete_total{reason=~"export_failed|export_stuck|window_oversize"}[15m])) > 0`
+**Query:** see the [bundled incomplete-export rule](../deploy/grafana/self-obs/alertrule-export-pipeline-data-incomplete.yaml).
+It groups by source, loop and reason.
 
 **What to check:** inspect the export-job status, then its retry and backoff behaviour. The `loop` and
 `reason` labels distinguish a failed export from a stuck one.
@@ -225,7 +222,8 @@ re-planned once the window setting changes. The counter fires once per park, so 
 `graph="workspace_scope",state="permission-denied"`. The loop refuses to emit until the configured
 credential and expected workspace scope agree.
 
-**Query:** `sum by (loop) (increase(genai_otel_bridge_source_capability_total{graph="workspace_scope",state="permission-denied"}[15m])) > 0`
+**Query:** see the [bundled workspace-scope rule](../deploy/grafana/self-obs/alertrule-workspace-scope-permission-denied.yaml).
+It groups by source and loop.
 
 **What to check:** compare the configured expected workspace scope with the credential, especially
 after a key rotation. `endpoint-absent` and `plan-unsupported` are valid capability states but currently

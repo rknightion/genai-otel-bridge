@@ -109,17 +109,17 @@ type logsExportLoop struct {
 	// onDataIncomplete, if set, counts a failed/abandoned export job as an alertable self-metric so a
 	// flapping export is visible in metrics, not just logs — distinct from window_lag (the "stuck" symptom).
 	// nil ⇒ log only.
-	onDataIncomplete func(loop string, reason source.IncompleteReason)
+	onDataIncomplete func(loop, instance string, reason source.IncompleteReason)
 	onAuthError      func(loop, source string) // followup §9: 401/403 on a lifecycle call → own alertable signal
 	// onCapability, if set, receives the schema-changed state when the create response loses id/total.
-	onCapability func(loop, graph string, state source.CapabilityState)
+	onCapability func(loop, instance, graph string, state source.CapabilityState)
 	now          func() time.Time
 }
 
 // jobFailed records an export-job failure/abandonment as a loud, counted, alertable event.
 func (l *logsExportLoop) jobFailed(reason source.IncompleteReason) {
 	if l.onDataIncomplete != nil {
-		l.onDataIncomplete("logs_export", reason)
+		l.onDataIncomplete("logs_export", l.sourceInstance, reason)
 	}
 }
 
@@ -127,7 +127,7 @@ func (l *logsExportLoop) jobFailed(reason source.IncompleteReason) {
 // unstorable span (the LangSmith runs loop counts the same event).
 func (l *logsExportLoop) backfillSkipped() {
 	if l.onDataIncomplete != nil {
-		l.onDataIncomplete("logs_export", source.IncompleteBackfillSkipped)
+		l.onDataIncomplete("logs_export", l.sourceInstance, source.IncompleteBackfillSkipped)
 	}
 }
 
@@ -137,7 +137,7 @@ func (l *logsExportLoop) backfillSkipped() {
 // upstream changed the format — is alertable rather than silently 0% effective.
 func (l *logsExportLoop) traceIDUnparsed() {
 	if l.onDataIncomplete != nil {
-		l.onDataIncomplete("logs_export", source.IncompleteTraceIDUnparsed)
+		l.onDataIncomplete("logs_export", l.sourceInstance, source.IncompleteTraceIDUnparsed)
 	}
 }
 
@@ -148,7 +148,7 @@ func (l *logsExportLoop) traceIDUnparsed() {
 // than a silent gap. The oversized bytes are NEVER parsed or stringified (they may be content-bearing).
 func (l *logsExportLoop) lineOversize() {
 	if l.onDataIncomplete != nil {
-		l.onDataIncomplete("logs_export", source.IncompleteLineOversize)
+		l.onDataIncomplete("logs_export", l.sourceInstance, source.IncompleteLineOversize)
 	}
 }
 
@@ -161,7 +161,7 @@ func (l *logsExportLoop) lineOversize() {
 // export_failed / trace_id_unparsed.
 func (l *logsExportLoop) lineMalformed() {
 	if l.onDataIncomplete != nil {
-		l.onDataIncomplete("logs_export", source.IncompleteLineUnparseable)
+		l.onDataIncomplete("logs_export", l.sourceInstance, source.IncompleteLineUnparseable)
 	}
 }
 

@@ -286,11 +286,9 @@ func BuildFromPlan(ctx context.Context, cfg *config.Config, plan tenancy.Plan, c
 				"epoch", maxStored)
 		}
 	}
-	// Seed the alerted {loop, reason} counters at 0 so the first event after startup is visible to
-	// increase() (#499). Optional capability, asserted on each row's PipelineTelemetry value: neither
-	// schedule.Metrics nor PipelineTelemetry carries it. Each row's telemetry seeds that row's loops only.
-	// [#387] samples_skipped is recorded under the runner's {source, loop} identity and
-	// source_data_incomplete under the bare loop name a source hook passes, so the seed takes both.
+	// Seed the alerted series at 0 so increase() sees the first event after startup (#499).
+	// Each row's telemetry seeds that row's loops only. The source hooks use the same source as
+	// the runner but keep the bare loop name, so the seed takes both loop names.
 	for _, p := range pipes {
 		if s, ok := p.t.(interface {
 			SeedLoop(id schedule.LoopID, hookLoop string)
@@ -369,11 +367,11 @@ func sourceDeps(m PipelineTelemetry, authLim *logging.Limiter) source.Deps {
 		// Capability/permission conditions and incomplete-data events are separate closed contracts.
 		// Source packages pass typed constants; these adapters are the only conversion to the schedule
 		// metrics seam's deliberately plain strings.
-		OnCapability: func(loop, graph string, state source.CapabilityState) {
-			m.SourceCapability(loop, graph, string(state))
+		OnCapability: func(loop, sourceInstance, graph string, state source.CapabilityState) {
+			m.SourceCapability(loop, sourceInstance, graph, string(state))
 		},
-		OnDataIncomplete: func(loop string, reason source.IncompleteReason) {
-			m.SourceDataIncomplete(loop, string(reason))
+		OnDataIncomplete: func(loop, sourceInstance string, reason source.IncompleteReason) {
+			m.SourceDataIncomplete(loop, sourceInstance, string(reason))
 		},
 		// [followup §9] An upstream 401/403 already surfaces as a retryable Collect error (window_lag
 		// rises), but that is indistinguishable in metrics from a generic slow/erroring endpoint. Wire

@@ -20,7 +20,7 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "genai-otel-bridge {{ $labels.loop }} loop: settled buckets are still being revised (late source data)"
+    summary: "genai-otel-bridge {{ $labels.source }}/{{ $labels.loop }}: settled buckets are still being revised (late source data)"
     description: "genai_otel_bridge_bucket_revised_after_settle_total for the {{ $labels.loop }} loop is increasing at >30/h — late-arriving source data is landing after the bucket_settle window, so already-emitted metrics are being revised. The source API is back-filling its own aggregates later than expected. Remedy: widen the loop's settings.bucket_settle. See deploy/grafana/README.md."
   expressions:
     query:

@@ -162,15 +162,13 @@ func seededSeries(t *testing.T, reader metric.Reader) map[string]map[string]int6
 				continue
 			}
 			for _, dp := range sum.DataPoints {
-				loop, _ := dp.Attributes.Value(attribute.Key("loop"))
-				reason, ok := dp.Attributes.Value(attribute.Key("reason"))
-				if !ok {
+				if _, ok := dp.Attributes.Value("reason"); !ok {
 					continue
 				}
 				if out[mt.Name] == nil {
 					out[mt.Name] = map[string]int64{}
 				}
-				out[mt.Name][loop.AsString()+"/"+reason.AsString()] = dp.Value
+				out[mt.Name][dp.Attributes.Encoded(attribute.DefaultEncoder())] = dp.Value
 			}
 		}
 	}
@@ -185,28 +183,36 @@ func TestSeedLoopCreatesAlertedSeriesAtZeroAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.SeedLoop(loopid.ID{Source: "s", Loop: "loop_a"}, "loop_a")
+	// A fan-out loop uses different loop names on runner-fed and hook-fed instruments.
+	id := loopid.ID{Source: "s", Loop: "runner-loop"}
+	const hookLoop = "hook-loop"
+	const incomplete = "genai_otel_bridge_source_data_incomplete_total"
+	m.SeedLoop(id, hookLoop)
 	read := reasonsReadByRules(t, "source_data_incomplete", "samples_skipped")
 	got := seededSeries(t, reader)
-	for name, reasons := range map[string][]string{
-		"genai_otel_bridge_source_data_incomplete_total": read["source_data_incomplete"],
-		"genai_otel_bridge_samples_skipped_total":        read["samples_skipped"],
+	for _, tc := range []struct {
+		name, loop string
+		reasons    []string
+	}{
+		{incomplete, hookLoop, read["source_data_incomplete"]},
+		{"genai_otel_bridge_samples_skipped_total", id.Loop, read["samples_skipped"]},
 	} {
-		if len(got[name]) != len(reasons) {
-			t.Errorf("%s: %d series seeded, want exactly the %d reasons a rule reads: %v", name, len(got[name]), len(reasons), got[name])
+		if len(got[tc.name]) != len(tc.reasons) {
+			t.Errorf("%s: %d series seeded, want exactly the %d reasons a rule reads: %v", tc.name, len(got[tc.name]), len(tc.reasons), got[tc.name])
 		}
-		for _, r := range reasons {
-			v, ok := got[name]["loop_a/"+r]
+		for _, r := range tc.reasons {
+			key := "loop=" + tc.loop + ",reason=" + r + ",source=s"
+			v, ok := got[tc.name][key]
 			if !ok || v != 0 {
-				t.Errorf("%s{loop=loop_a,reason=%s}: present=%v value=%d, want present at 0", name, r, ok, v)
+				t.Errorf("%s{%s}: present=%v value=%d, want present at 0; got %v", tc.name, key, ok, v, got[tc.name])
 			}
 		}
 	}
-	// AC3: the first window_oversize event moves the series from 0 to 1, a rise increase() can see.
-	m.SourceDataIncomplete("loop_a", "window_oversize")
-	after := seededSeries(t, reader)["genai_otel_bridge_source_data_incomplete_total"]["loop_a/window_oversize"]
-	if after != 1 {
-		t.Errorf("after first event value=%d, want 1 (0 -> 1 step)", after)
+	// The first event must increment the seeded series, not create a new one born at 1.
+	m.SourceDataIncomplete(hookLoop, id.Source, "window_oversize")
+	after := seededSeries(t, reader)[incomplete]
+	if after["loop=hook-loop,reason=window_oversize,source=s"] != 1 || len(after) != len(got[incomplete]) {
+		t.Errorf("after first event: got %v, want the seeded window_oversize series at 1 and no new series", after)
 	}
 }
 

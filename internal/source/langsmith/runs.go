@@ -93,7 +93,7 @@ type runsLoop struct {
 	runType  string
 
 	policy           runsFieldPolicy
-	onDataIncomplete func(loop string, reason source.IncompleteReason)
+	onDataIncomplete func(loop, instance string, reason source.IncompleteReason)
 	onAuthError      func(loop, source string)
 	now              func() time.Time
 
@@ -137,7 +137,7 @@ func (l *runsLoop) Key() model.CheckpointKey {
 // windowTruncated records an oversize-window tail-drop as a loud, counted, alertable event.
 func (l *runsLoop) windowTruncated() {
 	if l.onDataIncomplete != nil {
-		l.onDataIncomplete("runs", source.IncompleteWindowTruncated)
+		l.onDataIncomplete("runs", l.sourceInstance, source.IncompleteWindowTruncated)
 	}
 }
 
@@ -146,7 +146,7 @@ func (l *runsLoop) windowTruncated() {
 // growing past the cap is observable, not a silent drop).
 func (l *runsLoop) sessionsTruncated() {
 	if l.onDataIncomplete != nil {
-		l.onDataIncomplete("runs", source.IncompleteSessionsTruncated)
+		l.onDataIncomplete("runs", l.sourceInstance, source.IncompleteSessionsTruncated)
 	}
 }
 
@@ -158,7 +158,7 @@ func (l *runsLoop) sessionsTruncated() {
 // silently drops that log span with only a log line — violating the "every gap is alertable" rule.
 func (l *runsLoop) backfillSkipped() {
 	if l.onDataIncomplete != nil {
-		l.onDataIncomplete("runs", source.IncompleteBackfillSkipped)
+		l.onDataIncomplete("runs", l.sourceInstance, source.IncompleteBackfillSkipped)
 	}
 }
 

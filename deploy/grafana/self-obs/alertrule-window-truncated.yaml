@@ -16,7 +16,7 @@ spec:
   labels:
     severity: warning
   annotations:
-    summary: "genai-otel-bridge {{ $labels.loop }} loop is dropping records (window exceeded max_pages_per_window)"
+    summary: "genai-otel-bridge {{ $labels.source }}/{{ $labels.loop }} is dropping records (window exceeded max_pages_per_window)"
     description: "The {{ $labels.loop }} loop truncated >=1 polling window in the last 10m and advanced past undrained records (counted gap). Raise settings.max_pages_per_window or shrink settings.window. See deploy/grafana/README.md."
   expressions:
     query:

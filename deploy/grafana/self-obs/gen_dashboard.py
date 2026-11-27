@@ -21,8 +21,8 @@ PYRO = "${pyroscope}"
 # [#387] $loop offers BASE loop names: its regex keeps the part before a comma, so a fan-out
 # logs_export instance ("logs_export,api_key_use_case=<slug>" on the runner-fed metrics) is offered
 # as "logs_export". Runner-fed metrics match the base name plus an optional ",..." suffix (LOOP);
-# hook-fed counters (bucket_revised_after_settle*, source_capability, source_data_incomplete,
-# auth_errors) carry the bare Key().Loop and match it exactly (HOOK_LOOP). Selecting a loop therefore
+# hook-fed instruments (bucket_revised_after_settle*, source_capability, source_data_incomplete,
+# auth_errors) keep the bare Key().Loop and match it exactly (HOOK_LOOP). Selecting a loop therefore
 # shows both kinds. TestDashboardLoopFilterMatchesEveryInstrument (internal/selfobs) checks every
 # selector against the label each metric really carries.
 LOOP = '{tenant=~"$tenant",pipeline=~"$pipeline",loop=~"$loop(,.*)?"}'
@@ -191,7 +191,7 @@ add(ts(135, "Samples capped /s (DPM)", "rate(genai_otel_bridge_samples_capped_to
        "cps", [(f'sum by (tenant, pipeline, loop) (rate(genai_otel_bridge_samples_capped_total{LOOP}[{RI}]))', "{{loop}}")]))
 add(ts(136, "Guard dropped /s by loop (governance)", "rate(genai_otel_bridge_guard_dropped_total). Data points / logs dropped by the cardinality/content governance Guard (default-deny label allow-list, field denylist). Expected non-zero if a denylist is configured.",
        "cps", [(f'sum by (tenant, pipeline, loop) (rate(genai_otel_bridge_guard_dropped_total{LOOP}[{RI}]))', "{{loop}}")]))
-add(ts(137, "Buckets revised after settle /s", "rate(genai_otel_bridge_bucket_revised_after_settle_total). A settled bucket changed value after bucket_settle (late arrivals). Persistent non-zero => widen the loop's bucket_settle (GenaiOtelBridgeBucketRevisedAfterSettle).",
+add(ts(137, "Buckets revised after settle /s", "rate(genai_otel_bridge_bucket_revised_after_settle_total) by loop, summed across sources within each pipeline. A settled bucket changed value after bucket_settle (late arrivals). Persistent non-zero => widen the loop's bucket_settle (GenaiOtelBridgeBucketRevisedAfterSettle).",
        "cps", [(f'sum by (tenant, pipeline, loop) (rate(genai_otel_bridge_bucket_revised_after_settle_total{HOOK_LOOP}[{RI}]))', "{{loop}}")]))
 add(ts(138, "Bucket revision lateness (age p50/p95)", "histogram_quantile over genai_otel_bridge_bucket_revised_after_settle_age_seconds — HOW LATE post-settle revisions are (now - bucketEnd), vs panel 137's how-often. Tune bucket_settle toward p95 to capture them (metrics can't be backfilled — Mimir rejects a changed value at an already-emitted timestamp). Floors at bucket_settle by construction.",
        "s", [(f'histogram_quantile(0.50, sum by (tenant, pipeline, loop) (rate(genai_otel_bridge_bucket_revised_after_settle_age_seconds{HOOK_LOOP}[{RI}])))', "p50 {{loop}}"),
@@ -213,9 +213,9 @@ add(ts(142, "Upstream error ratio by target", "genai-otel-bridge:upstream_error_
        "percentunit", [('genai-otel-bridge:upstream_error_ratio:5m', "{{target}}")], thresholds=steps((None, "green"), (0.2, "red"))))
 add(ts(143, "Auth errors /s (401/403)", "rate(genai_otel_bridge_auth_errors_total) by loop & source. Credential failure (wrong/expired key, missing scope) — distinct from slow/erroring endpoints. GenaiOtelBridgeAuthErrors fires on > 0.",
        "cps", [(f'sum by (tenant, pipeline, loop, source) (rate(genai_otel_bridge_auth_errors_total{HOOK_LOOP}[{RI}]))', "{{loop}} / {{source}}")]))
-add(ts(144, "Source capability outcomes /s", "rate(genai_otel_bridge_source_capability_total) by loop, graph, and state. permission-denied means the capability cannot be used; GenaiOtelBridgeWorkspaceScopePermissionDenied covers workspace_scope. endpoint-absent and plan-unsupported are valid reserved states but currently producerless, so no series distinguishes them; a single 404 remains ambiguous and steady versus intermittent increments require query-time judgement.",
+add(ts(144, "Source capability outcomes /s", "rate(genai_otel_bridge_source_capability_total) by loop, graph, and state, summed across sources within each pipeline. permission-denied means the capability cannot be used; GenaiOtelBridgeWorkspaceScopePermissionDenied covers workspace_scope. endpoint-absent and plan-unsupported are valid reserved states but currently producerless, so no series distinguishes them; a single 404 remains ambiguous and steady versus intermittent increments require query-time judgement.",
        "cps", [(f'sum by (tenant, pipeline, loop, graph, state) (rate(genai_otel_bridge_source_capability_total{HOOK_LOOP}[{RI}]))', "{{loop}} / {{graph}} / {{state}}")]))
-add(ts(145, "Source data incompleteness /s", "rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason. window_truncated (LangSmith runs only) is a counted dropped-records gap; export_failed/export_stuck mean the export pipeline cannot produce data; window_oversize is a parked Portkey logs_export window (nothing dropped, shrink settings.window). GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.",
+add(ts(145, "Source data incompleteness /s", "rate(genai_otel_bridge_source_data_incomplete_total) by loop and reason, summed across sources within each pipeline. window_truncated is a counted gap; export_failed/export_stuck mean the export pipeline cannot produce data; window_oversize is a parked Portkey logs_export window (nothing dropped, shrink settings.window). GenaiOtelBridgeWindowTruncatedDroppingRecords and GenaiOtelBridgeExportPipelineDataIncomplete alert on those reasons.",
        "cps", [(f'sum by (tenant, pipeline, loop, reason) (rate(genai_otel_bridge_source_data_incomplete_total{HOOK_LOOP}[{RI}]))', "{{loop}} / {{reason}}")]))
 
 # === Tab: Cardinality & governance ===========================================

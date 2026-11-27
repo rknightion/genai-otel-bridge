@@ -53,7 +53,7 @@ type usageLoop struct {
 	emitSpanCounts            bool
 	deriveCfg                 usageDeriveConfig
 	onAuthError               func(loop, source string)
-	onDataIncomplete          func(loop string, reason source.IncompleteReason)
+	onDataIncomplete          func(loop, instance string, reason source.IncompleteReason)
 	now                       func() time.Time
 }
 
@@ -182,7 +182,7 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 		slog.Warn("langsmith usage sessions truncated at MaxSessions cap",
 			"source", l.sourceInstance, "max_sessions", l.maxSessions)
 		if l.onDataIncomplete != nil {
-			l.onDataIncomplete("usage", source.IncompleteSessionsTruncated)
+			l.onDataIncomplete("usage", l.sourceInstance, source.IncompleteSessionsTruncated)
 		}
 	}
 
@@ -202,7 +202,7 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 				skipped += len(sessions) - i
 				lastStatus = code
 				if l.onDataIncomplete != nil {
-					l.onDataIncomplete("usage", source.IncompleteSpanStatsUnavailable)
+					l.onDataIncomplete("usage", l.sourceInstance, source.IncompleteSpanStatsUnavailable)
 				}
 				break fanout
 			}
@@ -214,7 +214,7 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 					l.onAuthError("usage", l.sourceInstance)
 				}
 				if l.onDataIncomplete != nil {
-					l.onDataIncomplete("usage", source.IncompleteSpanStatsUnavailable)
+					l.onDataIncomplete("usage", l.sourceInstance, source.IncompleteSpanStatsUnavailable)
 				}
 				skipped++
 				lastStatus, lastErr = code, err
@@ -223,7 +223,7 @@ func (l *usageLoop) Collect(ctx context.Context, since model.Watermark) (model.B
 					if rest := len(sessions) - i - 1; rest > 0 {
 						skipped += rest
 						if l.onDataIncomplete != nil { // once for the abandoned remainder
-							l.onDataIncomplete("usage", source.IncompleteSpanStatsUnavailable)
+							l.onDataIncomplete("usage", l.sourceInstance, source.IncompleteSpanStatsUnavailable)
 						}
 					}
 					break fanout

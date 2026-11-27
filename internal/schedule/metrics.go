@@ -31,22 +31,22 @@ func MetricsLoopID(l source.Loop) LoopID {
 // Metrics is the self-observability seam (selfobs implements it; cmd wires it in). Defined here
 // so schedule does not import selfobs (no cycle). The methods the runner and scheduler record take a
 // LoopID, so two loop instances never share a series; the hooks the composition root wires to source
-// packages (BucketRevisedAfterSettle, SourceCapability, SourceDataIncomplete, AuthError) still take the
-// bare loop name the source passes.
+// packages (BucketRevisedAfterSettle, SourceCapability, SourceDataIncomplete, AuthError) take the
+// same source instance and the source's bare loop name.
 type Metrics interface {
 	EmittedSamples(id LoopID, n int)
 	EmittedLogs(id LoopID, n int) // log records successfully emitted (distinct from metric samples)
 	SamplesSkipped(id LoopID, reason string, n int)
 	EmitError(id LoopID, kind string) // kind: bad_encoding | retryable_exhausted | checkpoint_* | ...
 	GuardDropped(id LoopID, n int)
-	BucketRevisedAfterSettle(loop string, age time.Duration) // age = how late (now − bucketEnd); records count + age histogram
+	BucketRevisedAfterSettle(loop, source string, age time.Duration) // age = how late (now − bucketEnd); records count + age histogram
 	QueueDepth(id LoopID, depth int)
 	LastSuccess(id LoopID, t time.Time)
 	WindowLag(id LoopID, lag time.Duration)
 	NewLabelValue(series string)
 	SamplesCapped(id LoopID, n int) // samples suppressed by the DPM cap (reason="dpm")
-	SourceCapability(loop, graph, state string)
-	SourceDataIncomplete(loop, reason string)
+	SourceCapability(loop, source, graph, state string)
+	SourceDataIncomplete(loop, source, reason string)
 	AuthError(loop, source string)                        // upstream responded 401/403 — credential failure, own alertable signal
 	LoopDegraded(id LoopID, reason string, degraded bool) // [#120] 0/1 gauge: loop entered/left degraded (non-flapping state)
 }
@@ -54,18 +54,18 @@ type Metrics interface {
 // NoopMetrics is the default (tests, dev).
 type NoopMetrics struct{}
 
-func (NoopMetrics) EmittedSamples(LoopID, int)                     {}
-func (NoopMetrics) EmittedLogs(LoopID, int)                        {}
-func (NoopMetrics) SamplesSkipped(LoopID, string, int)             {}
-func (NoopMetrics) EmitError(LoopID, string)                       {}
-func (NoopMetrics) GuardDropped(LoopID, int)                       {}
-func (NoopMetrics) BucketRevisedAfterSettle(string, time.Duration) {}
-func (NoopMetrics) QueueDepth(LoopID, int)                         {}
-func (NoopMetrics) LastSuccess(LoopID, time.Time)                  {}
-func (NoopMetrics) WindowLag(LoopID, time.Duration)                {}
-func (NoopMetrics) NewLabelValue(string)                           {}
-func (NoopMetrics) SamplesCapped(LoopID, int)                      {}
-func (NoopMetrics) SourceCapability(string, string, string)        {}
-func (NoopMetrics) SourceDataIncomplete(string, string)            {}
-func (NoopMetrics) AuthError(string, string)                       {}
-func (NoopMetrics) LoopDegraded(LoopID, string, bool)              {}
+func (NoopMetrics) EmittedSamples(LoopID, int)                             {}
+func (NoopMetrics) EmittedLogs(LoopID, int)                                {}
+func (NoopMetrics) SamplesSkipped(LoopID, string, int)                     {}
+func (NoopMetrics) EmitError(LoopID, string)                               {}
+func (NoopMetrics) GuardDropped(LoopID, int)                               {}
+func (NoopMetrics) BucketRevisedAfterSettle(string, string, time.Duration) {}
+func (NoopMetrics) QueueDepth(LoopID, int)                                 {}
+func (NoopMetrics) LastSuccess(LoopID, time.Time)                          {}
+func (NoopMetrics) WindowLag(LoopID, time.Duration)                        {}
+func (NoopMetrics) NewLabelValue(string)                                   {}
+func (NoopMetrics) SamplesCapped(LoopID, int)                              {}
+func (NoopMetrics) SourceCapability(string, string, string, string)        {}
+func (NoopMetrics) SourceDataIncomplete(string, string, string)            {}
+func (NoopMetrics) AuthError(string, string)                               {}
+func (NoopMetrics) LoopDegraded(LoopID, string, bool)                      {}

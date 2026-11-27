@@ -184,7 +184,7 @@ var (
 // Call it once per configured loop at startup (after app.Build). It adds no series for any other reason,
 // so the series count stays bounded by the alert rules. Each counter is seeded under the attribute set
 // its producer records [#387]: samples_skipped under the runner's {source, loop, reason} (id), and
-// source_data_incomplete under the {loop, reason} a source hook records (hookLoop, the bare Key().Loop).
+// source_data_incomplete under the hook's {source, loop, reason} (id.Source and the bare hookLoop).
 // emit_errors_total is seeded under the runner's {source, loop, kind} for the kinds the emit-failing rule
 // reads, and auth_errors_total under the hook's {loop, source} (#517; the auth rule has no label matcher,
 // so every loop's series is read, and source is the runner identity's Source, as the hooks pass it).
@@ -192,9 +192,9 @@ var (
 // producers record under.
 func (m *Metrics) SeedLoop(id loopid.ID, hookLoop string) {
 	ctx := context.Background()
+	hookID := loopid.ID{Source: id.Source, Loop: hookLoop}
 	for _, reason := range alertedIncompleteReasons {
-		m.sourceDataIncomplete.Add(ctx, 0, m.attrs(
-			attribute.String("loop", hookLoop), attribute.String("reason", reason)))
+		m.sourceDataIncomplete.Add(ctx, 0, m.idAttrs(hookID, attribute.String("reason", reason)))
 	}
 	for _, reason := range alertedSkipReasons {
 		m.skipped.Add(ctx, 0, m.idAttrs(id, attribute.String("reason", reason)))
@@ -243,8 +243,8 @@ func (m *Metrics) EmitError(id loopid.ID, kind string) {
 func (m *Metrics) GuardDropped(id loopid.ID, n int) {
 	m.guardDropped.Add(context.Background(), int64(n), m.idAttrs(id))
 }
-func (m *Metrics) BucketRevisedAfterSettle(loop string, age time.Duration) {
-	m.revised.Add(context.Background(), 1, m.loopAttr(loop))
+func (m *Metrics) BucketRevisedAfterSettle(loop, source string, age time.Duration) {
+	m.revised.Add(context.Background(), 1, m.idAttrs(loopid.ID{Source: source, Loop: loop}))
 	m.revisedAge.Record(context.Background(), age.Seconds(), m.loopAttr(loop))
 }
 func (m *Metrics) NewLabelValue(series string) {
@@ -253,13 +253,13 @@ func (m *Metrics) NewLabelValue(series string) {
 func (m *Metrics) SamplesCapped(id loopid.ID, n int) {
 	m.capped.Add(context.Background(), int64(n), m.idAttrs(id, attribute.String("reason", "dpm")))
 }
-func (m *Metrics) SourceCapability(loop, graph, state string) {
-	m.sourceCapability.Add(context.Background(), 1, m.attrs(
-		attribute.String("loop", loop), attribute.String("graph", graph), attribute.String("state", state)))
+func (m *Metrics) SourceCapability(loop, source, graph, state string) {
+	m.sourceCapability.Add(context.Background(), 1, m.idAttrs(loopid.ID{Source: source, Loop: loop},
+		attribute.String("graph", graph), attribute.String("state", state)))
 }
-func (m *Metrics) SourceDataIncomplete(loop, reason string) {
-	m.sourceDataIncomplete.Add(context.Background(), 1, m.attrs(
-		attribute.String("loop", loop), attribute.String("reason", reason)))
+func (m *Metrics) SourceDataIncomplete(loop, source, reason string) {
+	m.sourceDataIncomplete.Add(context.Background(), 1, m.idAttrs(loopid.ID{Source: source, Loop: loop},
+		attribute.String("reason", reason)))
 }
 func (m *Metrics) AuthError(loop, source string) {
 	m.authErr.Add(context.Background(), 1, m.attrs(

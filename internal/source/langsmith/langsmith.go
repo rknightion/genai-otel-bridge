@@ -254,7 +254,7 @@ type sessionsLoop struct {
 	pageLimit, maxSessions    int
 	deriveCfg                 deriveConfig
 	onAuthError               func(loop, source string)
-	onDataIncomplete          func(loop string, reason source.IncompleteReason)
+	onDataIncomplete          func(loop, instance string, reason source.IncompleteReason)
 	now                       func() time.Time
 }
 
@@ -348,7 +348,7 @@ func (l *sessionsLoop) Collect(ctx context.Context, since model.Watermark) (mode
 		slog.Warn("langsmith sessions truncated at MaxSessions cap",
 			"source", l.sourceInstance, "max_sessions", l.maxSessions)
 		if l.onDataIncomplete != nil {
-			l.onDataIncomplete("sessions", source.IncompleteSessionsTruncated)
+			l.onDataIncomplete("sessions", l.sourceInstance, source.IncompleteSessionsTruncated)
 		}
 	}
 

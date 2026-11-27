@@ -241,7 +241,7 @@ func TestTenantPayloadGolden(t *testing.T) {
 var goldenSelfLabelSets = map[string][]string{
 	"genai_otel_bridge_auth_errors_total":                       {"loop=analytics,pipeline=team-a.prod,source=mt.team-a.prod,tenant=team-a"},
 	"genai_otel_bridge_bucket_revised_after_settle_age_seconds": {"loop=analytics,pipeline=team-a.prod,tenant=team-a"},
-	"genai_otel_bridge_bucket_revised_after_settle_total":       {"loop=analytics,pipeline=team-a.prod,tenant=team-a"},
+	"genai_otel_bridge_bucket_revised_after_settle_total":       {"loop=analytics,pipeline=team-a.prod,source=mt.team-a.prod,tenant=team-a"},
 	"genai_otel_bridge_emit_errors_total": {
 		"kind=bad_encoding,loop=analytics,pipeline=team-a.prod,source=mt.team-a.prod,tenant=team-a",
 		"kind=checkpoint_fenced,loop=analytics,pipeline=team-a.prod,source=mt.team-a.prod,tenant=team-a",
@@ -276,10 +276,10 @@ var goldenSelfLabelSets = map[string][]string{
 	"genai_otel_bridge_scope_state": {
 		"pipeline=team-a.prod,state=matched,tenant=team-a", "pipeline=team-a.prod,state=mismatched,tenant=team-a", "pipeline=team-a.prod,state=unverified,tenant=team-a",
 	},
-	"genai_otel_bridge_source_capability_total": {"graph=requests,loop=analytics,pipeline=team-a.prod,state=no-data,tenant=team-a"},
+	"genai_otel_bridge_source_capability_total": {"graph=requests,loop=analytics,pipeline=team-a.prod,source=mt.team-a.prod,state=no-data,tenant=team-a"},
 	"genai_otel_bridge_source_data_incomplete_total": {
-		"loop=analytics,pipeline=team-a.prod,reason=export_failed,tenant=team-a", "loop=analytics,pipeline=team-a.prod,reason=export_stuck,tenant=team-a",
-		"loop=analytics,pipeline=team-a.prod,reason=window_oversize,tenant=team-a", "loop=analytics,pipeline=team-a.prod,reason=window_truncated,tenant=team-a",
+		"loop=analytics,pipeline=team-a.prod,reason=export_failed,source=mt.team-a.prod,tenant=team-a", "loop=analytics,pipeline=team-a.prod,reason=export_stuck,source=mt.team-a.prod,tenant=team-a",
+		"loop=analytics,pipeline=team-a.prod,reason=window_oversize,source=mt.team-a.prod,tenant=team-a", "loop=analytics,pipeline=team-a.prod,reason=window_truncated,source=mt.team-a.prod,tenant=team-a",
 	},
 	"genai_otel_bridge_tenant_blocked":                    {"reason=duplicate_key,tenant=team-a"},
 	"genai_otel_bridge_upstream_request_duration_seconds": {"method=GET,pipeline=team-a.prod,status_class=2xx,target=api.portkey.ai,tenant=team-a"},
@@ -305,11 +305,11 @@ func TestTenantSelfMetricLabelSetsGolden(t *testing.T) {
 	m.SamplesSkipped(id, "too_old", 1)
 	m.EmitError(id, "collect")
 	m.GuardDropped(id, 1)
-	m.BucketRevisedAfterSettle("analytics", time.Minute)
+	m.BucketRevisedAfterSettle(id.Loop, id.Source, time.Minute)
 	m.NewLabelValue("portkey_api_requests")
 	m.SamplesCapped(id, 1)
-	m.SourceCapability("analytics", "requests", "no-data")
-	m.SourceDataIncomplete("analytics", "window_truncated")
+	m.SourceCapability(id.Loop, id.Source, "requests", "no-data")
+	m.SourceDataIncomplete(id.Loop, id.Source, "window_truncated")
 	m.AuthError("analytics", "mt.team-a.prod")
 	m.QueueDepth(id, 1)
 	m.LastSuccess(id, time.Unix(1700, 0))

@@ -45,7 +45,7 @@ sample or record.
 - **Settle-exceedance detection (`revision.go`) is detection only, never a re-emit.** `Collect`
   fetches from a widened lower bound so the response re-includes settled buckets, while emit keeps
   using the forward-only `start` and stays byte-identical. A bounded in-memory `revisionHistory`
-  fires `Deps.OnBucketRevised("analytics", age)` into a counter and an age histogram, so
+  fires `Deps.OnBucketRevised("analytics", sourceInstance, age)` into a counter and an age histogram, so
   `bucket_settle` is tuned to p95-of-age instead of guessed. Metrics cannot be backfilled (Mimir
   rejects a changed value at a settled `(series,ts)`), so settle is the only lever. The history
   resets on failover - an accepted blind spot.
@@ -86,10 +86,10 @@ is not a re-parameterised graphs loop.
   A failover or restart is covered too, as the watermark is checkpointed. The FETCH still uses the precise `now-settle` bound.
 - **Per-endpoint independent.** `ai-models` (always on), one `metadata/<key>` per configured
   `settings.metadata_keys`, and the prompt dimension (`emit_prompts`, on by default). A 404 endpoint
-  emits nothing for itself, fires `Deps.OnCapability(loop, endpoint, CapabilityTransient404)`, and
+  emits nothing for itself, fires `Deps.OnCapability(loop, sourceInstance, endpoint, CapabilityTransient404)`, and
   does NOT block the others. Only when EVERY endpoint fails does `Collect` error.
 - **A skipped endpoint or a truncation is counted.** Every failure arm except 404 (transport/decode error,
-  non-200, `is_quota_exceeded`, row parse error) fires `OnDataIncomplete(loop, endpoint_unavailable)` once for
+  non-200, `is_quota_exceeded`, row parse error) fires `OnDataIncomplete(loop, sourceInstance, endpoint_unavailable)` once for
   that endpoint; `max_groups` and the page cap fire `window_truncated`. The first HTTP 429 of a poll
   stops the poll (the remaining endpoints and passes are counted, not called), and when every endpoint
   failed with at least one quota failure (429 or `is_quota_exceeded`) `Collect` returns
@@ -118,7 +118,7 @@ Portkey ignores the workspace parameter on the analytics endpoints for such a ke
 `settings.expected_workspace` set, the loop asserts once, lazily, on first `Collect` that
 `GET /analytics/groups/workspace` returns EXACTLY that slug. A too-broad or global key means **refuse
 to emit** - loud `Collect` error, no advance,
-`OnCapability(loop, "workspace_scope", CapabilityPermissionDenied)` -
+`OnCapability(loop, sourceInstance, "workspace_scope", CapabilityPermissionDenied)` -
 and it recovers without a restart. A transient probe failure is retried rather than raising a false
 alarm; no traffic inside the 7d probe window means proceed unverified and re-check.
 

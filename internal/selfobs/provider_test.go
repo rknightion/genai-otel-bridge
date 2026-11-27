@@ -50,7 +50,7 @@ func TestProviderExportsExponentialHistograms(t *testing.T) {
 	}
 	m.ObserveUpstreamRequest("upstream.example", "GET", 200, nil, 25*time.Second)
 	m.ObserveEmitRequest("metrics", 200, nil, 20*time.Second)
-	m.BucketRevisedAfterSettle("loop", 30*time.Minute)
+	m.BucketRevisedAfterSettle("loop", "source-a", 30*time.Minute)
 	if err := mp.ForceFlush(ctx); err != nil {
 		t.Fatal(err)
 	}

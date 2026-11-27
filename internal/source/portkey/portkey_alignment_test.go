@@ -38,7 +38,7 @@ func rowFilterServer() *httptest.Server {
 	}))
 }
 
-func alignmentLoop(t *testing.T, baseURL string, onRevised func(string, time.Duration)) *analyticsLoop {
+func alignmentLoop(t *testing.T, baseURL string, onRevised func(string, string, time.Duration)) *analyticsLoop {
 	t.Helper()
 	cfg := config.SourceConfig{
 		Type: "portkey", Enabled: true, BaseURL: baseURL, SourceInstance: "pk-test",
@@ -116,7 +116,7 @@ func TestAnalyticsNoFalseRevisionOnMidMinutePoll(t *testing.T) {
 	srv := rowFilterServer()
 	defer srv.Close()
 	var ages []time.Duration
-	lp := alignmentLoop(t, srv.URL, func(_ string, age time.Duration) { ages = append(ages, age) })
+	lp := alignmentLoop(t, srv.URL, func(_, _ string, age time.Duration) { ages = append(ages, age) })
 	now := time.Date(2026, 6, 18, 14, 0, 17, 0, time.UTC)
 	lp.now = func() time.Time { return now }
 

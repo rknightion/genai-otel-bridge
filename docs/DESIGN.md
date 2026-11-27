@@ -136,7 +136,7 @@ wrong**. So at-least-once safety (the basis of gap-free failover, §4.3/§4.4) i
   `bucket_end > watermark.Time` are ever emitted.
 - **Never re-emit an already-emitted bucket.** If a later poll shows a settled (≤ watermark) bucket
   changed value, do **not** re-emit (you cannot correct a same-`ts` value in Mimir). Increment
-  `bucket_revised_after_settle_total{loop}` so post-settle drift is **observable** (and `bucket_settle`
+  `bucket_revised_after_settle_total{source,loop}` so post-settle drift is **observable** (and `bucket_settle`
   tunable). This bounds inaccuracy and makes it visible — never a 400, never a stall.
 - **Deterministic encoding** (emitter contract): attribute KVs sorted by key; any structured body is
   canonical JSON. So a crash-before-watermark-save re-emit (§4.4) is **byte/value-identical** → Mimir
@@ -352,15 +352,10 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   the window; do not advance the watermark past a bucket unless *all configured graphs* for it
   succeeded (else a later success would be an out-of-order write). **Open design point — see §7.**
 - **F5 Schema drift + capability detection (Cdx-H4).** Capability and permission conditions emit
-  `genai_otel_bridge_source_capability_total{loop,graph,state}`. `state` is the closed set
-  `endpoint-absent`, `plan-unsupported`, `permission-denied`, `no-data`, `transient-404`,
-  `schema-changed`; producers pass typed constants. Current 404 producers use `transient-404`, because
-  one response cannot distinguish permanent absence from a plan gate or transient route failure, so
-  `endpoint-absent` and `plan-unsupported` have no producer. `no-data` has none because an empty window is a
-  normal quiet result that advances the watermark and cannot be told from an idle workspace. `schema-changed`
-  has none because no code detects structural drift: tolerant decoders skip an unparseable line and count it
-  in `source_data_incomplete_total`, not as a capability state. All four are enumerated but producerless; steady
-  versus intermittent increments are interpreted at query time.
+  `genai_otel_bridge_source_capability_total{source,loop,graph,state}`. Producers pass typed
+  constants; see the [telemetry catalogue](telemetry.md#self-observability) for the states. A single
+  404 cannot distinguish permanent absence from a plan gate or a transient route failure, so 404
+  producers report `transient-404` and queries distinguish steady from intermittent increments.
 - **F6 Open/incomplete & revised buckets (C1, the big one)** → a recent bucket may be incomplete (if
   emitted now → undercount) *and* may still change value *after* it settles (eventual consistency).
   **Mitigation:** emit a bucket only once `bucket_end ≤ now − bucket_settle`, where `bucket_settle` is
@@ -368,10 +363,8 @@ the outcome summary. F1–F28 were the author's original set (several corrected 
   bucket** (you can't correct a same-`ts` value in Mimir) — count `bucket_revised_after_settle_total`
   so drift is visible and `bucket_settle` tunable (§3.3). Clock handling is UTC throughout (F26/F28).
   Other bounded loss/quality events emit
-  `genai_otel_bridge_source_data_incomplete_total{loop,reason}` with the closed reasons
-  `window_truncated`, `sessions_truncated`, `backfill_skipped`, `window_oversize`,
-  `span_stats_unavailable`, `duplicate_dimension`, `trace_id_unparsed`, `line_oversize`,
-  `line_unparseable`, `export_stuck`, and `export_failed`. No event emits both successor counters.
+  `genai_otel_bridge_source_data_incomplete_total{source,loop,reason}` for a closed reason from the
+  telemetry catalogue. No event emits both the capability and incompleteness counters.
 
 ### Emission failures
 - **F7 Gateway 5xx/timeout** → retry per policy; on exhaustion the batch stays unemitted, watermark
@@ -871,7 +864,7 @@ source encodes; they **supersede** the corresponding assumptions in §3.1/§3.2/
   is distinguishable from "poller down" from the data alone.
 - **OP5d — `bucket_settle` measured on a live workspace (2026-06-19).** Max post-close late-arrival
   lag observed: **~185s**. Default raised to **10m** for headroom. Settle-exceedance is now **actively
-  detected**: `genai_otel_bridge_bucket_revised_after_settle_total{loop}` fires when a settled bucket changes —
+  detected**: `genai_otel_bridge_bucket_revised_after_settle_total{source,loop}` fires when a settled bucket changes —
   alert on `rate(...) > 0` to signal that `bucket_settle` should be bumped if load grows (followup.md §8).
   The **Mimir accept window** (caps `max_backfill`) is a stack-config lookup → GS2 deploy prereq, not a
   Portkey probe.

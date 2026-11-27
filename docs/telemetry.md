@@ -38,6 +38,13 @@ live.
 The self-observability labels `tenant` and `pipeline` appear only in the tenant shape, where each
 pipeline's self-metrics carry them; a legacy install's series have neither.
 
+On self-metrics that carry `source`, it names the configured source instance, not the vendor
+or a value from the upstream API. The three hook-fed counters for bucket revisions, capability
+and incomplete data now separate same-named loops from different sources. Earlier samples of
+these counters have no `source` label. To compare totals across an upgrade, apply `rate()` or
+`increase()` to the individual series before summing without `source`. The bucket revision age
+histogram is unchanged.
+
 <!-- >>> BEGIN generated telemetry catalogue — do not edit by hand; run `just gen` <<< -->
 
 ### Product telemetry
@@ -88,7 +95,7 @@ pipeline's self-metrics carry them; a legacy install's series have neither.
 |------|-----------------|------|------|---------------------|-----------|-------------|
 | `genai_otel_bridge_auth_errors_total` | `genai_otel_bridge_auth_errors_total` | counter | — | loop, source, tenant, pipeline | — | upstream source API responded 401/403 — a credential failure |
 | `genai_otel_bridge_bucket_revised_after_settle_age_seconds` | `genai_otel_bridge_bucket_revised_after_settle_age_seconds` | histogram | s | loop, tenant, pipeline | — | base2 exponential histogram: age (now − bucketEnd) of a settled bucket observed to change after bucket_settle |
-| `genai_otel_bridge_bucket_revised_after_settle_total` | `genai_otel_bridge_bucket_revised_after_settle_total` | counter | — | loop, tenant, pipeline | — | settled buckets observed to change value after settle (late arrival beyond bucket_settle) |
+| `genai_otel_bridge_bucket_revised_after_settle_total` | `genai_otel_bridge_bucket_revised_after_settle_total` | counter | — | source, loop, tenant, pipeline | — | settled buckets observed to change value after settle (late arrival beyond bucket_settle) |
 | `genai_otel_bridge_emit_errors_total` | `genai_otel_bridge_emit_errors_total` | counter | — | source, loop, kind, tenant, pipeline | — | emit errors by kind |
 | `genai_otel_bridge_emit_partial_success_rejected_total` | `genai_otel_bridge_emit_partial_success_rejected_total` | counter | — | plane, tenant, pipeline | — | data points or log records the gateway rejected via an OTLP 200 partial_success response (rejected_data_points/rejected_log_records) |
 | `genai_otel_bridge_emit_request_duration_seconds` | `genai_otel_bridge_emit_request_duration_seconds` | histogram | s | plane, status_class, tenant, pipeline | — | base2 exponential histogram: outbound OTLP emit request latency (per POST attempt to /v1/metrics or /v1/logs) |
@@ -106,8 +113,8 @@ pipeline's self-metrics carry them; a legacy install's series have neither.
 | `genai_otel_bridge_samples_skipped_total` | `genai_otel_bridge_samples_skipped_total` | counter | — | source, loop, reason, tenant, pipeline | — | data points or log records skipped with a counted gap |
 | `genai_otel_bridge_scope_assertion_total` | `genai_otel_bridge_scope_assertion_total` | counter | — | result, tenant, pipeline | — | scope assertion calls by result: matched, mismatch, unverifiable or error; tenant shape only |
 | `genai_otel_bridge_scope_state` | `genai_otel_bridge_scope_state` | gauge | — | state, tenant, pipeline | — | 1 for the scope gate's current state (matched, unverified or mismatched) and 0 for the others; all 0 with no result, which is what a replica that is not leading reports; tenant shape only |
-| `genai_otel_bridge_source_capability_total` | `genai_otel_bridge_source_capability_total` | counter | — | loop, graph, state, tenant, pipeline | — | source capability or permission condition by graph and closed state: endpoint-absent, plan-unsupported, permission-denied, no-data, transient-404, or schema-changed. endpoint-absent and plan-unsupported are enumerated but currently producerless because one 404 cannot distinguish them from a transient failure; steady versus intermittent increments remain a query-time judgement |
-| `genai_otel_bridge_source_data_incomplete_total` | `genai_otel_bridge_source_data_incomplete_total` | counter | — | loop, reason, tenant, pipeline | — | source data was incomplete for a closed reason: window_truncated, sessions_truncated, backfill_skipped, window_oversize, span_stats_unavailable, duplicate_dimension, trace_id_unparsed, line_oversize, line_unparseable, export_stuck, export_failed, or endpoint_unavailable |
+| `genai_otel_bridge_source_capability_total` | `genai_otel_bridge_source_capability_total` | counter | — | source, loop, graph, state, tenant, pipeline | — | source capability or permission condition by graph and closed state: endpoint-absent, plan-unsupported, permission-denied, no-data, transient-404, or schema-changed. endpoint-absent and plan-unsupported are enumerated but currently producerless because one 404 cannot distinguish them from a transient failure; steady versus intermittent increments remain a query-time judgement |
+| `genai_otel_bridge_source_data_incomplete_total` | `genai_otel_bridge_source_data_incomplete_total` | counter | — | source, loop, reason, tenant, pipeline | — | source data was incomplete for a closed reason: window_truncated, sessions_truncated, backfill_skipped, window_oversize, span_stats_unavailable, duplicate_dimension, trace_id_unparsed, line_oversize, line_unparseable, export_stuck, export_failed, or endpoint_unavailable |
 | `genai_otel_bridge_tenant_blocked` | `genai_otel_bridge_tenant_blocked` | gauge | — | tenant, reason | — | 1 while a tenant is not built for the reason (secret_unreadable: a secret file could not be read; duplicate_key: a target's source API key is also another target's), else 0; recorded at assembly by every replica from its own read of the secrets; tenant shape only, never labelled with pipeline |
 | `genai_otel_bridge_upstream_request_duration_seconds` | `genai_otel_bridge_upstream_request_duration_seconds` | histogram | s | target, method, status_class, tenant, pipeline | — | base2 exponential histogram: outbound request latency to upstream source APIs (time to response headers) |
 | `genai_otel_bridge_window_lag_seconds` | `genai_otel_bridge_window_lag_seconds` | gauge | s | source, loop, tenant, pipeline | — | now minus the watermark frontier |

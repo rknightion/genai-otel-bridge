@@ -194,8 +194,8 @@ type groupsLoop struct {
 	// Key() is NOT folded with the slug — one instance, one watermark (M7 ownership invariant).
 	passes           []resolvedUseCase
 	scopeVerified    bool // caches a passing scope check (Collect is single-flight, no lock)
-	onCapability     func(loop, graph string, state source.CapabilityState)
-	onDataIncomplete func(loop string, reason source.IncompleteReason)
+	onCapability     func(loop, instance, graph string, state source.CapabilityState)
+	onDataIncomplete func(loop, instance string, reason source.IncompleteReason)
 	onAuthError      func(loop, source string)
 	now              func() time.Time
 }
@@ -380,7 +380,7 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 			slog.Warn("portkey groups: dropped duplicate-dimension rows in cross-page dedup (possible dim-value collapse to \"\", or an offset-ignoring server)",
 				"endpoint", ep.label, "dropped", dupDropped, "source", l.sourceInstance)
 			if l.onDataIncomplete != nil {
-				l.onDataIncomplete(l.Key().Loop, source.IncompleteDuplicateDimension)
+				l.onDataIncomplete(l.Key().Loop, l.sourceInstance, source.IncompleteDuplicateDimension)
 			}
 		}
 	}()
@@ -402,7 +402,7 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 		case http.StatusNotFound:
 			slog.Warn("portkey groups endpoint unavailable (capability)", "endpoint", ep.label, "source", l.sourceInstance)
 			if l.onCapability != nil {
-				l.onCapability(l.Key().Loop, ep.label, source.CapabilityTransient404)
+				l.onCapability(l.Key().Loop, l.sourceInstance, ep.label, source.CapabilityTransient404)
 			}
 			return nil, false, false, false
 		default:
@@ -457,7 +457,7 @@ func (l *groupsLoop) collectEndpoint(ctx context.Context, ep groupsEndpoint, fro
 // fireIncomplete reports a data-incomplete reason for this loop (nil-safe).
 func (l *groupsLoop) fireIncomplete(r source.IncompleteReason) {
 	if l.onDataIncomplete != nil {
-		l.onDataIncomplete(l.Key().Loop, r)
+		l.onDataIncomplete(l.Key().Loop, l.sourceInstance, r)
 	}
 }
 

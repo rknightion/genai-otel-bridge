@@ -18,7 +18,7 @@ spec:
     # means a Portkey logs_export window needed more pages than max_pages_per_window and is parked.
     severity: critical
   annotations:
-    summary: "genai-otel-bridge {{ $labels.loop }} export pipeline has incomplete data ({{ $labels.reason }})"
+    summary: "genai-otel-bridge {{ $labels.source }}/{{ $labels.loop }} export pipeline has incomplete data ({{ $labels.reason }})"
     description: "genai_otel_bridge_source_data_incomplete_total{reason=\"{{ $labels.reason }}\"} increased for the {{ $labels.loop }} loop in the last 15m. export_failed/export_stuck mean the export-job lifecycle cannot produce the target's data; check export-job status plus retry/backoff behaviour. window_oversize means the logs_export window needed more pages than max_pages_per_window and is parked (nothing was dropped, but the loop does not advance): shrink settings.window; the block clears when the window changes. See deploy/grafana/README.md."
   expressions:
     query:

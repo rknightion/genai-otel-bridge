@@ -544,7 +544,7 @@ func TestCollect404FiresCapabilityHook(t *testing.T) {
 			Graphs: []string{"requests", "latency"},
 		}},
 	}
-	src, err := New(cfg, source.Deps{OnCapability: func(loop, graph string, state source.CapabilityState) {
+	src, err := New(cfg, source.Deps{OnCapability: func(loop, _, graph string, state source.CapabilityState) {
 		capabilities = append(capabilities, [3]string{loop, graph, string(state)})
 	}})
 	if err != nil {

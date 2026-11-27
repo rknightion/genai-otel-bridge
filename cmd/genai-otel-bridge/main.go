@@ -477,7 +477,7 @@ func newSelfProvider(ctx context.Context, cfg *config.Config, identity string) (
 		Endpoint: selfEP.Endpoint, InstanceID: selfEP.InstanceID, Token: selfEP.Token,
 		ServiceNamespace: cfg.Identity.ServiceNamespace + config.SelfNamespaceSuffix, Environment: cfg.Identity.DeploymentEnvironment,
 		Instance: identity,         // [CP-H8] POD_NAME -> per-replica self-metric identity
-		Version:  version.String(), // [#91] service.version on the self resource -> correlate a regression to a build
+		Version:  version.String(), // [#91] not stamped on the metrics resource (#314); traces carry it
 		Interval: selfInterval,
 		MaxDPM:   cfg.Governance.MaxDPM,
 	})

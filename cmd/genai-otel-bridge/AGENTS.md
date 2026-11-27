@@ -90,4 +90,4 @@ access to its own lease or checkpoint. Fixed names; the chart is single-instance
 - **`main.go` must keep importing `internal/version`.** Without a real import the linker drops the
   package and the `-X .../version.Version=` ldflag silently leaves the version at `dev`. The stamp is
   observable three ways: the `-version` flag, the `version=` field on the `config loaded` startup log
-  line, and the `service.version` resource attribute on both self-obs planes.
+  line, and the `service.version` resource attribute on the self trace plane (the self metrics resource omits it, #314).
